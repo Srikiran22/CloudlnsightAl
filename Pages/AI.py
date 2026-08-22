@@ -1,7 +1,7 @@
 import streamlit as st
-import os
 
 from Utils.Gemini import generate_executive_insights, chat_with_gemini_dataset
+from Utils.secrets import ask, value_of, keep_box, release, drop
 from Utils.dataset_ui import render_sidebar, select_working_dataset
 
 st.title("💡 Gemini AI Dataset Intelligence")
@@ -10,19 +10,17 @@ st.markdown("Harness Google Gemini LLMs for automated executive summaries and na
 df, selected_file = select_working_dataset("Select Dataset for AI Analysis:")
 render_sidebar()
 
-if "gemini_api_key" not in st.session_state:
-    st.session_state["gemini_api_key"] = os.getenv("GEMINI_API_KEY", "")
-
 with st.sidebar:
     st.markdown("### 🔑 Gemini Configuration")
-    user_key = st.text_input(
+    ask(
+        "gemini",
         "Enter Google Gemini API Key:",
-        value=st.session_state["gemini_api_key"],
-        type="password",
-        help="Get your key at https://aistudio.google.com/"
+        help_text="Get your key at https://aistudio.google.com/"
     )
-    if user_key:
-        st.session_state["gemini_api_key"] = user_key
+    keep_box("gemini_keep")
+    if st.button("Clear key from memory"):
+        drop("gemini")
+        st.rerun()
 
     chosen_model = st.selectbox(
         "Gemini Model:",
@@ -30,7 +28,7 @@ with st.sidebar:
         index=0
     )
 
-api_key = st.session_state.get("gemini_api_key")
+api_key = value_of("gemini")
 
 if not api_key:
     st.info("🔑 Please enter your **Google Gemini API Key** in the sidebar to activate AI insights and chat.")
@@ -58,6 +56,8 @@ with tab_insights:
                     model_name=chosen_model
                 )
                 st.session_state[f"insights_{selected_file}"] = insights_text
+                if release("gemini", keep_key="gemini_keep"):
+                    st.toast("Gemini key cleared from memory.")
             except Exception as e:
                 st.error(f"❌ Gemini Error: {str(e)}")
 
@@ -100,5 +100,7 @@ with tab_chat:
                     )
                     st.markdown(reply)
                     st.session_state[chat_key].append({"role": "assistant", "content": reply})
+                    if release("gemini", keep_key="gemini_keep"):
+                        st.toast("Gemini key cleared from memory.")
                 except Exception as e:
                     st.error(f"❌ Error: {str(e)}")

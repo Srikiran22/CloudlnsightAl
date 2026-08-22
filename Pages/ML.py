@@ -176,9 +176,6 @@ if results and results.get("dataset_name") == selected_file:
         )
         st.plotly_chart(fig_fi, width="stretch")
 
-# ----------------------------------------------------------------------
-# 5. Model Persistence (save / load / predict)
-# ----------------------------------------------------------------------
 st.markdown("---")
 st.subheader("5️⃣ Model Persistence — Save, Load & Predict")
 

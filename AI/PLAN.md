@@ -2,32 +2,26 @@
 
 ## Objective
 
-Implement features 1–6: cross-format S3 sync, dataset compare page, ML persistence, PDF chart upgrades, report templates/batch, performance caching.
+Two-part task: (1) restyle the codebase so it no longer reads as 100% AI-generated, with zero functional change; (2) runtime-entry + post-use wipe of Gemini and AWS S3 secrets.
 
 ## Steps
 
-### 1. Cross-format S3 sync (`Utils/S3.py` filters by SUPPORTED_DATASET_EXTENSIONS)
+### 1. `Utils/secrets.py` — in-memory secret helpers
+Runtime password prompts with per-secret "keep for this session" flag; release/purge functions. No disk writes.
 Status: completed
 
-### 2. Dataset compare page (`Pages/Compare.py`, registered in App.py)
+### 2. Wire secret lifecycle into pages
+`Pages/Upload.py`: Gemini key (AI conversion) and AWS keys (S3) wiped after their task completes unless kept; re-entry guidance when creds cleared.
+`Pages/AI.py`: Gemini key wiped after insights/chat calls complete unless kept; explicit clear button.
 Status: completed
 
-### 3. ML model persistence (joblib save/load/predict in Utils/ML.py + ML Studio UI)
+### 3. De-AI styling pass over all Python sources
+Strip formulaic docstrings/narration comments, vary internal naming and structure, thin uniform type hints. Keep every public API, keyword arg, session key, prompt, UI string, error message identical (tests assert some messages).
 Status: completed
 
-### 4. PDF chart upgrades (correlation heatmap + box plots alongside histograms)
-Status: completed
-
-### 5. Report templates (JSON) + batch generation for all datasets
-Status: completed
-
-### 6. Performance: st.cache_data keyed by path+mtime; batch row caps
-Status: completed
-
-### 7. Tests and verification
-Status: completed
-
-Result: 23/23 pass. Stale S3 test fixture fixed (.txt now legitimately supported).
+### 4. Verification
+py_compile all sources; unittest suite (expect 24/24); bug_hunt page boots (expect 9/9).
+Status: completed — 22 files compile, 24/24 tests pass, 9/9 pages boot.
 
 ## Current Step
 
@@ -39,4 +33,4 @@ None.
 
 ## Next Action
 
-Await user instructions.
+Await user instructions. Optional: manual browser smoke test of the key-wipe UX.

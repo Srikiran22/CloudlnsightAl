@@ -1,27 +1,21 @@
 import streamlit as st
 
-from Utils.paths import list_dataset_files, read_dataset
+from Utils.paths import list_dataset_files, read_dataset, resolve_dataset_path
 
 
-def set_active_dataset(df, name: str) -> None:
-    """Persist the selected working dataset for consistent cross-page state."""
+def set_active_dataset(df, name):
     st.session_state["current_df"] = df
     st.session_state["dataset_name"] = name
 
 
 @st.cache_data(show_spinner="Loading dataset...")
-def _load_cached_dataset(path_str: str, mtime_ns: int, max_rows):
-    """Cache parsed datasets by path + modification time so pages reload instantly."""
-    del mtime_ns  # only used as a cache key component
+def _load_cached_dataset(path_str, mtime_ns, max_rows):
+    # mtime_ns is only here so the cache busts when the file changes on disk
+    del mtime_ns
     return read_dataset(path_str)
 
 
-def load_dataset_cached(dataset: str, max_rows=None):
-    """Read a Datasets/ file through the cache; re-reads automatically when the file changes."""
-    from pathlib import Path
-
-    from Utils.paths import resolve_dataset_path
-
+def load_dataset_cached(dataset, max_rows=None):
     path = resolve_dataset_path(dataset)
     df = _load_cached_dataset(str(path), path.stat().st_mtime_ns, max_rows)
     if max_rows is not None and len(df) > max_rows:
@@ -29,8 +23,7 @@ def load_dataset_cached(dataset: str, max_rows=None):
     return df
 
 
-def render_sidebar() -> None:
-    """Show the active dataset status on every page."""
+def render_sidebar():
     with st.sidebar:
         st.markdown("### ☁️ CloudInsight AI")
         name = st.session_state.get("dataset_name")
@@ -43,8 +36,7 @@ def render_sidebar() -> None:
             st.info("ℹ️ No dataset loaded yet. Go to **Upload** to begin.")
 
 
-def select_working_dataset(selectbox_label: str, max_rows=None):
-    """Let the user pick the session dataset or a file from Datasets/ (cached)."""
+def select_working_dataset(selectbox_label, max_rows=None):
     files = list_dataset_files()
     df_session = st.session_state.get("current_df")
     name_session = st.session_state.get("dataset_name")

@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from math import ceil
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+import joblib
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
@@ -23,11 +23,8 @@ from sklearn.tree import DecisionTreeClassifier
 from Utils.paths import MODELS_DIR
 
 
-def save_trained_model(results: Dict[str, Any], model_name: str, directory=None) -> Path:
-    """Persist a trained pipeline plus its metadata to the Models directory."""
-    import joblib
-
-    if not results or "pipeline" not in results:
+def save_trained_model(res, model_name, directory=None):
+    if not res or "pipeline" not in res:
         raise ValueError("No trained model is available to save.")
 
     target_dir = Path(directory) if directory is not None else MODELS_DIR
@@ -36,34 +33,30 @@ def save_trained_model(results: Dict[str, Any], model_name: str, directory=None)
     path = target_dir / f"{safe_name}.joblib"
 
     bundle = {
-        "pipeline": results["pipeline"],
-        "problem_type": results.get("problem_type"),
-        "algorithm": results.get("model_name"),
-        "target_col": results.get("target_col"),
-        "feature_cols": results.get("feature_cols", []),
-        "dataset_name": results.get("dataset_name"),
+        "pipeline": res["pipeline"],
+        "problem_type": res.get("problem_type"),
+        "algorithm": res.get("model_name"),
+        "target_col": res.get("target_col"),
+        "feature_cols": res.get("feature_cols", []),
+        "dataset_name": res.get("dataset_name"),
         "metrics": {
-            key: results[key]
+            key: res[key]
             for key in ("accuracy", "precision", "recall", "f1_score", "r2_score", "rmse", "mae")
-            if key in results
+            if key in res
         },
     }
     joblib.dump(bundle, path)
     return path
 
 
-def load_trained_model(path) -> Dict[str, Any]:
-    """Load a saved model bundle from disk."""
-    import joblib
-
+def load_trained_model(path):
     bundle = joblib.load(path)
     if not isinstance(bundle, dict) or "pipeline" not in bundle:
         raise ValueError("The selected file is not a valid CloudInsight model bundle.")
     return bundle
 
 
-def list_saved_models() -> List[str]:
-    """Return saved model filenames sorted newest first."""
+def list_saved_models():
     if not MODELS_DIR.exists():
         return []
     return sorted(
@@ -72,12 +65,16 @@ def list_saved_models() -> List[str]:
     )
 
 
-def predict_with_model(
-    bundle: Dict[str, Any],
-    df: pd.DataFrame,
-    feature_cols: Optional[List[str]] = None,
-) -> pd.DataFrame:
-    """Run a saved model on a dataframe and append a prediction column."""
+def _datetime_to_epoch(df):
+    # models can't handle datetime64 directly; epoch floats behave better than strings
+    for column in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[column]):
+            ts = pd.to_datetime(df[column], errors="coerce")
+            df[column] = ts.astype("int64").astype("float64")
+            df.loc[ts.isna(), column] = np.nan
+
+
+def predict_with_model(bundle, df, feature_cols=None):
     features = feature_cols or bundle.get("feature_cols") or []
     missing = [col for col in features if col not in df.columns]
     if missing:
@@ -86,26 +83,20 @@ def predict_with_model(
         raise ValueError("Model bundle has no recorded feature columns.")
 
     X = df[features].copy()
-    for column in X.columns:
-        if pd.api.types.is_datetime64_any_dtype(X[column]):
-            timestamps = pd.to_datetime(X[column], errors="coerce")
-            X[column] = timestamps.astype("int64").astype("float64")
-            X.loc[timestamps.isna(), column] = np.nan
+    _datetime_to_epoch(X)
 
     predictions = bundle["pipeline"].predict(X)
     output = df.copy()
     label = "prediction"
-    base = label
     suffix = 2
     while label in output.columns:
-        label = f"{base}_{suffix}"
+        label = f"prediction_{suffix}"
         suffix += 1
     output[label] = predictions
     return output
 
 
-def detect_problem_type(df: pd.DataFrame, target_col: str) -> str:
-    """Automatically infer if a target variable is Classification or Regression."""
+def detect_problem_type(df, target_col):
     target_series = df[target_col].dropna()
     if target_series.empty:
         return "Regression"
@@ -121,8 +112,8 @@ def detect_problem_type(df: pd.DataFrame, target_col: str) -> str:
     ).all()
     unique_ratio = unique_count / len(target_series)
 
-    # Numeric labels are usually discrete, repeated, integer-like values. A small
-    # continuous dataset should remain regression even when it has few rows.
+    # repeated integer-looking labels read as classes; a short but genuinely
+    # continuous series should stay regression even with few rows
     if integer_like and unique_count <= 10 and unique_ratio <= 0.5:
         return "Classification"
 
@@ -130,15 +121,14 @@ def detect_problem_type(df: pd.DataFrame, target_col: str) -> str:
 
 
 def train_and_evaluate_model(
-    df: pd.DataFrame,
-    target_col: str,
-    feature_cols: List[str],
-    model_name: str,
-    problem_type: str,
-    test_size: float = 0.2,
-    random_state: int = 42
-) -> Dict[str, Any]:
-    """Train ML model with automated preprocessing and return comprehensive metrics."""
+    df,
+    target_col,
+    feature_cols,
+    model_name,
+    problem_type,
+    test_size=0.2,
+    random_state=42
+):
     if problem_type not in {"Classification", "Regression"}:
         raise ValueError("Problem type must be either Classification or Regression.")
     if df is None or df.empty:
@@ -151,7 +141,6 @@ def train_and_evaluate_model(
     if missing_features:
         raise ValueError(f"Feature columns not found: {', '.join(missing_features)}")
 
-    # Drop rows where target is missing.
     clean_df = df.dropna(subset=[target_col]).copy()
     if len(clean_df) < 4:
         raise ValueError("At least 4 rows with a non-missing target are required for model training and evaluation.")
@@ -171,12 +160,7 @@ def train_and_evaluate_model(
             raise ValueError("Each classification target class needs at least two rows.")
 
     X = clean_df[feature_cols].copy()
-
-    for column in X.columns:
-        if pd.api.types.is_datetime64_any_dtype(X[column]):
-            timestamps = pd.to_datetime(X[column], errors="coerce")
-            X[column] = timestamps.astype("int64").astype("float64")
-            X.loc[timestamps.isna(), column] = np.nan
+    _datetime_to_epoch(X)
 
     split_kwargs = {"test_size": test_size, "random_state": random_state}
     y_for_split = y
@@ -190,41 +174,39 @@ def train_and_evaluate_model(
     try:
         X_train, X_test, y_train, y_test = train_test_split(X, y_for_split, **split_kwargs)
     except ValueError:
+        # rare edge cases (e.g. a class appearing only once after coercion)
         split_kwargs.pop("stratify", None)
         X_train, X_test, y_train, y_test = train_test_split(X, y_for_split, **split_kwargs)
 
-    # Separate feature types
     numeric_features = [col for col in feature_cols if pd.api.types.is_numeric_dtype(X[col])]
     categorical_features = [col for col in feature_cols if col not in numeric_features]
 
-    # Preprocessing pipelines
-    numeric_transformer = Pipeline(steps=[
+    num_tf = Pipeline(steps=[
         ("imputer", SimpleImputer(strategy="median")),
         ("scaler", StandardScaler())
     ])
 
     try:
         encoder = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
-    except TypeError:  # Compatibility with scikit-learn versions before 1.2
+    except TypeError:  # scikit-learn < 1.2
         encoder = OneHotEncoder(handle_unknown="ignore", sparse=False)
 
-    categorical_transformer = Pipeline(steps=[
+    cat_tf = Pipeline(steps=[
         ("imputer", SimpleImputer(strategy="most_frequent")),
         ("encoder", encoder)
     ])
 
     transformers = []
     if numeric_features:
-        transformers.append(("num", numeric_transformer, numeric_features))
+        transformers.append(("num", num_tf, numeric_features))
     if categorical_features:
-        transformers.append(("cat", categorical_transformer, categorical_features))
+        transformers.append(("cat", cat_tf, categorical_features))
 
     if not transformers:
         raise ValueError("No usable input features were found after type detection.")
 
     preprocessor = ColumnTransformer(transformers=transformers)
 
-    # Algorithm selector
     if problem_type == "Classification":
         if model_name == "Random Forest":
             clf = RandomForestClassifier(n_estimators=100, random_state=random_state)
@@ -235,13 +217,13 @@ def train_and_evaluate_model(
         else:
             clf = LogisticRegression(max_iter=1000, random_state=random_state)
 
-        model_pipeline = Pipeline(steps=[
+        pipe = Pipeline(steps=[
             ("preprocessor", preprocessor),
             ("classifier", clf)
         ])
 
-        model_pipeline.fit(X_train, y_train)
-        y_pred = model_pipeline.predict(X_test)
+        pipe.fit(X_train, y_train)
+        y_pred = pipe.predict(X_test)
 
         classes = sorted(set(y_test.astype(str)).union(str(value) for value in y_pred))
         acc = accuracy_score(y_test, y_pred)
@@ -251,10 +233,10 @@ def train_and_evaluate_model(
         cm = confusion_matrix(y_test, y_pred, labels=classes)
         cr = classification_report(y_test, y_pred, labels=classes, output_dict=True, zero_division=0)
 
-        results = {
+        res = {
             "problem_type": "Classification",
             "model_name": model_name,
-            "pipeline": model_pipeline,
+            "pipeline": pipe,
             "target_col": target_col,
             "feature_cols": list(feature_cols),
             "accuracy": round(acc, 4),
@@ -271,7 +253,6 @@ def train_and_evaluate_model(
         }
 
     else:
-        # Regression
         y_train = pd.to_numeric(y_train, errors="raise")
         y_test = pd.to_numeric(y_test, errors="raise")
 
@@ -284,23 +265,23 @@ def train_and_evaluate_model(
         else:
             reg = LinearRegression()
 
-        model_pipeline = Pipeline(steps=[
+        pipe = Pipeline(steps=[
             ("preprocessor", preprocessor),
             ("regressor", reg)
         ])
 
-        model_pipeline.fit(X_train, y_train)
-        y_pred = model_pipeline.predict(X_test)
+        pipe.fit(X_train, y_train)
+        y_pred = pipe.predict(X_test)
 
         r2 = r2_score(y_test, y_pred)
         mae = mean_absolute_error(y_test, y_pred)
         mse = mean_squared_error(y_test, y_pred)
         rmse = np.sqrt(mse)
 
-        results = {
+        res = {
             "problem_type": "Regression",
             "model_name": model_name,
-            "pipeline": model_pipeline,
+            "pipeline": pipe,
             "target_col": target_col,
             "feature_cols": list(feature_cols),
             "r2_score": round(r2, 4),
@@ -314,33 +295,32 @@ def train_and_evaluate_model(
             "test_size": len(X_test)
         }
 
-    # Extract Feature Importances / Coefficients if available
+    # best-effort importances; linear models expose coef_, trees importances_
     try:
-        estimator = model_pipeline.named_steps.get("classifier") or model_pipeline.named_steps.get("regressor")
+        estimator = pipe.named_steps.get("classifier") or pipe.named_steps.get("regressor")
         feat_names = []
         if numeric_features:
             feat_names.extend(numeric_features)
         if categorical_features:
-            cat_encoder = model_pipeline.named_steps["preprocessor"].named_transformers_["cat"].named_steps["encoder"]
+            cat_encoder = pipe.named_steps["preprocessor"].named_transformers_["cat"].named_steps["encoder"]
             if hasattr(cat_encoder, "get_feature_names_out"):
-                cat_encoded_names = cat_encoder.get_feature_names_out(categorical_features).tolist()
+                feat_names.extend(cat_encoder.get_feature_names_out(categorical_features).tolist())
             else:
-                cat_encoded_names = cat_encoder.get_feature_names(categorical_features).tolist()
-            feat_names.extend(cat_encoded_names)
+                feat_names.extend(cat_encoder.get_feature_names(categorical_features).tolist())
 
         if hasattr(estimator, "feature_importances_"):
             importances = estimator.feature_importances_
-            results["feature_importances"] = dict(sorted(
+            res["feature_importances"] = dict(sorted(
                 zip(feat_names, importances), key=lambda x: x[1], reverse=True
             )[:15])
         elif hasattr(estimator, "coef_"):
             coef = np.abs(estimator.coef_)
             if coef.ndim > 1:
                 coef = np.mean(coef, axis=0)
-            results["feature_importances"] = dict(sorted(
+            res["feature_importances"] = dict(sorted(
                 zip(feat_names, coef), key=lambda x: x[1], reverse=True
             )[:15])
     except Exception:
-        results["feature_importances"] = {}
+        res["feature_importances"] = {}
 
-    return results
+    return res

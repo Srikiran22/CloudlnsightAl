@@ -2,17 +2,9 @@ import io
 import json
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Union
 from xml.etree import ElementTree
 
 import pandas as pd
-
-try:
-    from dotenv import load_dotenv
-
-    load_dotenv()
-except ImportError:
-    pass
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -32,26 +24,21 @@ DOCUMENT_EXTENSIONS = {".pdf"}
 
 SUPPORTED_DATASET_EXTENSIONS = TABULAR_EXTENSIONS | TEXT_EXTENSIONS | DOCUMENT_EXTENSIONS
 
-MAX_AI_SAMPLE_CHARS = 12000
-
 
 class AIConversionRequired(ValueError):
-    """Raised when a file has no native tabular parser and needs AI structuring."""
-
-    def __init__(self, message: str, raw_text: str = "", filename: str = ""):
+    # a file we can't parse natively; raw_text carries what Gemini would see
+    def __init__(self, message, raw_text="", filename=""):
         super().__init__(message)
         self.raw_text = raw_text
         self.filename = filename
 
 
-def ensure_project_directories() -> None:
-    """Create the application data directories when they are needed."""
+def ensure_project_directories():
     DATASETS_DIR.mkdir(parents=True, exist_ok=True)
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def list_dataset_files() -> list[str]:
-    """Return supported dataset filenames in a stable, sorted order."""
+def list_dataset_files():
     ensure_project_directories()
     return sorted(
         path.name
@@ -60,8 +47,7 @@ def list_dataset_files() -> list[str]:
     )
 
 
-def resolve_dataset_path(dataset: Union[str, Path]) -> Path:
-    """Resolve a dataset path while keeping reads inside the Datasets directory."""
+def resolve_dataset_path(dataset):
     path = Path(dataset)
     datasets_root = DATASETS_DIR.resolve()
     candidate = path.resolve() if path.is_absolute() else (datasets_root / path).resolve()
@@ -72,8 +58,7 @@ def resolve_dataset_path(dataset: Union[str, Path]) -> Path:
     return candidate
 
 
-def _decode_text_buffer(buffer) -> str:
-    """Decode a buffer to text using common encodings."""
+def _decode_text_buffer(buffer):
     for encoding in CSV_ENCODINGS:
         try:
             buffer.seek(0)
@@ -84,7 +69,7 @@ def _decode_text_buffer(buffer) -> str:
     return buffer.read().decode("utf-8", errors="replace")
 
 
-def _read_csv_from_buffer(buffer) -> pd.DataFrame:
+def _read_csv_from_buffer(buffer):
     last_error = None
     for encoding in CSV_ENCODINGS:
         try:
@@ -97,8 +82,7 @@ def _read_csv_from_buffer(buffer) -> pd.DataFrame:
     raise ValueError("Unable to decode CSV file.")
 
 
-def _read_delimited_text(text: str) -> Union[pd.DataFrame, None]:
-    """Sniff common delimiters in plain text; return None when no table is found."""
+def _read_delimited_text(text):
     sample_lines = [line for line in text.splitlines() if line.strip()][:20]
     if len(sample_lines) < 2:
         return None
@@ -122,8 +106,7 @@ def _read_delimited_text(text: str) -> Union[pd.DataFrame, None]:
     return None
 
 
-def _read_json_from_buffer(buffer) -> pd.DataFrame:
-    """Read JSON as records; flatten nested objects when needed."""
+def _read_json_from_buffer(buffer):
     buffer.seek(0)
     try:
         df = pd.read_json(buffer)
@@ -147,13 +130,12 @@ def _read_json_from_buffer(buffer) -> pd.DataFrame:
     return pd.json_normalize(data)
 
 
-def _read_jsonl_from_buffer(buffer) -> pd.DataFrame:
+def _read_jsonl_from_buffer(buffer):
     buffer.seek(0)
     return pd.read_json(buffer, lines=True)
 
 
-def _flatten_xml_element(element, parent_key: str = "") -> dict:
-    """Recursively flatten one XML element into a single record dict."""
+def _flatten_xml_element(element, parent_key=""):
     record = {}
     for attribute, value in element.attrib.items():
         record[f"{parent_key}{element.tag}@{attribute}".strip("_")] = value
@@ -167,30 +149,28 @@ def _flatten_xml_element(element, parent_key: str = "") -> dict:
     return record
 
 
-def _read_xml_from_buffer(buffer) -> pd.DataFrame:
-    """Parse XML with the standard library (no lxml dependency)."""
+def _read_xml_from_buffer(buffer):
     buffer.seek(0)
     root = ElementTree.fromstring(buffer.read())
     elements = list(root)
 
     records = []
     for element in elements:
-        if isinstance(element, ElementTree.Element):
-            flat = _flatten_xml_element(element)
-            prefix = f"{element.tag}_"
-            flat = {
-                (key[len(prefix):] if key.startswith(prefix) else key): value
-                for key, value in flat.items()
-            }
-            records.append(flat)
+        flat = _flatten_xml_element(element)
+        # drop the leading "<roottag>_" from each key
+        prefix = f"{element.tag}_"
+        flat = {
+            (key[len(prefix):] if key.startswith(prefix) else key): value
+            for key, value in flat.items()
+        }
+        records.append(flat)
     if not records:
         records.append(_flatten_xml_element(root))
     return pd.json_normalize(records)
 
 
 class _HTMLTableParser(HTMLParser):
-    """Extract the first HTML table using only the standard library."""
-
+    # grabs the first <table> with at least a header row plus one data row
     def __init__(self):
         super().__init__()
         self.tables = []
@@ -224,8 +204,7 @@ class _HTMLTableParser(HTMLParser):
             self._cell.append(data)
 
 
-def _read_html_from_buffer(buffer) -> pd.DataFrame:
-    """Extract tables from HTML without external parsers; fall back to AI conversion."""
+def _read_html_from_buffer(buffer):
     html_text = _decode_text_buffer(buffer)
     parser = _HTMLTableParser()
     parser.feed(html_text)
@@ -245,13 +224,12 @@ def _read_html_from_buffer(buffer) -> pd.DataFrame:
     return pd.DataFrame(normalized, columns=header)
 
 
-def _read_parquet_from_buffer(buffer) -> pd.DataFrame:
+def _read_parquet_from_buffer(buffer):
     buffer.seek(0)
     return pd.read_parquet(buffer)
 
 
-def _read_pdf_from_buffer(buffer, filename: str = "") -> pd.DataFrame:
-    """Extract PDF text with pypdf when available; content always needs AI structuring."""
+def _read_pdf_from_buffer(buffer, filename=""):
     try:
         from pypdf import PdfReader
     except ImportError as error:
@@ -266,6 +244,7 @@ def _read_pdf_from_buffer(buffer, filename: str = "") -> pd.DataFrame:
     if not full_text:
         raise ValueError("No extractable text found in the PDF (it may be scanned images).")
 
+    # pdfs never parse into tables directly, always hand off to AI
     raise AIConversionRequired(
         "PDF content requires AI structuring.",
         raw_text=full_text,
@@ -273,7 +252,7 @@ def _read_pdf_from_buffer(buffer, filename: str = "") -> pd.DataFrame:
     )
 
 
-def read_tabular(source, filename: Union[str, Path, None] = None) -> pd.DataFrame:
+def read_tabular(source, filename=None):
     """Read any supported dataset from a path, file-like object, or bytes.
 
     Formats without a native tabular structure raise AIConversionRequired carrying
@@ -339,8 +318,7 @@ def read_tabular(source, filename: Union[str, Path, None] = None) -> pd.DataFram
     )
 
 
-def read_dataset(dataset: Union[str, Path]) -> pd.DataFrame:
-    """Read any supported dataset file with common encoding fallbacks."""
+def read_dataset(dataset):
     path = resolve_dataset_path(dataset)
     with path.open("rb") as handle:
         return read_tabular(handle, filename=path.name)

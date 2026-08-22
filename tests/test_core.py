@@ -55,7 +55,7 @@ class CoreUtilityTests(unittest.TestCase):
                 df, "target", ["feature"], "Linear Regression", "Regression", test_size=0.5
             )
 
-    def test_scatter_plot_safely_ignores_invalid_optional_features(self):
+    def test_scatter_ignores_bad_size_column(self):
         df = pd.DataFrame({
             "label": ["A", "B", "C"],
             "value": [1, 2, 3],
@@ -70,7 +70,7 @@ class CoreUtilityTests(unittest.TestCase):
         self.assertIn("...", context)
         self.assertLess(len(context), 1_000)
 
-    def test_dataset_paths_cannot_escape_the_workspace_data_directory(self):
+    def test_dataset_path_stays_in_datasets_dir(self):
         with self.assertRaisesRegex(ValueError, "Datasets"):
             resolve_dataset_path("../App.py")
 
@@ -230,7 +230,7 @@ class AIConversionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "CSV"):
             parse_ai_csv("no data here at all")
 
-    def test_conversion_prompt_bounds_sample_and_warns_on_untrusted_content(self):
+    def test_conversion_prompt_is_bounded_and_flags_untrusted_content(self):
         prompt = build_conversion_prompt("x" * 20000, "log.txt")
         self.assertLess(len(prompt), 14000)
         self.assertIn("untrusted", prompt)

@@ -32,9 +32,7 @@ except Exception as error:
     st.error(f"❌ Failed to load datasets: {error}")
     st.stop()
 
-# ----------------------------------------------------------------------
-# Overview metrics
-# ----------------------------------------------------------------------
+# overview
 st.subheader("📐 Overview")
 m1, m2, m3, m4 = st.columns(4)
 with m1:
@@ -52,9 +50,6 @@ common = sorted(cols_a & cols_b)
 only_a = sorted(cols_a - cols_b)
 only_b = sorted(cols_b - cols_a)
 
-# ----------------------------------------------------------------------
-# Schema differences
-# ----------------------------------------------------------------------
 st.subheader("🧬 Schema Differences")
 s1, s2, s3 = st.columns(3)
 with s1:
@@ -70,9 +65,7 @@ with s3:
     st.markdown(f"**Only in B** ({len(only_b)})")
     st.caption(", ".join(str(c) for c in only_b) if only_b else "None")
 
-# ----------------------------------------------------------------------
-# Column-level drift table
-# ----------------------------------------------------------------------
+# per-column drift table
 if not common:
     st.info("The two datasets share no columns — nothing to compare at column level.")
     st.stop()
@@ -130,9 +123,7 @@ if flagged_count:
 else:
     st.success("✅ No significant drift detected across common columns.")
 
-# ----------------------------------------------------------------------
-# Duplicate profile comparison
-# ----------------------------------------------------------------------
+# duplication profile
 st.subheader("🔁 Duplication Profile")
 d1, d2 = st.columns(2)
 with d1:

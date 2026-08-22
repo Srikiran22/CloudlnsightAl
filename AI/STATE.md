@@ -2,19 +2,17 @@
 
 ## Current Phase
 
-Feature-rich platform: universal ingestion, detailed PDFs, compare tooling, ML persistence, templates/batch, cached loading.
+Feature-rich platform + hardened secret handling: runtime-only Gemini/AWS credentials, de-AI restyled sources.
 
 ## Working Features
 
+- Secret lifecycle (`Utils/secrets.py`): runtime password entry, optional per-session keep flag, automatic wipe after each completed API task (conversion / insights / chat / S3 fetch+download), explicit clear controls; nothing written to disk
 - Universal file ingestion (`Pages/Upload.py`, `Utils/paths.py`): CSV, Excel, JSON (nested), JSONL/NDJSON, TSV, Parquet, XML, HTML tables, delimited TXT — all native parsers
 - Gemini-powered conversion of unstructured files via `Utils/AIConvert.py`; saved as `<stem>_converted.csv`
 - PDF input via optional `pypdf`, then AI structuring
-- Detailed PDF reports (`Utils/PDF.py`): 10 sections incl. quality scores, extended stats (Q1/Q3/skew/kurtosis), categorical/correlation analysis, histograms + box plots + correlation heatmap (optional matplotlib), page footers
-- Cross-format S3 sync (`Utils/S3.py` lists/filters all supported extensions)
-- Dataset comparison page (`Pages/Compare.py`): schema diff, missing-value drift, numeric mean-shift flags, duplication profile
-- ML persistence (`Utils/ML.py` + `Pages/ML.py`): joblib save/load in `Models/`, predict on active dataset, predictions CSV download
-- Report templates (`Reports/templates/*.json`) + batch generation for all datasets with row caps (`Pages/Report.py`)
-- Cached dataset loading (`st.cache_data` keyed by path+mtime) in `Utils/dataset_ui.py`
+- Detailed PDF reports (`Utils/PDF.py`): 10 sections incl. quality scores, extended stats, categorical/correlation analysis, histograms + box plots + heatmap (optional matplotlib), page footers
+- Cross-format S3 sync (`Utils/S3.py`)
+- Dataset comparison (`Pages/Compare.py`), ML persistence (`Utils/ML.py` + `Pages/ML.py`), report templates/batch (`Pages/Report.py`), cached loading (`Utils/dataset_ui.py`)
 - Data cleaning, EDA, visualization studio, ML studio, Gemini chat, executive dashboard
 
 ## Incomplete Features
@@ -27,6 +25,7 @@ Feature-rich platform: universal ingestion, detailed PDFs, compare tooling, ML p
 
 ## Important Files
 
+- `Utils/secrets.py` — runtime credential entry / release / drop (memory-only)
 - `Utils/paths.py` — native readers, AIConversionRequired, MODELS_DIR, REPORT_TEMPLATES_DIR
 - `Utils/AIConvert.py` — Gemini conversion pipeline
 - `Utils/ML.py` — training + save/load/predict helpers
@@ -37,9 +36,9 @@ Feature-rich platform: universal ingestion, detailed PDFs, compare tooling, ML p
 
 ## Recent Changes
 
-- 2026-08-21: Six-feature build: S3 formats, Compare page, ML persistence, PDF chart upgrades, report templates/batch, cached loading
-- 2026-08-21: Memory system renamed `.ai/` → `AI/`; SESSIONS.md before/after logging added
-- 2026-08-21: Universal ingestion pipeline + detailed PDF report rewrite
+- 2026-08-22: Runtime secret lifecycle (DEC-009) wired into Upload + AI pages; env seeding and python-dotenv removed
+- 2026-08-22: De-AI restyle of all Python sources with frozen public surface (DEC-010)
+- 2026-08-21: Six-feature build; memory system rename; universal ingestion + detailed PDF rewrite
 
 ## Tests
 
@@ -49,7 +48,7 @@ Feature-rich platform: universal ingestion, detailed PDFs, compare tooling, ML p
 
 ## Build Status
 
-OK — 24/24 unit tests pass; 9/9 pages boot without exceptions.
+OK — 24/24 unit tests pass; 9/9 pages boot without exceptions (verified after restyle + secret changes).
 
 ## Environment
 
@@ -66,3 +65,4 @@ See `requirements.txt`.
 - matplotlib/pypdf not yet pip-installed in venv — charts and PDF input degrade gracefully until installed
 - Model bundles are scikit-learn-version-sensitive when loading
 - AI conversion sends file content to Google Gemini (privacy notice shown in UI)
+- With the keep-box unticked, users must re-enter credentials per task (intentional)

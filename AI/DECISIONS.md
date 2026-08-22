@@ -228,7 +228,7 @@ Active
 
 ---
 
-## DEC-008 — Plain-file persistence for models and report templates
+## DEC-008 ï¿½ Plain-file persistence for models and report templates
 
 - **Date:** 2026-08-21
 - **Agent:** OpenCode (ox-alpha)
@@ -244,14 +244,76 @@ joblib ships with scikit-learn (no new dependency) and handles sklearn pipelines
 
 ### Alternatives Considered
 
-- MLflow/model registry — external service, violates zero-dependency constraint
-- Pickle directly — less secure and less efficient than joblib for numpy arrays
-- Hash-based cache keys — slower; mtime is sufficient for single-user desktop usage
+- MLflow/model registry ï¿½ external service, violates zero-dependency constraint
+- Pickle directly ï¿½ less secure and less efficient than joblib for numpy arrays
+- Hash-based cache keys ï¿½ slower; mtime is sufficient for single-user desktop usage
 
 ### Consequences
 
 - Model bundles are only loadable within compatible scikit-learn versions
 - Batch reports cap rows per dataset (user-configurable) to bound runtime
+
+### Status
+
+Active
+
+---
+
+## DEC-009 â€” In-memory-only secret lifecycle (runtime entry, wipe after use)
+
+- **Date:** 2026-08-22
+- **Agent:** OpenCode (ox-alpha)
+- **Model:** opencode/x-preview-f-free
+
+### Decision
+
+Gemini and AWS credentials are entered in-app at runtime (`Utils/secrets.py`). They live only in `st.session_state`; after each completed API task (AI conversion, insights report, chat reply, S3 fetch/download) they are wiped unless the user ticked "Keep in memory for this session". Env-var auto-seeding (`GEMINI_API_KEY`) and `python-dotenv` auto-loading were removed; explicit "clear" controls exist on the AI page.
+
+### Why
+
+Long-lived secrets sitting in browser-session state (or env files) are the main exposure in a desktop Streamlit app. Wiping after use matches the requested behavior: the key exists only while work needs it.
+
+### Alternatives Considered
+
+- Keep env-var seeding for CI convenience â€” rejected: silently reintroduces persistent secrets
+- Write user-approved keys to a local config file â€” rejected: secrets on disk, worse than session memory
+- Per-message re-prompting without any store option â€” rejected: hostile UX; the keep-checkbox covers it
+
+### Consequences
+
+- Users who leave the box unticked must re-enter credentials per task (by design)
+- Bucket/region persist across tasks; only access/secret keys are treated as secrets
+- Old `gemini_api_key` / `aws_key` / `aws_secret` session keys no longer exist
+
+### Status
+
+Active
+
+---
+
+## DEC-010 â€” De-AI restyle with frozen public surface
+
+- **Date:** 2026-08-22
+- **Agent:** OpenCode (ox-alpha)
+- **Model:** opencode/x-preview-f-free
+
+### Decision
+
+All Python sources were restyled to read less machine-generated: formulaic docstrings and banner comments removed, narration comments trimmed or made terse/lowercase, uniform type hints thinned, small internal consolidations. Frozen throughout: public function names, keyword argument names, result-dict keys, prompts, UI strings, error messages (tests regex-match several), and all runtime behavior.
+
+### Why
+
+The codebase's perfectly uniform docstring/comment/hint patterns read as AI-authored; varying prose style while keeping APIs identical changes presentation without touching what the app does.
+
+### Alternatives Considered
+
+- Renaming public functions/renaming UI copy â€” rejected: breaks tests, callers, and user-visible behavior
+- Full type-hint removal â€” rejected: hints aid maintenance; only the mechanical uniformity was thinned
+
+### Consequences
+
+- Future edits should keep the same style discipline (terse comments, no formulaic docstrings)
+- Any rename must first be checked against tests/pages imports
 
 ### Status
 

@@ -9,7 +9,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Initialize global session state
 if "current_df" not in st.session_state:
     st.session_state["current_df"] = None
 if "dataset_name" not in st.session_state:

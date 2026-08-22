@@ -2,7 +2,6 @@ import io
 import datetime
 import pandas as pd
 import numpy as np
-from typing import Optional
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.platypus import (
@@ -13,7 +12,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from xml.sax.saxutils import escape
 
 
-USABLE_WIDTH = 540  # letter (612pt) minus 36pt margins on each side
+USABLE_WIDTH = 540  # letter minus the 36pt page margins
 
 SECTION_COLORS = {
     "blue": "#2563EB",
@@ -26,8 +25,7 @@ SECTION_COLORS = {
 }
 
 
-def _fmt(value, decimals: int = 2) -> str:
-    """Format a number safely for PDF cells, handling NaN/inf/None."""
+def _fmt(value, decimals=2):
     if value is None or (isinstance(value, float) and (np.isnan(value) or np.isinf(value))):
         return "-"
     if isinstance(value, (int, np.integer)):
@@ -38,8 +36,7 @@ def _fmt(value, decimals: int = 2) -> str:
         return str(value)
 
 
-def _style_table(data, header_color: str, col_widths=None) -> Table:
-    """Apply the shared zebra-striped table styling used across all sections."""
+def _style_table(data, header_color, col_widths=None):
     table = Table(
         data,
         colWidths=col_widths,
@@ -59,13 +56,19 @@ def _style_table(data, header_color: str, col_widths=None) -> Table:
     return table
 
 
-def _render_histograms(df: pd.DataFrame, max_charts: int = 4):
-    """Render distribution histograms with matplotlib; return [] when unavailable."""
+def _matplotlib():
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+        return plt
     except ImportError:
+        return None
+
+
+def _render_histograms(df, max_charts=4):
+    plt = _matplotlib()
+    if plt is None:
         return []
 
     numeric_cols = df.select_dtypes(include="number").columns[:max_charts]
@@ -87,13 +90,9 @@ def _render_histograms(df: pd.DataFrame, max_charts: int = 4):
     return images
 
 
-def _render_correlation_heatmap(df: pd.DataFrame):
-    """Render a correlation heatmap; returns None when not applicable or unavailable."""
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except ImportError:
+def _render_correlation_heatmap(df):
+    plt = _matplotlib()
+    if plt is None:
         return None
 
     num_df = df.select_dtypes(include="number")
@@ -103,9 +102,8 @@ def _render_correlation_heatmap(df: pd.DataFrame):
     if corr.dropna(how="all").empty:
         return None
 
-    max_cols = 10
-    if len(corr.columns) > max_cols:
-        corr = corr.iloc[:max_cols, :max_cols]
+    if len(corr.columns) > 10:
+        corr = corr.iloc[:10, :10]
 
     fig, ax = plt.subplots(figsize=(5.2, 4.4), dpi=100)
     image = ax.imshow(corr.values, cmap="coolwarm", vmin=-1, vmax=1)
@@ -121,13 +119,9 @@ def _render_correlation_heatmap(df: pd.DataFrame):
     return buffer
 
 
-def _render_boxplots(df: pd.DataFrame, max_charts: int = 4):
-    """Render box plots for the first few numeric columns; [] when unavailable."""
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except ImportError:
+def _render_boxplots(df, max_charts=4):
+    plt = _matplotlib()
+    if plt is None:
         return []
 
     numeric_cols = df.select_dtypes(include="number").columns[:max_charts]
@@ -151,14 +145,13 @@ def _render_boxplots(df: pd.DataFrame, max_charts: int = 4):
 
 
 def generate_pdf_report(
-    df: pd.DataFrame,
-    dataset_name: str,
-    report_title: str = "Executive Data Analytics Report",
-    author_name: str = "CloudInsight AI",
-    include_ai_insights: Optional[str] = None,
-    include_charts: bool = True,
-) -> bytes:
-    """Generate a detailed, publication-grade PDF analytics report using ReportLab."""
+    df,
+    dataset_name,
+    report_title="Executive Data Analytics Report",
+    author_name="CloudInsight AI",
+    include_ai_insights=None,
+    include_charts=True,
+):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
@@ -218,9 +211,6 @@ def generate_pdf_report(
 
     story = []
 
-    # ------------------------------------------------------------------
-    # Header & Title Banner
-    # ------------------------------------------------------------------
     story.append(Paragraph(f"☁️ {escape(str(report_title))}", title_style))
     now_str = datetime.datetime.now().strftime("%B %d, %Y - %H:%M:%S")
     story.append(Paragraph(
@@ -241,9 +231,7 @@ def generate_pdf_report(
     quality_index = (completeness + uniqueness) / 2
     memory_mb = df.memory_usage(deep=True).sum() / (1024 ** 2)
 
-    # ------------------------------------------------------------------
-    # 1. High-Level Dataset Summary
-    # ------------------------------------------------------------------
+    # 1 -- summary
     story.append(Paragraph("1. High-Level Dataset Summary", heading2_style))
     summary_data = [
         ["Total Records (Rows)", f"{rows:,}", "Total Features (Cols)", f"{cols}"],
@@ -270,9 +258,7 @@ def generate_pdf_report(
     ))
     story.append(Spacer(1, 10))
 
-    # ------------------------------------------------------------------
-    # 2. Column Structure & Missing Values (ALL columns)
-    # ------------------------------------------------------------------
+    # 2 -- per-column structure, every column listed
     story.append(Paragraph("2. Column Structure & Missing Value Breakdown", heading2_style))
     col_table_data = [["#", "Column Name", "Data Type", "Non-Null", "Missing", "Missing %", "Unique"]]
     for position, col in enumerate(df.columns, start=1):
@@ -293,9 +279,7 @@ def generate_pdf_report(
     ))
     story.append(Spacer(1, 12))
 
-    # ------------------------------------------------------------------
-    # 3. Numerical Descriptive Statistics (extended, ALL numeric columns)
-    # ------------------------------------------------------------------
+    # 3 -- extended numeric stats
     if not num_df.empty:
         story.append(Paragraph("3. Numerical Descriptive Statistics (Extended)", heading2_style))
         stats_table_data = [[
@@ -325,9 +309,7 @@ def generate_pdf_report(
         ))
         story.append(Spacer(1, 12))
 
-    # ------------------------------------------------------------------
-    # 4. Outlier Analysis — ALL numeric columns
-    # ------------------------------------------------------------------
+    # 4 -- tukey outliers
     if not num_df.empty:
         story.append(Paragraph("4. Outlier Analysis (Tukey IQR Method)", heading2_style))
         outlier_data = [["Column", "Q1 (25%)", "Q3 (75%)", "IQR", "Lower Bound", "Upper Bound", "Outliers", "Outlier %"]]
@@ -353,9 +335,7 @@ def generate_pdf_report(
         ))
         story.append(Spacer(1, 12))
 
-    # ------------------------------------------------------------------
-    # 5. Categorical Column Analysis
-    # ------------------------------------------------------------------
+    # 5 -- categoricals
     if not cat_df.empty:
         story.append(Paragraph("5. Categorical Column Analysis", heading2_style))
         cat_data = [["Column", "Unique", "Top Value", "Top Frequency", "Top Share", "Missing"]]
@@ -382,9 +362,7 @@ def generate_pdf_report(
         ))
         story.append(Spacer(1, 12))
 
-    # ------------------------------------------------------------------
-    # 6. Correlation Insights (strongest pairs)
-    # ------------------------------------------------------------------
+    # 6 -- strongest correlations
     if len(num_df.columns) >= 2:
         corr_matrix = num_df.corr(numeric_only=True)
         pairs = []
@@ -413,9 +391,7 @@ def generate_pdf_report(
             ))
             story.append(Spacer(1, 12))
 
-    # ------------------------------------------------------------------
-    # 7. Data Quality Assessment per Column
-    # ------------------------------------------------------------------
+    # 7 -- quality flags per column
     story.append(Paragraph("7. Data Quality Assessment", heading2_style))
     quality_data = [["Column", "Completeness %", "Uniqueness %", "Flags"]]
     flags_by_column = {}
@@ -460,9 +436,7 @@ def generate_pdf_report(
         ))
     story.append(Spacer(1, 12))
 
-    # ------------------------------------------------------------------
-    # 8. Sample Records
-    # ------------------------------------------------------------------
+    # 8 -- sample records
     story.append(Paragraph("8. Sample Records (First 8 Rows)", heading2_style))
     sample_cols = list(df.columns[:8])
     sample_data = [[escape(str(c)) for c in sample_cols]]
@@ -479,9 +453,7 @@ def generate_pdf_report(
         ))
     story.append(Spacer(1, 12))
 
-    # ------------------------------------------------------------------
-    # 9. Distribution & Relationship Charts (optional matplotlib)
-    # ------------------------------------------------------------------
+    # 9 -- optional matplotlib charts
     if include_charts and not num_df.empty:
         chart_images = _render_histograms(df, max_charts=4)
         heatmap_buffer = _render_correlation_heatmap(df)
@@ -531,9 +503,7 @@ def generate_pdf_report(
                 story.append(heat_table)
             story.append(Spacer(1, 10))
 
-    # ------------------------------------------------------------------
-    # 10. Optional AI Executive Insights
-    # ------------------------------------------------------------------
+    # 10 -- optional AI insights (markdown-lite rendering)
     if include_ai_insights:
         section_no = "10" if include_charts else "9"
         story.append(Paragraph(f"{section_no}. AI Executive Insights & Strategy", heading2_style))

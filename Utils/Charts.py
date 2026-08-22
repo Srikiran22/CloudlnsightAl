@@ -1,19 +1,10 @@
 import pandas as pd
-import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from typing import Optional, List
 
 
-def create_histogram_plot(
-    df: pd.DataFrame,
-    x_col: str,
-    hue_col: Optional[str] = None,
-    nbins: int = 30,
-    marginal: Optional[str] = "box",
-    color_discrete_sequence: Optional[List[str]] = None
-) -> go.Figure:
-    """Create an interactive histogram with optional density/box marginals and hue."""
+def create_histogram_plot(df, x_col, hue_col=None, nbins=30, marginal="box",
+                          color_discrete_sequence=None):
     fig = px.histogram(
         df,
         x=x_col,
@@ -34,15 +25,8 @@ def create_histogram_plot(
     return fig
 
 
-def create_box_violin_plot(
-    df: pd.DataFrame,
-    y_col: str,
-    x_col: Optional[str] = None,
-    hue_col: Optional[str] = None,
-    plot_type: str = "Box",
-    points: str = "outliers"
-) -> go.Figure:
-    """Create interactive Box or Violin plot."""
+def create_box_violin_plot(df, y_col, x_col=None, hue_col=None, plot_type="Box",
+                           points="outliers"):
     if plot_type == "Violin":
         fig = px.violin(
             df,
@@ -70,15 +54,9 @@ def create_box_violin_plot(
     return fig
 
 
-def create_scatter_plot(
-    df: pd.DataFrame,
-    x_col: str,
-    y_col: str,
-    hue_col: Optional[str] = None,
-    size_col: Optional[str] = None,
-    add_trendline: bool = False
-) -> go.Figure:
-    """Create an interactive scatter or bubble plot with optional OLS trendline."""
+def create_scatter_plot(df, x_col, y_col, hue_col=None, size_col=None,
+                        add_trendline=False):
+    # OLS only makes sense when both axes are numeric
     can_fit_trendline = (
         pd.api.types.is_numeric_dtype(df[x_col])
         and pd.api.types.is_numeric_dtype(df[y_col])
@@ -109,15 +87,8 @@ def create_scatter_plot(
     return fig
 
 
-def create_bar_count_plot(
-    df: pd.DataFrame,
-    x_col: str,
-    y_col: Optional[str] = None,
-    agg_func: str = "Count",
-    hue_col: Optional[str] = None,
-    orientation: str = "v"
-) -> go.Figure:
-    """Create an interactive bar chart or count plot."""
+def create_bar_count_plot(df, x_col, y_col=None, agg_func="Count", hue_col=None,
+                          orientation="v"):
     if y_col and agg_func != "Count":
         grouped = df.groupby(x_col, dropna=False)[y_col].agg(agg_func.lower()).reset_index()
         fig = px.bar(
@@ -146,14 +117,7 @@ def create_bar_count_plot(
     return fig
 
 
-def create_line_chart(
-    df: pd.DataFrame,
-    x_col: str,
-    y_col: str,
-    hue_col: Optional[str] = None,
-    markers: bool = True
-) -> go.Figure:
-    """Create interactive line / trend chart."""
+def create_line_chart(df, x_col, y_col, hue_col=None, markers=True):
     sorted_df = df.sort_values(by=x_col) if x_col in df.columns else df
     fig = px.line(
         sorted_df,
@@ -171,13 +135,7 @@ def create_line_chart(
     return fig
 
 
-def create_pie_treemap_plot(
-    df: pd.DataFrame,
-    names_col: str,
-    values_col: Optional[str] = None,
-    plot_type: str = "Pie"
-) -> go.Figure:
-    """Create interactive Pie, Donut or Treemap composition plot."""
+def create_pie_treemap_plot(df, names_col, values_col=None, plot_type="Pie"):
     if values_col:
         grouped = df.groupby(names_col, dropna=False)[values_col].sum().reset_index()
         value_name = values_col
@@ -217,11 +175,7 @@ def create_pie_treemap_plot(
     return fig
 
 
-def create_correlation_heatmap(
-    df: pd.DataFrame,
-    colorscale: str = "RdBu_r"
-) -> Optional[go.Figure]:
-    """Create interactive Correlation Heatmap for all numeric columns."""
+def create_correlation_heatmap(df, colorscale="RdBu_r"):
     num_df = df.select_dtypes(include="number")
     if num_df.shape[1] < 2:
         return None

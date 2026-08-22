@@ -14,9 +14,7 @@ df, selected_file = select_working_dataset("Select Dataset for PDF Report:")
 render_sidebar()
 st.caption(f"Generating Report for: `{selected_file}` ({df.shape[0]:,} rows × {df.shape[1]} cols)")
 
-# ----------------------------------------------------------------------
-# Templates: save / load report configurations
-# ----------------------------------------------------------------------
+# templates: save / load report configurations
 def _list_templates() -> list:
     if not REPORT_TEMPLATES_DIR.exists():
         return []
@@ -77,14 +75,10 @@ if template_name and st.button("Save Template"):
     except Exception as e:
         st.error(f"❌ Template save failed: {str(e)}")
 
-# ----------------------------------------------------------------------
-# Single report generation
-# ----------------------------------------------------------------------
 st.markdown("---")
 
 
-def _build_report(dataset_name: str, dataframe, title: str, prepared_by: str, with_charts: bool):
-    """Generate and persist one PDF; returns the output filename."""
+def _build_report(dataset_name, dataframe, title, prepared_by, with_charts):
     pdf_bytes = generate_pdf_report(
         df=dataframe,
         dataset_name=dataset_name,
@@ -123,9 +117,6 @@ if pdf_result and pdf_result.get("dataset") == selected_file:
         mime="application/pdf"
     )
 
-# ----------------------------------------------------------------------
-# Batch generation for every dataset
-# ----------------------------------------------------------------------
 st.markdown("---")
 st.subheader("📦 Batch Generation")
 st.caption(f"Generates a PDF report for each of the {len(list_dataset_files())} datasets in the Datasets/ folder using the settings above.")

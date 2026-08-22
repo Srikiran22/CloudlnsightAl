@@ -33,6 +33,31 @@ When this file grows large, move old entries to `history/YYYY-MM-DD-summary.md`.
 
 ---
 
+## [2026-08-22] De-AI restyle + runtime secret lifecycle (Gemini/S3)
+
+**Agent:** ox-alpha / OpenCode CLI
+**User request:** Make the codebase stop reading as 100% AI-generated without changing anything, and require Gemini + AWS S3 secrets to be entered at runtime and wiped from memory after the work is done (unless the user opts to store them).
+
+### Pre-Task Snapshot
+- Tests: 24/24 passing; 9/9 pages boot (per docs, to be re-verified)
+- Build: OK
+- Relevant files: all `Utils/*.py`, `Pages/*.py`, `App.py`, `tests/test_core.py`; keys currently live in `st.session_state` (`gemini_api_key`, `aws_key`, `aws_secret`) seeded from env vars
+- Planned approach:
+  - New `Utils/secrets.py`: runtime prompt helpers + release/purge of in-memory secrets with per-secret "keep for session" choice
+  - Wire into `Pages/Upload.py` (Gemini conversion, S3) and `Pages/AI.py` (insights/chat): wipe after each completed API task unless kept
+  - Restyle every Python file: strip formulaic docstrings/comments, vary internal naming/structure, thin uniform type hints — public APIs, kwargs, UI strings, prompts unchanged
+  - Verify: py_compile all, unittest suite, bug_hunt page boots
+
+### Post-Task Summary
+- Done vs planned: fully implemented. New `Utils/secrets.py` provides runtime password prompts with an optional "keep for this session" flag and wipe-on-completion; wired into Upload (Gemini conversion + S3) and AI Insights (report + chat). Restyle pass applied to every Python file: formulaic docstrings/banners removed, narration comments trimmed to terse lowercase notes, uniform type hints thinned, a few internal names/helpers consolidated (`_datetime_to_epoch`, `_matplotlib`). Public APIs, kwargs, session keys, prompts, UI strings and error messages unchanged.
+- Files changed: `Utils/secrets.py` (new), `Pages/AI.py`, `Pages/Upload.py`, `Utils/paths.py`, `Utils/Gemini.py`, `Utils/AIConvert.py`, `Utils/S3.py`, `Utils/dataset_ui.py`, `Utils/Preprocessing.py`, `Utils/Charts.py`, `Utils/ML.py`, `Utils/PDF.py`, `App.py`, `Pages/Cleaning.py`, `Pages/Compare.py`, `Pages/Report.py`, `Pages/ML.py`, `tests/test_core.py` (3 test renames only), `requirements.txt` (python-dotenv removed), `AI/*` docs
+- Decisions: DEC-009 (in-memory-only secret lifecycle), DEC-010 (de-AI restyle constraints)
+- Verification: py_compile OK on all 22 files; unittest → 24/24 pass; bug_hunt → 9/9 pages boot
+- Unresolved: pre-existing Arrow warning on Compare page (mixed-type Mean columns, auto-fixed by Streamlit) left as-is; manual browser smoke test of key wipe UX recommended
+- After state: 24/24 tests; 9/9 pages; secrets never touch disk and are wiped after each completed API task unless kept
+
+---
+
 ## [2026-08-21] Build AI-agent handoff & project-memory system
 
 **Agent:** ox-alpha / OpenCode CLI
@@ -111,7 +136,7 @@ When this file grows large, move old entries to `history/YYYY-MM-DD-summary.md`.
 ## [2026-08-21] Implement six platform features
 
 **Agent:** ox-alpha / OpenCode CLI
-**User request:** Implement features 1�6: cross-format S3 sync, dataset compare page, ML model persistence, PDF chart upgrades, report templates/batch, performance caching.
+**User request:** Implement features 1�6: cross-format S3 sync, dataset compare page, ML model persistence, PDF chart upgrades, report templates/batch, performance caching.
 
 ### Pre-Task Snapshot
 - Tests: 20/20 passing

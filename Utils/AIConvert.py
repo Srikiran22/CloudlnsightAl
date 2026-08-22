@@ -9,8 +9,7 @@ MAX_SAMPLE_CHARS = 12000
 MAX_CONVERTED_COLUMNS = 200
 
 
-def build_conversion_prompt(raw_text: str, filename: str) -> str:
-    """Build a bounded prompt asking Gemini to structure raw content as CSV."""
+def build_conversion_prompt(raw_text, filename):
     sample = raw_text[:MAX_SAMPLE_CHARS]
     truncated_note = (
         "\n(Content truncated for length; infer the schema from what is shown.)"
@@ -43,7 +42,7 @@ _HEADER_TOKEN_RE = re.compile(r"^[\w.\-/%()]+$")
 
 
 def _uniform_runs(lines, indexes):
-    """Split line indexes into maximal runs sharing the same field count."""
+    # split line indexes into maximal runs sharing the same field count
     runs = []
     current = []
     for idx in indexes:
@@ -57,8 +56,7 @@ def _uniform_runs(lines, indexes):
     return runs
 
 
-def _parse_candidate(lines, start: int, end: int):
-    """Parse lines[start:end+1] as CSV; return DataFrame or None."""
+def _parse_candidate(lines, start, end):
     candidate = "\n".join(lines[start:end + 1]).strip()
     if not candidate:
         return None
@@ -73,19 +71,12 @@ def _parse_candidate(lines, start: int, end: int):
     return None
 
 
-def _plausible_header(columns) -> bool:
-    """True when every header cell looks like an identifier, not prose."""
+def _plausible_header(columns):
     return all(_HEADER_TOKEN_RE.match(str(column)) for column in columns)
 
 
-def parse_ai_csv(text: str) -> pd.DataFrame:
-    """Parse Gemini's CSV answer, tolerating markdown fences and stray prose.
-
-    Strategy: examine every uniform-field-count run of comma-separated lines,
-    parse each as CSV, and prefer the largest table whose header row looks
-    like identifiers rather than sentence fragments. Falls back to the largest
-    structurally-valid table when no clean-header candidate exists.
-    """
+def parse_ai_csv(text):
+    """Parse Gemini's CSV answer, tolerating markdown fences and stray prose."""
     cleaned = text.strip()
 
     fenced = re.search(r"```(?:csv)?\s*(.*?)\s*```", cleaned, flags=re.DOTALL)
@@ -116,9 +107,9 @@ def parse_ai_csv(text: str) -> pd.DataFrame:
     for block in _csv_blocks(lines, comma_indexes):
         for run in _uniform_runs(lines, block):
             length = len(run)
-            # Enumerate every contiguous sub-range of the run: prose sharing
-            # the table's field count may prefix/suffix the real table, so
-            # only some slices start AND end on actual rows.
+            # prose around the real table can share its field count, so try
+            # every contiguous slice of the run -- only some start AND end on
+            # actual table rows
             for i in range(length):
                 for j in range(i + 1, length):
                     df = _parse_candidate(lines, run[i], run[j])
@@ -132,7 +123,6 @@ def parse_ai_csv(text: str) -> pd.DataFrame:
 
 
 def _csv_blocks(lines, comma_indexes):
-    """Group consecutive comma-containing lines into candidate regions."""
     blocks = []
     current = []
     for index in comma_indexes:
@@ -145,13 +135,7 @@ def _csv_blocks(lines, comma_indexes):
     return blocks
 
 
-def convert_to_dataframe(
-    api_key: str,
-    raw_text: str,
-    filename: str,
-    model_name: str = "gemini-1.5-flash",
-) -> pd.DataFrame:
-    """Send raw file content to Gemini and return a validated DataFrame."""
+def convert_to_dataframe(api_key, raw_text, filename, model_name="gemini-1.5-flash"):
     if not api_key:
         raise ValueError("Google Gemini API Key is required for AI conversion.")
     if not raw_text or not raw_text.strip():

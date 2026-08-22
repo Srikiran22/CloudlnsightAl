@@ -1,6 +1,7 @@
 import streamlit as st
 from pathlib import Path
 
+from Utils.secrets import ask, value_of, keep_box, release
 from Utils.S3 import get_s3_client, list_s3_datasets, download_s3_dataset
 from Utils.paths import (
     AIConversionRequired,
@@ -51,19 +52,13 @@ if upload_mode == "💻 Local File Upload":
                 "Use **Gemini AI** below to convert it into a clean dataset."
             )
 
-            if "gemini_api_key" not in st.session_state:
-                import os
-                st.session_state["gemini_api_key"] = os.getenv("GEMINI_API_KEY", "")
-
             with st.expander("🤖 AI-Powered File Conversion", expanded=True):
-                api_key = st.text_input(
+                api_key = ask(
+                    "gemini",
                     "Google Gemini API Key:",
-                    value=st.session_state["gemini_api_key"],
-                    type="password",
-                    help="Get your key at https://aistudio.google.com/"
+                    help_text="Entered at runtime, held in memory only."
                 )
-                if api_key:
-                    st.session_state["gemini_api_key"] = api_key
+                keep_box("gemini_keep")
 
                 chosen_model = st.selectbox(
                     "Gemini Model:",
@@ -82,13 +77,13 @@ if upload_mode == "💻 Local File Upload":
                 )
 
                 if st.button("✨ Convert with Gemini AI", type="primary"):
-                    if not st.session_state.get("gemini_api_key"):
+                    if not value_of("gemini"):
                         st.error("❌ Please enter your Google Gemini API Key first.")
                     else:
                         with st.spinner("Gemini is extracting structured records from your file..."):
                             try:
                                 df = convert_to_dataframe(
-                                    api_key=st.session_state["gemini_api_key"],
+                                    api_key=value_of("gemini"),
                                     raw_text=conversion_needed.raw_text,
                                     filename=file_name,
                                     model_name=chosen_model
@@ -97,6 +92,8 @@ if upload_mode == "💻 Local File Upload":
                                 converted_name = f"{Path(file_name).stem}_converted.csv"
                                 df.to_csv(DATASETS_DIR / converted_name, index=False)
                                 file_name = converted_name
+                                if release("gemini", keep_key="gemini_keep"):
+                                    st.toast("Gemini key cleared from memory.")
                                 st.success(
                                     f"✅ Converted to {df.shape[0]:,} rows × {df.shape[1]} cols "
                                     f"and saved as `{converted_name}`."
@@ -111,15 +108,18 @@ else:
     st.subheader("☁️ Connect to Amazon S3 Bucket")
     c1, c2 = st.columns(2)
     with c1:
-        aws_key = st.text_input("AWS Access Key ID:", type="password", value=st.session_state.get("aws_key", ""))
+        aws_key = ask("aws_access", "AWS Access Key ID:")
         bucket = st.text_input("S3 Bucket Name:", value=st.session_state.get("s3_bucket", ""))
     with c2:
-        aws_secret = st.text_input("AWS Secret Access Key:", type="password", value=st.session_state.get("aws_secret", ""))
+        aws_secret = ask("aws_secret", "AWS Secret Access Key:")
         region = st.text_input("AWS Region:", value=st.session_state.get("s3_region", "us-east-1"))
 
+    keep_box("aws_keep")
+
+    if not (aws_key and aws_secret) and st.session_state.get("s3_files"):
+        st.info("AWS credentials were cleared after the last operation — re-enter them to keep working with this bucket.")
+
     if aws_key and aws_secret and bucket:
-        st.session_state["aws_key"] = aws_key
-        st.session_state["aws_secret"] = aws_secret
         st.session_state["s3_bucket"] = bucket
         st.session_state["s3_region"] = region
 
@@ -137,6 +137,8 @@ else:
                     st.success(f"Found {len(s3_files)} dataset(s) in S3 bucket `{bucket}`!")
                 else:
                     st.info(f"No supported data files found in S3 bucket `{bucket}`.")
+                if release("aws_access", "aws_secret", keep_key="aws_keep"):
+                    st.toast("AWS credentials cleared from memory.")
             except Exception as e:
                 st.error(f"❌ S3 Connection Error: {e}")
 
@@ -144,24 +146,29 @@ else:
         if s3_files_avail:
             chosen_s3_file = st.selectbox("Select S3 Dataset:", s3_files_avail)
             if st.button("📥 Download & Load from S3"):
-                try:
-                    s3_client = get_s3_client(aws_key, aws_secret, region)
-                    df, raw_bytes = download_s3_dataset(bucket, chosen_s3_file, s3_client)
-                    file_name = Path(chosen_s3_file).name
+                if not (value_of("aws_access") and value_of("aws_secret")):
+                    st.error("❌ Re-enter your AWS access keys above — they were cleared after the previous operation.")
+                else:
+                    try:
+                        s3_client = get_s3_client(value_of("aws_access"), value_of("aws_secret"), region)
+                        df, raw_bytes = download_s3_dataset(bucket, chosen_s3_file, s3_client)
+                        file_name = Path(chosen_s3_file).name
 
-                    DATASETS_DIR.mkdir(parents=True, exist_ok=True)
-                    local_s3_path = DATASETS_DIR / file_name
-                    local_s3_path.write_bytes(raw_bytes)
-                    st.success(f"✅ Successfully downloaded `{file_name}` from Amazon S3!")
-                except AIConversionRequired:
-                    file_name = Path(chosen_s3_file).name
-                    st.warning(
-                        f"⚠️ `{file_name}` was downloaded but has no native table structure. "
-                        "Re-upload it via **💻 Local File Upload** and use Gemini AI conversion "
-                        "(the converted copy is saved automatically)."
-                    )
-                except Exception as e:
-                    st.error(f"❌ S3 Download Failed: {e}")
+                        DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+                        local_s3_path = DATASETS_DIR / file_name
+                        local_s3_path.write_bytes(raw_bytes)
+                        if release("aws_access", "aws_secret", keep_key="aws_keep"):
+                            st.toast("AWS credentials cleared from memory.")
+                        st.success(f"✅ Successfully downloaded `{file_name}` from Amazon S3!")
+                    except AIConversionRequired:
+                        file_name = Path(chosen_s3_file).name
+                        st.warning(
+                            f"⚠️ `{file_name}` was downloaded but has no native table structure. "
+                            "Re-upload it via **💻 Local File Upload** and use Gemini AI conversion "
+                            "(the converted copy is saved automatically)."
+                        )
+                    except Exception as e:
+                        st.error(f"❌ S3 Download Failed: {e}")
 
 if df is not None and file_name is not None:
     st.session_state["current_df"] = df

@@ -2,20 +2,16 @@ import pandas as pd
 from pandas.api.types import is_numeric_dtype, is_datetime64_any_dtype
 
 
-def remove_duplicates(df: pd.DataFrame) -> pd.DataFrame:
-    """Remove duplicate rows from dataframe and reset index."""
+def remove_duplicates(df):
     if df is None or df.empty:
         return df
     cleaned_df = df.drop_duplicates()
     return cleaned_df.reset_index(drop=True)
 
 
-def fill_missing_values(df: pd.DataFrame, numeric_strategy: str = "mean", categorical_strategy: str = "mode") -> pd.DataFrame:
-    """
-    Safely impute missing values according to column types.
-    - numeric_strategy: 'mean', 'median', 'zero'
-    - categorical_strategy: 'mode', 'unknown'
-    """
+def fill_missing_values(df, numeric_strategy="mean", categorical_strategy="mode"):
+    # numeric_strategy: mean / median / zero
+    # categorical_strategy: mode / unknown
     if df is None or df.empty:
         return df
 
@@ -30,10 +26,10 @@ def fill_missing_values(df: pd.DataFrame, numeric_strategy: str = "mean", catego
                 fill_val = cleaned_df[column].median()
             elif numeric_strategy == "zero":
                 fill_val = 0
-            else:  # mean default
+            else:
                 fill_val = cleaned_df[column].mean()
 
-            # If all values in the column were NaN, fill_val will be NaN
+            # all-NaN column gives NaN as the mean/median
             if pd.isna(fill_val):
                 fill_val = 0
             cleaned_df[column] = cleaned_df[column].fillna(fill_val)
@@ -42,7 +38,6 @@ def fill_missing_values(df: pd.DataFrame, numeric_strategy: str = "mean", catego
             cleaned_df[column] = cleaned_df[column].ffill().bfill()
 
         else:
-            # Categorical / Object / String / Boolean
             if categorical_strategy == "mode":
                 mode_vals = cleaned_df[column].dropna().mode()
                 if not mode_vals.empty:
@@ -55,11 +50,7 @@ def fill_missing_values(df: pd.DataFrame, numeric_strategy: str = "mean", catego
     return cleaned_df
 
 
-def drop_missing_values(df: pd.DataFrame, threshold: float = None) -> pd.DataFrame:
-    """
-    Drop rows or columns with missing values.
-    If threshold is provided (0.0 to 1.0), drops columns missing more than threshold% data.
-    """
+def drop_missing_values(df, threshold=None):
     if df is None or df.empty:
         return df
 
@@ -70,4 +61,3 @@ def drop_missing_values(df: pd.DataFrame, threshold: float = None) -> pd.DataFra
 
     cleaned_df = cleaned_df.dropna().reset_index(drop=True)
     return cleaned_df
-
