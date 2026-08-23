@@ -1,19 +1,38 @@
 import io
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
+import joblib
+import numpy as np
 import pandas as pd
 
-from Utils.AIConvert import build_conversion_prompt, parse_ai_csv
+from Utils.AIConvert import (
+    build_conversion_prompt, parse_ai_csv, convert_to_dataframe,
+    MAX_CONVERTED_COLUMNS,
+)
+from Utils.batch import merge_frames
 from Utils.Charts import create_scatter_plot
-from Utils.Gemini import get_dataset_summary_context
+from Utils.compare_logic import column_drift_rows, schema_diff
+from Utils.Gemini import (
+    get_dataset_summary_context, GeminiError, chat_with_gemini_dataset,
+    MAX_MESSAGE_CHARS, MAX_CHAT_HISTORY,
+)
 from Utils.ML import (
     detect_problem_type, train_and_evaluate_model,
     save_trained_model, load_trained_model, predict_with_model,
 )
+from Utils.Preprocessing import fill_missing_values, remove_duplicates, drop_missing_values
+from Utils.quality import quality_metrics, quality_index
 from Utils.PDF import generate_pdf_report
-from Utils.S3 import list_s3_datasets, upload_s3_dataset
+from Utils.S3 import (
+    describe_s3_error, download_s3_dataset, list_s3_datasets, upload_s3_dataset,
+)
+from Utils.secrets import ask, value_of
 from Utils.paths import AIConversionRequired, resolve_dataset_path, read_tabular
 
 
@@ -193,6 +212,69 @@ class UniversalIngestionTests(unittest.TestCase):
             read_tabular(payload, filename="notes.txt")
         self.assertIn("fox", ctx.exception.raw_text)
 
+
+class TextIngestionPolicyTests(unittest.TestCase):
+    """Whitespace must never act as a delimiter: prose reaches AI conversion."""
+
+    def _txt(self, text):
+        return read_tabular(text.encode("utf-8"), filename="notes.txt")
+
+    def test_multiline_prose_raises_ai_conversion(self):
+        prose = (
+            "totally unparseable narrative text without commas\n"
+            "and more plain sentences follow here\n"
+            "a third line of ordinary words\n"
+        )
+        with self.assertRaises(AIConversionRequired) as ctx:
+            self._txt(prose)
+        self.assertIn("narrative", ctx.exception.raw_text)
+
+    def test_prose_with_commas_still_reaches_ai_conversion(self):
+        prose = (
+            "Dear reviewer, I write regarding the audit.\n"
+            "Findings were many, varied, and occasionally, confusing.\n"
+        )
+        with self.assertRaises(AIConversionRequired):
+            self._txt(prose)
+
+    def test_markdown_prose_is_not_a_table(self):
+        markdown = "# Title, a subtitle\nSome sentence, with commas, galore.\n"
+        with self.assertRaises(AIConversionRequired):
+            self._txt(markdown)
+
+    def test_varied_sql_is_not_a_table(self):
+        sql = "SELECT id, name FROM users;\nSELECT x FROM orders;\n"
+        with self.assertRaises(AIConversionRequired):
+            self._txt(sql)
+
+    def test_single_line_text_never_parses(self):
+        with self.assertRaises(AIConversionRequired):
+            self._txt("just one line of plain text\n")
+
+    def test_empty_text_requests_conversion(self):
+        with self.assertRaises(AIConversionRequired):
+            self._txt("")
+
+    def test_comma_delimited_text_still_parses(self):
+        df = self._txt("name,value\nalpha,1\nbeta,2\n")
+        self.assertEqual(list(df.columns), ["name", "value"])
+        self.assertEqual(len(df), 2)
+
+    def test_tab_delimited_txt_still_parses(self):
+        df = self._txt("x\ty\n1\t2\n3\t4\n")
+        self.assertEqual(df.shape, (2, 2))
+
+    def test_semicolon_delimited_txt_still_parses(self):
+        df = self._txt("a;b\n1;2\n3;4\n")
+        self.assertEqual(df.shape, (2, 2))
+
+    def test_quoted_csv_with_embedded_commas_parses(self):
+        # quote-aware sniffing: naive comma counting would reject this
+        payload = 'name,quote\n"alice, primary",1\n"bob, secondary",2\n'
+        df = self._txt(payload)
+        self.assertEqual(list(df.columns), ["name", "quote"])
+        self.assertEqual(len(df), 2)
+
     def test_parquet_round_trip(self):
         source = pd.DataFrame({"a": [1, 2], "b": ["x", "y"]})
         buffer = io.BytesIO()
@@ -250,6 +332,571 @@ class PDFReportTests(unittest.TestCase):
         )
         self.assertTrue(pdf_bytes.startswith(b"%PDF"))
         self.assertGreater(len(pdf_bytes), 3000)
+
+
+class BatchMergeTests(unittest.TestCase):
+    def test_merge_tracks_source_and_unions_schemas(self):
+        frames = [
+            ("2023.txt", pd.DataFrame({"question_text": ["q1"], "year": [2023]})),
+            ("2024_converted.csv", pd.DataFrame({"question_text": ["q2"], "marks": [2]})),
+        ]
+        merged = merge_frames(frames)
+        self.assertEqual(list(merged.columns)[0], "source_file")
+        self.assertEqual(len(merged), 2)
+        self.assertIn("year", merged.columns)
+        self.assertIn("marks", merged.columns)
+        self.assertTrue(merged["year"].isna().iloc[1])
+        self.assertEqual(merged["source_file"].iloc[0], "2023.txt")
+
+    def test_merge_rejects_empty_input(self):
+        with self.assertRaisesRegex(ValueError, "No data"):
+            merge_frames([])
+
+    def test_merge_preserves_an_existing_source_file_column(self):
+        merged = merge_frames([
+            ("first.csv", pd.DataFrame({"source_file": ["original"], "value": [1]})),
+            ("second.csv", pd.DataFrame({"source_file": ["legacy"], "value": [2]})),
+        ])
+        self.assertEqual(list(merged.columns)[:2], ["uploaded_file", "source_file"])
+        self.assertEqual(merged["uploaded_file"].tolist(), ["first.csv", "second.csv"])
+        self.assertEqual(merged["source_file"].tolist(), ["original", "legacy"])
+
+
+class SecretLifecycleTests(unittest.TestCase):
+    def test_empty_secret_input_clears_the_stored_value(self):
+        fake_streamlit = SimpleNamespace(
+            session_state={"gemini_secret": "previous-value"},
+            text_input=lambda *args, **kwargs: "",
+        )
+        with patch("Utils.secrets.st", fake_streamlit):
+            self.assertEqual(ask("gemini", "Google Gemini API Key:"), "")
+            self.assertEqual(value_of("gemini"), "")
+
+
+class QualityIndexTests(unittest.TestCase):
+    def test_quality_metrics_math(self):
+        df = pd.DataFrame({
+            "a": [1, 2, None, 4],
+            "b": [None, None, None, None],
+        })
+        metrics = quality_metrics(df)
+        self.assertEqual(metrics["rows"], 4)
+        self.assertEqual(metrics["cols"], 2)
+        self.assertEqual(metrics["missing_cells"], 5)
+        self.assertAlmostEqual(metrics["completeness"], 37.5)
+        # all four rows are distinct
+        self.assertAlmostEqual(metrics["uniqueness"], 100.0)
+        self.assertAlmostEqual(metrics["index"], (37.5 + 100.0) / 2)
+
+    def test_duplicate_rows_lower_uniqueness(self):
+        df = pd.DataFrame({"a": [1, 1, 1, 1]})
+        metrics = quality_metrics(df)
+        self.assertAlmostEqual(metrics["uniqueness"], 25.0)
+
+    def test_index_bounds_hold_for_degenerate_frames(self):
+        empty = pd.DataFrame()
+        for frame in (empty, pd.DataFrame({"a": [None]})):
+            index = quality_index(frame)
+            self.assertGreaterEqual(index, 0.0)
+            self.assertLessEqual(index, 100.0)
+
+    def test_dashboard_and_pdf_share_one_implementation(self):
+        import inspect
+        from Pages import Dashboard
+        from Utils import PDF
+        self.assertIn("quality_metrics(", inspect.getsource(Dashboard))
+        self.assertIn("quality_metrics(", inspect.getsource(PDF))
+
+
+class PreprocessingTests(unittest.TestCase):
+    def setUp(self):
+        self.df = pd.DataFrame({
+            "num": [1.0, np.nan, 3.0, 4.0],
+            "cat": ["x", None, "x", "y"],
+        })
+
+    def test_mean_imputation(self):
+        filled = fill_missing_values(self.df, numeric_strategy="mean")
+        self.assertEqual(filled["num"].iloc[1], (1 + 3 + 4) / 3)
+
+    def test_median_and_zero_imputation(self):
+        median_filled = fill_missing_values(self.df, numeric_strategy="median")
+        self.assertEqual(median_filled["num"].iloc[1], 3.0)
+        zero_filled = fill_missing_values(self.df, numeric_strategy="zero")
+        self.assertEqual(zero_filled["num"].iloc[1], 0)
+
+    def test_all_null_numeric_column_fills_with_zero(self):
+        df = pd.DataFrame({"blank": [np.nan, np.nan]})
+        filled = fill_missing_values(df, numeric_strategy="mean")
+        self.assertTrue((filled["blank"] == 0).all())
+
+    def test_categorical_mode_and_unknown(self):
+        mode_filled = fill_missing_values(self.df, categorical_strategy="mode")
+        self.assertEqual(mode_filled["cat"].iloc[1], "x")
+        unknown_filled = fill_missing_values(self.df, categorical_strategy="unknown")
+        self.assertEqual(unknown_filled["cat"].iloc[1], "Unknown")
+
+    def test_invalid_strategies_raise(self):
+        with self.assertRaisesRegex(ValueError, "numeric strategy"):
+            fill_missing_values(self.df, numeric_strategy="bogus")
+        with self.assertRaisesRegex(ValueError, "categorical strategy"):
+            fill_missing_values(self.df, categorical_strategy="bogus")
+
+    def test_remove_duplicates_and_drop_missing(self):
+        duped = pd.concat([self.df, self.df], ignore_index=True)
+        self.assertEqual(len(remove_duplicates(duped)), 4)
+        dropped = drop_missing_values(self.df)
+        self.assertEqual(len(dropped), 3)  # only the row with NaNs disappears
+        self.assertEqual(list(dropped["num"]), [1.0, 3.0, 4.0])
+
+    def test_noop_on_empty_frame(self):
+        empty = pd.DataFrame()
+        self.assertTrue(fill_missing_values(empty).empty)
+        self.assertTrue(remove_duplicates(empty).empty)
+
+
+class CompareLogicTests(unittest.TestCase):
+    def test_schema_diff_reports_common_added_removed(self):
+        a = pd.DataFrame({"keep": [1], "dropped": [2]})
+        b = pd.DataFrame({"keep": [1], "added": [3]})
+        common, only_a, only_b = schema_diff(a, b)
+        self.assertEqual(common, ["keep"])
+        self.assertEqual(only_a, ["dropped"])
+        self.assertEqual(only_b, ["added"])
+
+    def test_identical_data_has_ok_flags(self):
+        df = pd.DataFrame({"x": [1, 2, 3], "cat": ["a", "b", "a"]})
+        rows = column_drift_rows(df, df.copy())
+        self.assertTrue(all(row["Flags"] == "OK" for row in rows))
+
+    def test_mean_shift_is_flagged(self):
+        a = pd.DataFrame({"x": [10.0] * 5})
+        b = pd.DataFrame({"x": [12.0] * 5})   # +20% relative shift
+        flags = column_drift_rows(a, b)[0]["Flags"]
+        self.assertIn("mean shift +20.0%", flags)
+
+    def test_zero_mean_column_uses_absolute_delta(self):
+        a = pd.DataFrame({"x": [-1.0, 1.0, -1.0, 1.0]})   # mean 0
+        b = pd.DataFrame({"x": [0.5, 0.5, 0.5, 0.5]})     # mean shift of +1.5
+        flags = column_drift_rows(a, b)[0]["Flags"]
+        self.assertIn("mean shift", flags)
+
+    def test_dtype_change_flagged(self):
+        a = pd.DataFrame({"x": [1, 2, 3, 4]})
+        b = pd.DataFrame({"x": [1.0, 2.0, 3.0, 4.0]})
+        row = column_drift_rows(a, b)[0]
+        self.assertEqual(row["Dtype Match"], "no")
+        self.assertIn("dtype", row["Flags"])
+
+    def test_missingness_delta_flagged(self):
+        a = pd.DataFrame({"x": [1, 2, 3, 4]})
+        b = pd.DataFrame({"x": [1, None, 3, None]})
+        flags = column_drift_rows(a, b)[0]["Flags"]
+        self.assertIn("missingness Δ+50.0%", flags)
+
+    def test_non_numeric_columns_have_no_mean_fields(self):
+        a = pd.DataFrame({"cat": ["a", "b"]})
+        row = column_drift_rows(a, a.copy())[0]
+        self.assertIsNone(row["Mean A"])
+        self.assertIsNone(row["Mean B"])
+
+
+class AIConvertSafetyTests(unittest.TestCase):
+    def test_wide_table_is_capped_by_columns_not_cells(self):
+        many_cols = ", ".join(f"c{i}" for i in range(MAX_CONVERTED_COLUMNS + 10))
+        one_row = ",".join(str(i) for i in range(MAX_CONVERTED_COLUMNS + 10))
+        df = parse_ai_csv(f"{many_cols}\n{one_row}")
+        self.assertEqual(df.shape[1], MAX_CONVERTED_COLUMNS)
+
+    def test_oversized_response_rejected_before_parsing(self):
+        from Utils.AIConvert import MAX_PARSE_CHARS, MAX_PARSE_LINES
+        with self.assertRaisesRegex(ValueError, "character"):
+            parse_ai_csv("a,b\n" + ("x," * (MAX_PARSE_CHARS // 2)) + "y")
+        # lines must also fail the fast path (no commas, prose-like header)
+        prose_lines = "\n".join(["alpha beta gamma"] * (MAX_PARSE_LINES + 1))
+        with self.assertRaisesRegex(ValueError, "line"):
+            parse_ai_csv(prose_lines)
+
+    def test_quoted_csv_with_embedded_commas_survives(self):
+        text = 'name,quote\nalice,"hello, world"\nbob,"hi, there"'
+        df = parse_ai_csv(text)
+        self.assertEqual(list(df.columns), ["name", "quote"])
+        self.assertEqual(df.iloc[0]["quote"], "hello, world")
+
+    def test_multiple_regions_pick_the_largest_table(self):
+        small_then_large = (
+            "tiny,a\n1,2\n"
+            "prose between tables, with commas\n"
+            "big,x,y,z\n" + "\n".join(f"{i},{i},{i},{i}" for i in range(6))
+        )
+        df = parse_ai_csv(small_then_large)
+        self.assertEqual(list(df.columns)[:2], ["big", "x"])
+        self.assertGreaterEqual(len(df), 6)
+
+    def _convert_with_mock_response(self, response_text):
+        with patch("Utils.AIConvert._generate_content", return_value=response_text):
+            return convert_to_dataframe(
+                api_key="fake-key",
+                raw_text="name: alice; score: 9\nname: bob; score: 7",
+                filename="notes.txt",
+            )
+
+    def test_convert_to_dataframe_returns_validated_frame(self):
+        df = self._convert_with_mock_response("```csv\nname,score\nalice,9\nbob,7\n```")
+        self.assertEqual(list(df.columns), ["name", "score"])
+        self.assertEqual(len(df), 2)
+
+    def test_convert_to_dataframe_rejects_garbage_response(self):
+        with self.assertRaises(ValueError):
+            self._convert_with_mock_response("I could not find any tabular data.")
+
+    def test_convert_to_dataframe_propagates_gemini_errors(self):
+        with patch(
+            "Utils.AIConvert._generate_content",
+            side_effect=GeminiError("Check your Google Gemini API key.", "auth"),
+        ):
+            with self.assertRaisesRegex(GeminiError, "API key"):
+                convert_to_dataframe(api_key="bad", raw_text="content", filename="f.txt")
+
+    def test_chat_prompt_truncates_oversized_messages(self):
+        captured = {}
+        def fake_generate(api_key, model_name, prompt):
+            captured["prompt"] = prompt
+            return "ok"
+        df = pd.DataFrame({"value": [1]})
+        messages = [{"role": "user", "content": "x" * (MAX_MESSAGE_CHARS * 3)}]
+        with patch("Utils.Gemini._generate_content", side_effect=fake_generate):
+            chat_with_gemini_dataset("key", df, "demo.csv", messages)
+        self.assertIn("...", captured["prompt"])
+        self.assertLess(len(captured["prompt"]), len("x" * MAX_MESSAGE_CHARS) + 3000)
+
+
+class GeminiErrorClassificationTests(unittest.TestCase):
+    def _error_with_status(self, status):
+        return type("FakeAPIError", (Exception,), {}) if status is None else \
+            type("FakeAPIError", (Exception,), {"status_code": status})()
+
+    def test_auth_errors_are_never_retried(self):
+        from Utils.Gemini import _classify
+        kind, retryable = _classify(self._error_with_status(401))
+        self.assertEqual(kind, "auth")
+        self.assertFalse(retryable)
+
+    def test_rate_limit_and_server_errors_are_retryable(self):
+        from Utils.Gemini import _classify
+        for status in (429, 500, 503):
+            kind, retryable = _classify(self._error_with_status(status))
+            self.assertTrue(retryable, f"status {status} should be retryable")
+
+    def test_timeout_style_errors_map_to_network(self):
+        from Utils.Gemini import _classify
+        class ReadTimeout(Exception):
+            pass
+        kind, retryable = _classify(ReadTimeout())
+        self.assertEqual(kind, "network")
+        self.assertTrue(retryable)
+
+    def test_model_not_found_is_actionable_not_retryable(self):
+        from Utils.Gemini import _classify
+        kind, retryable = _classify(self._error_with_status(404))
+        self.assertEqual(kind, "model_not_found")
+        self.assertFalse(retryable)
+
+    def test_error_messages_do_not_contain_the_api_key(self):
+        # real behavioral check: an SDK failure whose message embeds the key
+        # must not propagate the key through GeminiError OR the warning logs.
+        import logging as _logging
+        fake_key = "AIzaFAKE-SECRET-KEY-do-not-leak-0123456789"
+        leak_marker = "boom-marker-present-in-real-error"
+
+        class LeakySDKError(Exception):
+            pass
+
+        def leaky(api_key, model_name, prompt):
+            raise LeakySDKError(f"request failed for {fake_key}: {leak_marker}")
+
+        with patch("Utils.Gemini._generate_once", side_effect=leaky):
+            with self.assertLogs("cloudinsight.Gemini", level="WARNING") as captured:
+                with self.assertRaises(GeminiError) as raised:
+                    from Utils.Gemini import _generate_content
+                    _generate_content(fake_key, "gemini-1.5-flash", "prompt")
+
+        self.assertNotIn(fake_key, str(raised.exception))
+        joined = "\n".join(captured.output)
+        # the marker proves the failing call actually reached these logs;
+        # without it, absence of the key could just mean nothing was logged
+        self.assertIn(leak_marker, joined)
+        self.assertNotIn(fake_key, joined)
+
+    def test_requests_timeout_is_real_network_retryable(self):
+        from Utils.Gemini import _classify
+        import requests.exceptions
+        kind, retryable = _classify(requests.exceptions.ReadTimeout("timed out"))
+        self.assertEqual(kind, "network")
+        self.assertTrue(retryable)
+
+
+class GeminiTimeoutWiringTests(unittest.TestCase):
+    """Prove each SDK path receives an explicit timeout (no silent fallback)."""
+
+    @staticmethod
+    def _fake_new_sdk(client_cls):
+        new_sdk = types.ModuleType("google.genai")
+        new_sdk.Client = client_cls
+        fake_google = types.ModuleType("google")
+        fake_google.genai = new_sdk
+        return patch.dict(sys.modules, {"google": fake_google, "google.genai": new_sdk})
+
+    def test_new_sdk_client_receives_millisecond_timeout(self):
+        from Utils.Gemini import REQUEST_TIMEOUT_SECONDS, _generate_once
+        init_kwargs = {}
+        calls = []
+
+        class FakeModels:
+            def generate_content(self, *, model, contents):
+                calls.append((model, contents))
+                return types.SimpleNamespace(text="ok")
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                init_kwargs.update(kwargs)
+                self.models = FakeModels()
+
+        with self._fake_new_sdk(FakeClient):
+            response = _generate_once("key", "gemini-1.5-flash", "prompt")
+
+        self.assertEqual(init_kwargs.get("http_options"),
+                         {"timeout": REQUEST_TIMEOUT_SECONDS * 1000})
+        self.assertEqual(calls, [("gemini-1.5-flash", "prompt")])
+        self.assertEqual(response.text, "ok")
+
+    def test_legacy_path_receives_seconds_timeout(self):
+        from Utils.Gemini import REQUEST_TIMEOUT_SECONDS, _legacy_call
+        model = Mock()
+        model.generate_content.return_value = types.SimpleNamespace(text="ok")
+        _legacy_call(model, "prompt")
+        model.generate_content.assert_called_once_with(
+            "prompt", request_options={"timeout": REQUEST_TIMEOUT_SECONDS}
+        )
+
+    def test_new_sdk_fallback_is_loud_not_silent(self):
+        from Utils.Gemini import _new_sdk_client
+
+        class OldClient:
+            def __init__(self, **kwargs):
+                if "http_options" in kwargs:
+                    raise TypeError("unexpected keyword 'http_options'")
+                self.models = types.SimpleNamespace()
+
+        with self._fake_new_sdk(OldClient):
+            with self.assertLogs("cloudinsight.Gemini", level="WARNING") as captured:
+                _new_sdk_client("key")
+        self.assertIn("WITHOUT an explicit timeout", "\n".join(captured.output))
+
+    def test_legacy_fallback_is_loud_not_silent(self):
+        from Utils.Gemini import _legacy_call
+        model = Mock()
+        model.generate_content.side_effect = [
+            TypeError("bad kwarg"), types.SimpleNamespace(text="ok"),
+        ]
+        with self.assertLogs("cloudinsight.Gemini", level="WARNING") as captured:
+            _legacy_call(model, "p")
+        self.assertIn("WITHOUT an explicit timeout", "\n".join(captured.output))
+        self.assertEqual(model.generate_content.call_count, 2)
+
+    def test_retry_still_works_after_timeout_change(self):
+        import requests.exceptions
+        from Utils.Gemini import _generate_content
+        attempts = {"n": 0}
+
+        def flaky(api_key, model_name, prompt):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise requests.exceptions.ReadTimeout("read timed out")
+            return types.SimpleNamespace(text="recovered")
+
+        with patch("Utils.Gemini._generate_once", side_effect=flaky):
+            out = _generate_content("k", "m", "p")
+        self.assertEqual(out, "recovered")
+        self.assertEqual(attempts["n"], 2)
+
+    def test_auth_failure_never_retries(self):
+        from google.api_core.exceptions import Unauthenticated
+
+        from Utils.Gemini import GeminiError, _generate_content
+        attempts = {"n": 0}
+
+        def always_auth(api_key, model_name, prompt):
+            attempts["n"] += 1
+            raise Unauthenticated("API key not valid.")
+
+        with patch("Utils.Gemini._generate_once", side_effect=always_auth):
+            with self.assertRaises(GeminiError) as raised:
+                _generate_content("k", "m", "p")
+        self.assertFalse(raised.exception.retryable)
+        self.assertEqual(raised.exception.kind, "auth")
+        self.assertEqual(attempts["n"], 1)
+
+
+class S3RobustnessTests(unittest.TestCase):
+    def _client_error(self, code):
+        from botocore.exceptions import ClientError
+        return ClientError({"Error": {"Code": code}}, "ListObjectsV2")
+
+    def test_known_error_codes_map_to_plain_language(self):
+        cases = {
+            "AccessDenied": "denied",
+            "InvalidAccessKeyId": "not recognized",
+            "SignatureDoesNotMatch": "does not match",
+            "NoSuchBucket": "No such bucket",
+            "NoSuchKey": "no longer exists",
+        }
+        for code, fragment in cases.items():
+            message = describe_s3_error(self._client_error(code))
+            self.assertIn(fragment, message)
+
+    def test_real_connection_failure_maps_to_network_advice(self):
+        from botocore.exceptions import EndpointConnectionError
+        message = describe_s3_error(EndpointConnectionError(endpoint_url="s3.example.com"))
+        self.assertIn("Could not reach Amazon S3", message)
+
+    def test_unknown_error_codes_stay_safe(self):
+        message = describe_s3_error(self._client_error("ExoticFailure"))
+        self.assertIn("ExoticFailure", message)
+        self.assertNotIn("aws_secret", message.lower())
+
+    def test_generic_errors_do_not_leak_details(self):
+        class WeirdError(Exception):
+            pass
+        self.assertIsInstance(describe_s3_error(WeirdError("boom")), str)
+
+    def test_download_parses_supported_file(self):
+        class Client:
+            def get_object(self, **kwargs):
+                self.requested = kwargs
+                return {"Body": io.BytesIO(b"x,y\n1,2\n")}
+        client = Client()
+        df, body = download_s3_dataset("bucket", "folder/data.csv", client)
+        self.assertEqual(df.shape, (1, 2))
+        self.assertEqual(body, b"x,y\n1,2\n")
+        self.assertEqual(client.requested["Key"], "folder/data.csv")
+
+    def test_download_returns_raw_bytes_for_unstructured_content(self):
+        class Client:
+            def get_object(self, **kwargs):
+                return {"Body": io.BytesIO(b"single line of plain prose\n")}
+        df, body = download_s3_dataset("bucket", "notes.txt", Client())
+        self.assertIsNone(df)
+        self.assertEqual(body, b"single line of plain prose\n")
+
+    def test_download_lets_aws_errors_propagate_for_ui_mapping(self):
+        class Client:
+            def get_object(self, **kwargs):
+                raise self._error
+            _error = None
+        client = Client()
+        client._error = self._client_error("NoSuchKey")
+        with self.assertRaises(Exception) as raised:
+            download_s3_dataset("bucket", "gone.csv", client)
+        message = describe_s3_error(raised.exception)
+        self.assertIn("no longer exists", message)
+
+
+class DatasetCacheBehaviorTests(unittest.TestCase):
+    def test_row_limits_apply_without_breaking_full_load(self):
+        import uuid
+        from Utils.dataset_ui import load_dataset_cached
+        from Utils.paths import DATASETS_DIR
+        DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+        name = f"_cache_probe_{uuid.uuid4().hex[:8]}.csv"
+        path = DATASETS_DIR / name
+        try:
+            pd.DataFrame({"v": range(5)}).to_csv(path, index=False)
+            limited = load_dataset_cached(name, max_rows=2)
+            full = load_dataset_cached(name, max_rows=None)
+            self.assertEqual(len(limited), 2)
+            self.assertEqual(len(full), 5)
+        finally:
+            path.unlink(missing_ok=True)
+
+
+class PDFEdgeCaseTests(unittest.TestCase):
+    def test_report_survives_a_zero_column_dataset(self):
+        pdf_bytes = generate_pdf_report(pd.DataFrame(), "empty.csv", include_charts=False)
+        self.assertTrue(pdf_bytes.startswith(b"%PDF"))
+
+    def test_report_survives_single_row_single_column(self):
+        pdf_bytes = generate_pdf_report(
+            pd.DataFrame({"only": [42]}), "tiny.csv", include_charts=False
+        )
+        self.assertTrue(pdf_bytes.startswith(b"%PDF"))
+
+    def test_chart_failure_does_not_destroy_the_report(self):
+        with patch("Utils.PDF._render_histograms", side_effect=RuntimeError("boom")), \
+             patch("Utils.PDF._render_boxplots", side_effect=RuntimeError("boom")), \
+             patch("Utils.PDF._render_correlation_heatmap", side_effect=RuntimeError("boom")):
+            pdf_bytes = generate_pdf_report(
+                pd.DataFrame({"value": [1, 2, 3, 4]}), "chartfail.csv", include_charts=True
+            )
+        self.assertTrue(pdf_bytes.startswith(b"%PDF"))
+
+    def test_long_column_names_do_not_break_structure_tables(self):
+        df = pd.DataFrame({"x" * 120: [1, 2], "y": [3, 4]})
+        pdf_bytes = generate_pdf_report(df, "wide.csv", include_charts=False)
+        self.assertTrue(pdf_bytes.startswith(b"%PDF"))
+
+
+class SessionStateContractTests(unittest.TestCase):
+    def test_init_session_state_provides_safe_defaults(self):
+        fake_st = SimpleNamespace(session_state={})
+        with patch("Utils.dataset_ui.st", fake_st):
+            from Utils.dataset_ui import init_session_state, set_active_dataset
+            init_session_state()
+            self.assertIsNone(fake_st.session_state["current_df"])
+            self.assertIsNone(fake_st.session_state["dataset_name"])
+
+            set_active_dataset(pd.DataFrame({"a": [1]}), "demo.csv")
+            self.assertEqual(fake_st.session_state["dataset_name"], "demo.csv")
+
+
+class ModelProvenanceTests(unittest.TestCase):
+    def _train(self):
+        df = pd.DataFrame({
+            "feature": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            "target": [0, 0, 0, 0, 1, 1, 1, 1],
+        })
+        return train_and_evaluate_model(
+            df, "target", ["feature"], "Logistic Regression", "Classification", test_size=0.5
+        )
+
+    def test_results_carry_provenance_metadata(self):
+        results = self._train()
+        self.assertIn("created_at", results)
+        self.assertEqual(results["feature_cols"], ["feature"])
+        self.assertEqual(results["target_col"], "target")
+
+    def test_bundle_records_creation_and_sklearn_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = save_trained_model(self._train(), "meta", directory=tmp)
+            bundle = load_trained_model(path)
+            self.assertIn(bundle["sklearn_version"].split(".")[0], {"1", "2"})
+            self.assertIn("created_at", bundle)
+            self.assertNotIn("sklearn_version_mismatch", bundle)
+
+    def test_version_mismatch_is_flagged_on_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = save_trained_model(self._train(), "stale", directory=tmp)
+            bundle = joblib.load(path)
+            bundle["sklearn_version"] = "0.0-fake"
+            stale_path = Path(tmp) / "stale_edited.joblib"
+            joblib.dump(bundle, stale_path)
+
+            reloaded = load_trained_model(stale_path)
+            self.assertTrue(reloaded.get("sklearn_version_mismatch"))
+
+    def test_training_failures_are_value_errors_not_crashes(self):
+        with self.assertRaises(ValueError):
+            train_and_evaluate_model(pd.DataFrame(), "t", ["f"], "Random Forest", "Regression")
 
 
 if __name__ == "__main__":

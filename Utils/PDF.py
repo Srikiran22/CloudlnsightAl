@@ -1,5 +1,6 @@
 import io
 import datetime
+
 import pandas as pd
 import numpy as np
 from reportlab.lib.pagesizes import letter
@@ -11,6 +12,11 @@ from reportlab.platypus import (
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from xml.sax.saxutils import escape
 
+from Utils.logsys import get_logger
+from Utils.quality import quality_metrics
+
+
+logger = get_logger("PDF")
 
 USABLE_WIDTH = 540  # letter minus the 36pt page margins
 
@@ -64,6 +70,15 @@ def _matplotlib():
         return plt
     except ImportError:
         return None
+
+
+def _safe_chart(render, *args, default=None, **kwargs):
+    """Run one chart renderer; a single chart failure skips that chart only."""
+    try:
+        return render(*args, **kwargs)
+    except Exception as error:
+        logger.warning("report chart skipped (%s): %s", getattr(render, "__name__", "chart"), error)
+        return default
 
 
 def _render_histograms(df, max_charts=4):
@@ -223,12 +238,12 @@ def generate_pdf_report(
     rows, cols = df.shape
     num_df = df.select_dtypes(include="number")
     cat_df = df.select_dtypes(exclude="number")
-    dup_count = int(df.duplicated().sum())
-    missing_count = int(df.isnull().sum().sum())
-    total_cells = max(rows * cols, 1)
-    completeness = (1 - missing_count / total_cells) * 100
-    uniqueness = (rows - dup_count) / max(rows, 1) * 100
-    quality_index = (completeness + uniqueness) / 2
+    quality = quality_metrics(df)
+    dup_count = quality["duplicate_rows"]
+    missing_count = quality["missing_cells"]
+    completeness = quality["completeness"]
+    uniqueness = quality["uniqueness"]
+    quality_index = quality["index"]
     memory_mb = df.memory_usage(deep=True).sum() / (1024 ** 2)
 
     # 1 -- summary
@@ -407,7 +422,7 @@ def generate_pdf_report(
             n_unique = s.nunique(dropna=True)
             if n_unique / max(len(s.dropna()), 1) > 0.95 and n_unique > 20:
                 flags.append("Possible ID/high-cardinality")
-        if s.dtype == "number" and not s.dropna().empty:
+        if pd.api.types.is_numeric_dtype(s) and not s.dropna().empty:
             q1, q3 = s.dropna().quantile([0.25, 0.75])
             iqr = q3 - q1
             if iqr > 0:
@@ -437,29 +452,39 @@ def generate_pdf_report(
     story.append(Spacer(1, 12))
 
     # 8 -- sample records
-    story.append(Paragraph("8. Sample Records (First 8 Rows)", heading2_style))
-    sample_cols = list(df.columns[:8])
-    sample_data = [[escape(str(c)) for c in sample_cols]]
-    for _, row in df[sample_cols].head(8).iterrows():
-        sample_data.append([
-            Paragraph(escape(str(v)[:28] if pd.notna(v) else "-"), cell_style)
-            for v in row
-        ])
-    sample_width = USABLE_WIDTH / len(sample_cols)
-    story.append(_style_table(sample_data, SECTION_COLORS["slate"], col_widths=[sample_width] * len(sample_cols)))
-    if cols > len(sample_cols):
+    if cols == 0:
+        story.append(Paragraph("8. Sample Records", heading2_style))
         story.append(Paragraph(
-            f"Showing first {len(sample_cols)} of {cols} columns.", note_style
+            "The dataset has no columns, so no sample records can be shown.",
+            note_style
         ))
-    story.append(Spacer(1, 12))
+        story.append(Spacer(1, 12))
+    else:
+        story.append(Paragraph("8. Sample Records (First 8 Rows)", heading2_style))
+        sample_cols = list(df.columns[:8])
+        sample_data = [[escape(str(c)) for c in sample_cols]]
+        for _, row in df[sample_cols].head(8).iterrows():
+            sample_data.append([
+                Paragraph(escape(str(v)[:28] if pd.notna(v) else "-"), cell_style)
+                for v in row
+            ])
+        sample_width = USABLE_WIDTH / len(sample_cols)
+        story.append(_style_table(sample_data, SECTION_COLORS["slate"], col_widths=[sample_width] * len(sample_cols)))
+        if cols > len(sample_cols):
+            story.append(Paragraph(
+                f"Showing first {len(sample_cols)} of {cols} columns.", note_style
+            ))
+        story.append(Spacer(1, 12))
 
     # 9 -- optional matplotlib charts
+    charts_shown = False
     if include_charts and not num_df.empty:
-        chart_images = _render_histograms(df, max_charts=4)
-        heatmap_buffer = _render_correlation_heatmap(df)
-        box_images = _render_boxplots(df, max_charts=4)
+        chart_images = _safe_chart(_render_histograms, df, max_charts=4, default=[])
+        heatmap_buffer = _safe_chart(_render_correlation_heatmap, df)
+        box_images = _safe_chart(_render_boxplots, df, max_charts=4, default=[])
 
         if chart_images or heatmap_buffer or box_images:
+            charts_shown = True
             story.append(Paragraph("9. Distribution & Relationship Charts", heading2_style))
 
             def _image_grid(images, image_width=260, image_height=150):
@@ -503,9 +528,10 @@ def generate_pdf_report(
                 story.append(heat_table)
             story.append(Spacer(1, 10))
 
-    # 10 -- optional AI insights (markdown-lite rendering)
+    # 10 -- optional AI insights (markdown-lite rendering); number follows
+    # whether a charts section actually exists, so reports never skip a digit
     if include_ai_insights:
-        section_no = "10" if include_charts else "9"
+        section_no = "10" if charts_shown else "9"
         story.append(Paragraph(f"{section_no}. AI Executive Insights & Strategy", heading2_style))
         for line in include_ai_insights.split("\n"):
             clean_line = line.strip()

@@ -8,6 +8,231 @@ When this file grows large, move old entries to `history/YYYY-MM-DD-summary.md`.
 
 ---
 
+## [2026-08-22] Project bug audit
+
+**Agent:** GPT-5 / Codex desktop app
+**User request:** Fix any bugs or issues in the project, beginning with `AGENTS.md`.
+
+### Pre-Task Snapshot
+- Tests: 24/26 pass in this managed workspace; the two model-persistence tests cannot write their global Windows temporary directories.
+- Build: `bug_hunt.py` boots all 9 pages; the same temporary-directory cleanup warnings occur on exit.
+- Relevant files: `Pages/*.py`, `Utils/*.py`, `tests/test_core.py`, `bug_hunt.py`.
+- Planned approach:
+  - Confirm the documented checks and distinguish environment limits from code defects.
+  - Audit untested high-risk paths and add focused regression coverage for confirmed bugs.
+  - Apply only surgical source changes, then rerun checks and update the handoff records.
+
+### Post-Task Summary
+- Done vs planned: found and fixed two confirmed defects. Clearing a password field now clears its session value; multi-file ingestion preserves a user-provided `source_file` column and uses `uploaded_file` for provenance only in that collision case.
+- Files changed: `Utils/secrets.py`, `Utils/batch.py`, `tests/test_core.py`, `AI/HANDOFF.md`, `AI/MODEL.md`, `AI/PLAN.md`, `AI/SESSIONS.md`, `AI/STATE.md`, `AI/TASK.md`
+- Decisions: none; DEC-009 remains in effect.
+- Verification: project Python sources compile; 26 non-persistence tests pass; the two new regressions first failed then passed; `bug_hunt.py` boots 9/9 pages; `git diff --check` is clean.
+- Unresolved: this managed sandbox blocks the two model-persistence tests from writing their temporary directories, including under a workspace temp root.
+- After state: no confirmed application bugs from this audit; secret lifecycle and batch ingest edge cases are covered.
+
+---
+
+## [2026-08-22] Universal upload + dark-mode contrast fixes
+
+**Agent:** ox-alpha / OpenCode CLI
+**User request:** Several UI bugs + make the upload system universal (no PYQ-specific path).
+
+### Pre-Task Snapshot
+- Tests: 26/26; 9/9 pages; server on :8501
+- Planned approach:
+  - Bake light/dark palettes server-side in apply_theme() (old CSS relied on Streamlit runtime vars that don't exist under those names → dark mode had near-unreadable text)
+  - Replace single-file uploader + separate PYQ batch expander with ONE multi-file flow: native parse or Gemini, optional generic conversion-hints field, merge with source_file when >1 file, idempotent reuse of existing _converted.csv files
+  - Remove PYQ_INSTRUCTIONS constant
+
+### Post-Task Summary
+- Done vs planned: both items done. `Utils/theme.py` now injects concrete token values per active base theme (fixes dark-mode contrast class of bugs); Upload.py local branch is one universal pipeline (any count, any supported type, hints field replaces PYQ hardcode, converted files reused on rerun instead of re-prompting); `Utils/batch.py` reduced to merge_frames.
+- Files changed: `Utils/theme.py`, `Utils/batch.py`, `Pages/Upload.py`
+- Verification: py_compile OK ×3; unittest 26/26; bug_hunt 9/9; HTTP 200 after restart
+- Unresolved: user may see additional visual bugs not reproducible headlessly — asked for specifics
+- After state: 26/26 tests; 9/9 pages
+
+---
+
+## [2026-08-22] Dark/light toggle + polish pass + batch PYQ ingestion pipeline
+
+**Agent:** ox-alpha / OpenCode CLI
+**User request:** (1) Button to switch dark↔light theme; (2) research Reddit/web for best-looking professional Streamlit UI and apply findings; (3) support dropping MANY PYQ (previous-year-question) files at once: AI-formats them, merges into one dataset that then flows through cleaning → ML → chat as usual.
+
+### Pre-Task Snapshot
+- Tests: 24/24 pass; 9/9 pages boot; redesign just shipped; server running on :8501
+- Relevant files: Utils/theme.py, Utils/Charts.py, Pages/Dashboard.py, Pages/Upload.py, Utils/dataset_ui.py, tests/test_core.py
+- Planned approach:
+  - Toggle: session-state flag in sidebar; injects dark palette override CSS (translucent-token architecture already supports it); Plotly templates follow the flag via one helper
+  - Research: 2-3 targeted searches (Streamlit theming/DOM hacks, r/Streamlit/prod apps), apply only cheap high-value findings
+  - Batch ingestion: multi-file uploader expander on Upload page; per-file native-parse-or-Gemini; merge with `source_file` column; failures reported per file; result flows into existing pages untouched
+  - Add regression test for merge helper; full verify suite after
+
+### Post-Task Summary
+- Done vs planned:
+  - Theme toggle: dual `[theme.light]`/`[theme.dark]` sections in config.toml + in-app sidebar button (`Utils/theme.py::toggle_theme_button`, community-standard `st._config.set_option("theme.base")` pattern, private-API use isolated+documented); Plotly templates now follow the active theme via `plot_template()` (Charts.py ×9, Dashboard inline figs)
+  - Polish research applied: hid Streamlit footer/status-widget decor; everything else from the design system already covered community tips
+  - Batch PYQ pipeline: multi-file uploader expander on Ingest data; per-file native-parse-or-Gemini with PYQ-specific extraction instructions (`Utils/batch.PYQ_INSTRUCTIONS`); merge helper `merge_frames()` adds `source_file` column and unions schemas; combined dataset saved as `batch_converted.csv`, activated in session, per-file outcome table shown; Gemini key shared slot, wiped after batch unless kept
+- Files changed: `.streamlit/config.toml`, `Utils/theme.py`, `Utils/Charts.py`, `Utils/batch.py` (new), `Utils/AIConvert.py`, `Utils/dataset_ui.py`, `Pages/Upload.py`, `Pages/Dashboard.py`, `tests/test_core.py`
+- Decisions: none new; DEC-009 lifecycle preserved (batch key wiped post-run)
+- Verification: py_compile OK ×8; unittest 26/26 (2 new merge tests); bug_hunt 9/9; server restarted, HTTP 200
+- Unresolved: visual check of dark mode + toggle by user in browser; ML step of PYQ chain remains manual via Machine learning page (target selection is dataset-specific)
+- After state: 26/26 tests; 9/9 pages; both themes defined natively
+
+---
+
+## [2026-08-22] Production-quality UI redesign (design system + all pages)
+
+**Agent:** ox-alpha / OpenCode CLI
+**User request:** Redesign the entire UI to professional product quality — coherent design tokens, restrained SaaS aesthetic, no emoji-as-iconography, better hierarchy/IA. Preserve ALL functionality.
+
+### Pre-Task Snapshot
+- Tests: 24/24 pass; 9/9 pages boot; app currently running on :8501
+- Build: OK
+- Relevant files: App.py, Utils/dataset_ui.py, all Pages/*.py; new Utils/theme.py + .streamlit/config.toml planned
+- Planned approach:
+  - New central design system: `Utils/theme.py` (CSS variable tokens, one style injection, page_header helper) + `.streamlit/config.toml` native theme
+  - Visual direction: minimal professional analytics workspace; single blue accent (#2563EB family already used by PDF/charts); neutral surfaces, subtle borders, 8px radius system, system font stack
+  - Replace emoji titles/numbered subheaders with clean typographic hierarchy; material icons only in st.Page nav
+  - Sidebar: identity block + active-dataset status card; header polish via CSS
+  - Keep every widget key/session-state name/logic path byte-identical where possible
+  - Verify: py_compile, unittest 24/24, bug_hunt 9/9, live server HTTP + injected-CSS presence checks
+
+### Post-Task Summary
+- Done vs planned: design system shipped as `Utils/theme.py` (tokens + one CSS injection + documented selector rationale) plus native `.streamlit/config.toml` theme; App home rebuilt (two-column how-it-works, quiet metrics); sidebar got brand block + active-dataset status card (HTML-escaped filename); all decorative emojis stripped from titles/subheaders/buttons/tabs/statuses across all 9 pages; tab labels shortened; button hierarchy kept (primary only for main actions); nav icons switched to Material Symbols via st.Page.
+- Files changed: `Utils/theme.py` (new), `.streamlit/config.toml` (new), `App.py`, `Utils/dataset_ui.py`, all 9 `Pages/*.py`
+- Decisions: none new — light-first professional SaaS palette anchored on #2563EB for continuity with PDF/chart colors; dark mode handled via translucent tokens + Streamlit runtime vars rather than a separate palette
+- Verification: py_compile OK ×12; unittest 24/24; bug_hunt 9/9 pages; server restarted and HTTP 200 on :8501; git diff --stat confined to intended files (+208/-174)
+- Two self-caught slips fixed during the session: Compare.py except-block indent break, ML.py tabs-line indent break (both caught by py_compile before any run)
+- Unresolved: pixel-level visual inspection requires a human browser pass (headless environment); dark-mode spot check pending same reason
+- After state: functionality byte-equivalent (same widget keys/session names/logic paths); UI layer fully restyled
+
+---
+
+## [2026-08-22] Lead-engineer audit: recon, targeted fixes, verification
+
+**Agent:** ox-alpha / OpenCode CLI
+**User request:** Full production-grade audit (recon → audit → root-cause fixes → verify → report). Fix only genuine problems; no rewrites, no speculative features.
+
+### Pre-Task Snapshot
+- Tests: 24/24 pass; 9/9 pages boot (verified this session)
+- Build: OK; working tree contains Codex's uncommitted doc updates + Pages/Compare.py None fix
+- Relevant files: all Pages/*.py, Utils/*.py read in full this session
+- Planned approach:
+  - Fix A: Dashboard search filter crashes on regex metachars (`str.contains` default regex=True) — verified crash at runtime
+  - Fix B: PDF quality flags never fire "Heavy outliers" (`s.dtype == "number"` always False — verified at runtime); use `pd.api.types.is_numeric_dtype`
+  - Fix C: Report page's "Include AI insights" checkbox is collected but never passed to generate_pdf_report — dead control
+  - Fix D: S3 download of unstructured files claims "was downloaded" but bytes are never saved (exception raised inside helper before page can persist them)
+  - Verify with py_compile + full unittest suite + bug_hunt
+
+### Post-Task Summary
+- Done vs planned: all four fixes applied as planned, nothing else touched.
+  - A: `Pages/Dashboard.py` — literal-substring search (`regex=False`); no more crash on `(`/`[` etc. in the contains filter
+  - B: `Utils/PDF.py` — heavy-outlier quality flag now uses `pd.api.types.is_numeric_dtype`; flag was dead code before (`s.dtype == "number"` always False)
+  - C: `Pages/Report.py` — "Include AI insights" checkbox now actually passes saved insights into `generate_pdf_report` via `_build_report(..., ai_insights=...)`
+  - D: `Utils/S3.py` + `Pages/Upload.py` — unstructured S3 files are now genuinely downloaded & saved to `Datasets/` (helper returns `(None, body)` on AIConversionRequired); warning message no longer lies about a save that never happened
+- Files changed: `Pages/Dashboard.py`, `Utils/PDF.py`, `Pages/Report.py`, `Utils/S3.py`, `Pages/Upload.py`, `AI/*` docs
+- Decisions: none new (DEC-007 graceful degradation and DEC-009 secret lifecycle preserved in Fix D flow)
+- Verification: py_compile OK ×5; literal-contains runtime check OK; PDF generation smoke OK; unittest 24/24 pass; bug_hunt 9/9 pages; `git diff --stat` confined to the 5 intended files (+23/-15)
+- Unresolved: informational only — joblib.load of untrusted model bundles executes pickle code (local single-user app, accepted risk); XML entity-expansion DoS theoretically possible on user-supplied XML (self-DoS only); `MAX_CONVERTED_COLUMNS` in AIConvert counts cells not columns (harmless cap behavior)
+- After state: 24/24 tests; 9/9 pages boot; working tree also still carries Codex's earlier uncommitted doc updates + Compare fix
+
+---
+
+## [2026-08-22] Harden AGENTS.md with mandatory edit discipline
+
+**Agent:** ox-alpha / OpenCode CLI
+**User request:** Make the pre-change rules stricter because Codex (GPT-5) rewrote entire files instead of continuing with surgical edits.
+
+### Pre-Task Snapshot
+- Tests: 24/24 pass; 9/9 pages boot (re-verified this session before this task)
+- Build: OK; working tree clean at start
+- Relevant files: `AGENTS.md` (only file to be edited)
+- Planned approach:
+  - Insert a non-negotiable "Edit Discipline" section at the top of AGENTS.md forbidding whole-file rewrites without explicit user authorization
+  - Add an enforcement pointer in the Rules list
+  - Update MODEL.md agent identity (Codex → ox-alpha/OpenCode CLI) per protocol
+  - Log pre/post snapshots in SESSIONS.md
+
+### Post-Task Summary
+- Done vs planned: all items done as planned. New "⛔ EDIT DISCIPLINE — NON-NEGOTIABLE" section added directly under the AGENTS.md intro (first thing any agent reads), covering smallest-diff mandate, rewrite prohibition + escape hatches, no unrelated deletions, no drive-by changes, read-before-write, and `git diff --stat` scope proof. Rule 9 added to Rules list referencing it.
+- Files changed: `AGENTS.md`, `AI/MODEL.md`, `AI/SESSIONS.md`
+- Decisions: none architectural (process hardening, recorded here per precedent)
+- Verification: `git diff --stat` reviewed — diffs confined to intended sections only; untouched lines byte-identical
+- Unresolved: none
+- After state: docs-only change; tests unaffected (24/24 still expected)
+
+---
+
+## [2026-08-22] Verify handoff and repair confirmed reliability issues
+
+**Agent:** GPT-5 / Codex desktop app
+**User request:** Read the AI handoff/state files and fix issues or add useful features.
+
+### Pre-Task Snapshot
+- Tests: 22/24 pass locally; the two model-persistence tests fail with `PermissionError` because their temporary directories are created outside the writable workspace.
+- Build: `bug_hunt.py` reports all 9 pages boot, with a Streamlit Arrow warning on Compare caused by mixed-type summary columns.
+- Relevant files: `tests/test_core.py`, `Utils/ML.py`, `Pages/Compare.py`, `AI/*.md`.
+- Planned approach:
+  - Verify whether model-persistence failures are a repository defect or a sandbox limitation.
+  - Keep Compare summary data type-consistent to remove the Arrow warning.
+  - Re-run tests and page checks, then update AI handoff/state/session records.
+
+### Post-Task Summary
+- Done vs planned: fixed the Compare mixed-type table by using nulls for unavailable means. Confirmed the model-persistence failures were caused by restricted sandbox subprocess permissions, not project code; no persistence change was needed.
+- Files changed: `Pages/Compare.py`, `AI/HANDOFF.md`, `AI/MODEL.md`, `AI/TASK.md`, `AI/PLAN.md`, `AI/STATE.md`, `AI/SESSIONS.md`
+- Decisions: none.
+- Verification: `& .\venv\Scripts\python.exe -m unittest discover -s tests -v` -> 24/24 pass; `& .\venv\Scripts\python.exe bug_hunt.py` -> 9/9 pages boot, no Arrow serialization warning; `git diff --check` -> clean.
+- Unresolved: optional `pypdf` and `matplotlib` remain graceful optional dependencies.
+- After state: verified build; Compare summary values serialize cleanly.
+
+---
+
+## [2026-08-23] Comprehensive remediation & hardening pass (36-phase)
+
+**Agent:** ox-alpha / OpenCode CLI
+**User request:** Full remediation per cloudinsight_master_audit.md — fix every verified issue, harden security/errors/testing/perf/docs, re-audit at end. Verify audit claims against code first; classify each finding.
+
+### Pre-Task Snapshot
+- Tests: 28/28 pass (`python -m unittest discover -s tests`); bug_hunt boots 9/9 pages
+- Build: OK; working tree carries prior sessions' uncommitted changes (theme/batch/secrets work)
+- Relevant files: all Pages/*.py + Utils/*.py read in full this session; audit doc cross-checked line-by-line
+- Environment facts verified: venv has legacy google-generativeai (NOT google-genai); matplotlib/pypdf absent; streamlit 1.60, sklearn 1.9, pandas 3.0.5; both quality-index formulas date to initial commit
+- Planned approach:
+  - Verified fixes first: silent excepts (ML/EDA), Dashboard formatting, quality-index unification (shared function), AIConvert column cap + bounded parsing, Gemini error taxonomy/timeouts/retries, S3 error mapping, empty-column PDF crash, chart-failure isolation, chat-history cap, upload size guard + duplicate-name handling, compare logic extraction for testability, preprocessing strategy validation
+  - Add lightweight logging (stdlib), targeted tests for all new behavior, CI additions (bug_hunt step, serious-error lint)
+  - Docs: README .env discrepancy fix, deployment/security/troubleshooting sections
+  - Re-run full verification + second-pass audit before final report
+
+---
+
+### Post-Task Summary
+- Done vs planned: all planned remediation shipped. Fixes: silent excepts now logged (ML importances, EDA styling); Dashboard formatting defect + quality-index unified via new Utils/quality.py (equal blend, DEC-011); AIConvert column-cap corrected to actual columns, parser bounded (line/char/attempt limits) with O(n) fast path — benchmark: 400-row clean CSV 145.5s → 0.9ms identical output; Gemini.py gained GeminiError taxonomy (auth/rate-limit/network/...), 120s timeout, bounded retries for transient errors only, centralized model registry, per-message chat truncation; S3 error mapping without credential exposure + 20k-object listing cap; upload size guard (200MB) + duplicate-filename disambiguation; PDF empty-column crash fixed, per-chart failure isolation, truthful section numbering; chat history capped at 100 msgs; preprocessing strategy validation; compare logic extracted to Utils/compare_logic.py for tests; session init centralized in dataset_ui.init_session_state(); theme toggle shows fallback hint if private API fails; ML bundles record created_at/sklearn_version/bundle_version and loading flags version mismatch; stdlib logging via Utils/logsys.py (CLOUDINSIGHT_LOG_LEVEL). Tests 28 → 71 (+43), all passing. CI adds ruff serious-errors gate + bug_hunt step. README rewritten (.env discrepancy removed; security/deployment/troubleshooting/logging docs). matplotlib+pypdf installed in venv; PDF-with-charts path verified.
+- Files changed: App.py, Pages/{Upload,Cleaning,Compare,EDA,Visualization-unrelated,Dashboard,ML,AI}.py, Utils/{logsys*,quality*,compare_logic*,Gemini,AIConvert,ML,PDF,S3,Preprocessing,dataset_ui,paths,theme}.py, tests/test_core.py, Readme.md, requirements.txt, .github/workflows/tests.yml, AI/* (* = new files)
+- Decisions: DEC-011 (canonical equal-blend quality index), DEC-012 (keep dual Gemini SDKs — legacy package is what this venv actually has)
+- Verification: unittest 71/71 OK; bug_hunt 9/9 pages; ruff serious-errors clean; e2e script passed 10 workflows incl. PDF-with-charts (48KB) and pypdf extraction path
+- Unresolved: XML entity-expansion remains theoretical self-DoS (accepted); joblib trust requirement documented not solved (by design); google-genai absent from venv so new-SDK path untested live
+- After state: 71/71 tests; 9/9 pages; lint clean; docs match code
+
+---
+
+## [2026-08-23] Post-audit targeted fix cycle (P1/P2 from independent verification)
+
+**Agent:** ox-alpha / OpenCode CLI
+**User request:** Fix only the high-confidence issues from the independent post-remediation audit; no broad refactors.
+
+### Pre-Task Snapshot
+- Tests: 71/71; bug_hunt 9/9; ruff clean (verified at audit start)
+- Audit findings to fix: new-SDK Gemini timeout silently dropped; vacuous secret test; prose→junk-table txt ingestion; cache keyed by max_rows; docs nits
+
+### Post-Task Summary
+- Done vs planned: all P1+P2 done, one P3 item. google-genai timeout now client-level http_options ms (API verified against real 2.x package in temp install); legacy keeps request_options seconds; both fallback paths LOG instead of silent-untimed. _redact() strips API keys from Gemini diagnostics; leak test rewritten behaviorally (marker-in-log proves capture). _read_delimited_text policy: csv.Sniffer restricted to , ; tab | : (never whitespace) + ghost-column guard for trailing-only separators — prose reaches AIConversionRequired, quoted CSV txt still parses. Cache key drops max_rows (truncation stays caller-side). CI pins ruff==0.16.4. Docs: AIConvert bounds wording, STATE.md timeout phrasing, DECISIONS ordering. Skipped P3 structural extractions (risk > value).
+- Files changed: Utils/Gemini.py, Utils/paths.py, Utils/dataset_ui.py, tests/test_core.py, .github/workflows/tests.yml, AI/{STATE,HANDOFF,SESSIONS}.md
+- Verification: 93/93 unittest (+22); bug_hunt 9/9; ruff clean; probe suite 24/24 incl. previously-failing S3-unstructured case; e2e 10/10; parser benchmark unchanged (1.6ms clean / ~1.8s adversarial-capped); mutation probes prove each P1 test fails under the original defect
+- Unresolved: none new; standing accepted risks unchanged (joblib trust, XML entities, no-auth local scope)
+- After state: 93/93; 9/9 pages; lint clean
+
+---
+
 ## Entry Template
 
 ```markdown

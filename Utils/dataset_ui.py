@@ -1,6 +1,16 @@
 import streamlit as st
+from html import escape
 
 from Utils.paths import list_dataset_files, read_dataset, resolve_dataset_path
+from Utils.theme import toggle_theme_button
+
+
+_BRAND_HTML = """
+<div class="ci-brand">
+  <div class="ci-brand-name">Cloud<span>Insight</span> AI</div>
+  <div class="ci-brand-tag">Analytics workspace</div>
+</div>
+"""
 
 
 def set_active_dataset(df, name):
@@ -8,16 +18,29 @@ def set_active_dataset(df, name):
     st.session_state["dataset_name"] = name
 
 
+def init_session_state():
+    """Guarantee the app's core data contract keys exist with safe defaults.
+
+    `current_df` / `dataset_name` are THE shared dataset state every page
+    reads; all other session keys are page-local and initialize themselves.
+    """
+    if "current_df" not in st.session_state:
+        st.session_state["current_df"] = None
+    if "dataset_name" not in st.session_state:
+        st.session_state["dataset_name"] = None
+
+
 @st.cache_data(show_spinner="Loading dataset...")
-def _load_cached_dataset(path_str, mtime_ns, max_rows):
-    # mtime_ns is only here so the cache busts when the file changes on disk
-    del mtime_ns
+def _load_cached_dataset(path_str, mtime_ns):
+    # mtime_ns is only here so the cache busts when the file changes on disk.
+    # max_rows is deliberately NOT part of the key: the full frame is cached
+    # once per file version and row limits are applied by callers afterwards.
     return read_dataset(path_str)
 
 
 def load_dataset_cached(dataset, max_rows=None):
     path = resolve_dataset_path(dataset)
-    df = _load_cached_dataset(str(path), path.stat().st_mtime_ns, max_rows)
+    df = _load_cached_dataset(str(path), path.stat().st_mtime_ns)
     if max_rows is not None and len(df) > max_rows:
         df = df.head(max_rows)
     return df
@@ -25,15 +48,26 @@ def load_dataset_cached(dataset, max_rows=None):
 
 def render_sidebar():
     with st.sidebar:
-        st.markdown("### ☁️ CloudInsight AI")
+        st.markdown(_BRAND_HTML, unsafe_allow_html=True)
         name = st.session_state.get("dataset_name")
         df = st.session_state.get("current_df")
+        st.markdown('<div class="ci-side-label">Active dataset</div>', unsafe_allow_html=True)
         if name:
-            st.success(f"📂 **Active Dataset:**\n`{name}`")
-            if df is not None:
-                st.caption(f"Shape: {df.shape[0]:,} rows × {df.shape[1]} cols")
+            meta = f"{df.shape[0]:,} rows × {df.shape[1]} cols" if df is not None else "shape unavailable"
+            st.markdown(
+                f'<div class="ci-dataset">'
+                f'<div class="ci-dataset-name">{escape(str(name))}</div>'
+                f'<div class="ci-dataset-meta">{meta}</div></div>',
+                unsafe_allow_html=True,
+            )
         else:
-            st.info("ℹ️ No dataset loaded yet. Go to **Upload** to begin.")
+            st.markdown(
+                '<div class="ci-dataset"><div class="ci-dataset-meta">Nothing loaded yet — start at '
+                '<b>Ingest data</b>.</div></div>',
+                unsafe_allow_html=True,
+            )
+        st.markdown('<div class="ci-side-label">Appearance</div>', unsafe_allow_html=True)
+        toggle_theme_button()
 
 
 def select_working_dataset(selectbox_label, max_rows=None):
@@ -48,7 +82,7 @@ def select_working_dataset(selectbox_label, max_rows=None):
     options.extend(file for file in files if file != name_session)
 
     if not options:
-        st.warning("⚠️ No dataset loaded. Please upload a dataset in the **Upload** page first.")
+        st.warning("No dataset loaded. Ingest one on the **Ingest data** page first.")
         st.stop()
 
     selected_option = st.selectbox(selectbox_label, options)
@@ -60,5 +94,5 @@ def select_working_dataset(selectbox_label, max_rows=None):
         set_active_dataset(loaded_df, selected_option)
         return loaded_df, selected_option
     except Exception as error:
-        st.error(f"❌ Failed to load `{selected_option}`: {error}")
+        st.error(f"Failed to load `{selected_option}`: {error}")
         st.stop()

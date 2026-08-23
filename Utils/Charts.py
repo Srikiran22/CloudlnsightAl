@@ -2,6 +2,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
+from Utils.theme import plot_template
+
 
 def create_histogram_plot(df, x_col, hue_col=None, nbins=30, marginal="box",
                           color_discrete_sequence=None):
@@ -14,7 +16,7 @@ def create_histogram_plot(df, x_col, hue_col=None, nbins=30, marginal="box",
         barmode="overlay" if hue_col else "relative",
         opacity=0.75,
         color_discrete_sequence=color_discrete_sequence or px.colors.qualitative.Plotly,
-        template="plotly_white"
+        template=plot_template()
     )
     fig.update_layout(
         title=f"Distribution of <b>{x_col}</b>" + (f" by {hue_col}" if hue_col else ""),
@@ -35,7 +37,7 @@ def create_box_violin_plot(df, y_col, x_col=None, hue_col=None, plot_type="Box",
             color=hue_col or x_col,
             box=True,
             points=points,
-            template="plotly_white"
+            template=plot_template()
         )
         fig.update_layout(title=f"Violin Plot of <b>{y_col}</b>" + (f" across {x_col}" if x_col else ""))
     else:
@@ -46,7 +48,7 @@ def create_box_violin_plot(df, y_col, x_col=None, hue_col=None, plot_type="Box",
             color=hue_col or x_col,
             points=points,
             notched=False,
-            template="plotly_white"
+            template=plot_template()
         )
         fig.update_layout(title=f"Box Plot of <b>{y_col}</b>" + (f" across {x_col}" if x_col else ""))
 
@@ -76,7 +78,7 @@ def create_scatter_plot(df, x_col, y_col, hue_col=None, size_col=None,
         size=size_col,
         trendline=trendline,
         opacity=0.8,
-        template="plotly_white",
+        template=plot_template(),
         hover_data=df.columns[:5].tolist()
     )
     fig.update_layout(
@@ -97,7 +99,7 @@ def create_bar_count_plot(df, x_col, y_col=None, agg_func="Count", hue_col=None,
             y=y_col if orientation == "v" else x_col,
             color=x_col,
             orientation=orientation,
-            template="plotly_white"
+            template=plot_template()
         )
         fig.update_layout(title=f"<b>{agg_func} of {y_col}</b> by {x_col}")
     else:
@@ -107,7 +109,7 @@ def create_bar_count_plot(df, x_col, y_col=None, agg_func="Count", hue_col=None,
             y=x_col if orientation == "h" else None,
             color=hue_col or x_col,
             orientation=orientation,
-            template="plotly_white"
+            template=plot_template()
         )
         fig.update_layout(
             title=f"Frequency Count of <b>{x_col}</b>",
@@ -125,7 +127,7 @@ def create_line_chart(df, x_col, y_col, hue_col=None, markers=True):
         y=y_col,
         color=hue_col,
         markers=markers,
-        template="plotly_white"
+        template=plot_template()
     )
     fig.update_layout(
         title=f"Trend: <b>{y_col}</b> over <b>{x_col}</b>",
@@ -152,7 +154,7 @@ def create_pie_treemap_plot(df, names_col, values_col=None, plot_type="Pie"):
             grouped,
             path=[names_col],
             values=value_name,
-            template="plotly_white"
+            template=plot_template()
         )
         fig.update_layout(title=f"Treemap Distribution of <b>{names_col}</b>")
     elif plot_type == "Donut":
@@ -161,7 +163,7 @@ def create_pie_treemap_plot(df, names_col, values_col=None, plot_type="Pie"):
             names=names_col,
             values=value_name,
             hole=0.45,
-            template="plotly_white"
+            template=plot_template()
         )
         fig.update_layout(title=f"Donut Chart of <b>{names_col}</b>")
     else:
@@ -169,7 +171,7 @@ def create_pie_treemap_plot(df, names_col, values_col=None, plot_type="Pie"):
             grouped,
             names=names_col,
             values=value_name,
-            template="plotly_white"
+            template=plot_template()
         )
         fig.update_layout(title=f"Pie Chart of <b>{names_col}</b>")
     return fig
@@ -196,7 +198,7 @@ def create_correlation_heatmap(df, colorscale="RdBu_r"):
     )
     fig.update_layout(
         title="Interactive Correlation Matrix Heatmap",
-        template="plotly_white",
+        template=plot_template(),
         xaxis_showgrid=False,
         yaxis_showgrid=False,
         yaxis_autorange="reversed"

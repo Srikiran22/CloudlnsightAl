@@ -318,3 +318,46 @@ The codebase's perfectly uniform docstring/comment/hint patterns read as AI-auth
 ### Status
 
 Active
+
+---
+
+## DEC-011 — One canonical Data Quality Index (equal blend)
+
+- **Date:** 2026-08-23
+- **Agent:** ox-alpha / OpenCode CLI
+
+### Decision
+
+Dashboard gauge and PDF report both use `Utils/quality.py`: `index = (completeness + uniqueness) / 2`. The Dashboard's old `completeness*0.6 + uniqueness*0.4` variant was removed.
+
+### Why
+
+Two formulas for the same user-facing number is a correctness defect. Both date to the initial commit; only the PDF version carried any rationale ("blends equally"), so equal weighting became canonical: symmetric, explainable, and it keeps existing PDF report text truthful without edits. Documented in Readme and in the Dashboard metric help text; pinned by tests asserting both modules import the shared implementation.
+
+### Consequences
+
+- Dashboard gauge values shift slightly on datasets where completeness ≠ uniqueness
+- Any future reweighting must update quality.py docstring, the PDF note, README, and QualityIndexTests
+
+### Status
+
+Active
+
+---
+
+## DEC-012 — Keep dual Gemini SDK support
+
+- **Date:** 2026-08-23
+- **Agent:** ox-alpha / OpenCode CLI
+
+### Decision
+
+`Utils/Gemini.py` keeps both `google-genai` (preferred) and legacy `google-generativeai` paths. Legacy code stays isolated inside `_generate_once`.
+
+### Why
+
+The audit suggested dropping legacy support since requirements pin google-genai — but verification showed this project's own venv currently has ONLY the legacy package installed. Removing it would break the actual running environment. Revisit if/when the venv migrates to google-genai.
+
+### Status
+
+Active

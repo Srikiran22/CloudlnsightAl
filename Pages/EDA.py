@@ -2,16 +2,19 @@ import streamlit as st
 import pandas as pd
 
 from Utils.dataset_ui import render_sidebar, select_working_dataset
+from Utils.logsys import get_logger
 
-st.title("📊 Exploratory Data Analysis (EDA)")
-st.markdown("Inspect statistical distributions, missing data, correlations, and outliers.")
+logger = get_logger("EDA")
+
+st.title("Exploratory data analysis")
+st.markdown("Distributions, missing data, correlations, and outliers for the active dataset.")
 
 df, selected_file = select_working_dataset("Select Dataset for EDA:")
 render_sidebar()
 
-st.success(f"✅ Loaded: `{selected_file}`")
+st.success(f"Loaded: `{selected_file}`")
 
-st.subheader("1️⃣ Dataset Overview & Shape")
+st.subheader("Overview")
 rows, columns = df.shape
 col1, col2, col3, col4 = st.columns(4)
 with col1:
@@ -23,7 +26,7 @@ with col3:
 with col4:
     st.metric("Categorical Features", len(df.select_dtypes(exclude="number").columns))
 
-st.subheader("2️⃣ Column Structure & Missing Values")
+st.subheader("Column structure & missing values")
 missing_counts = df.isnull().sum()
 missing_pcts = (missing_counts / max(rows, 1)) * 100
 
@@ -37,8 +40,8 @@ col_info = pd.DataFrame({
 })
 st.dataframe(col_info, width="stretch")
 
-st.subheader("3️⃣ Descriptive Statistics")
-tab_num, tab_cat = st.tabs(["🔢 Numerical Summary", "🔤 Categorical Summary"])
+st.subheader("Descriptive statistics")
+tab_num, tab_cat = st.tabs(["Numerical", "Categorical"])
 
 with tab_num:
     num_df = df.select_dtypes(include="number")
@@ -54,19 +57,21 @@ with tab_cat:
     else:
         st.info("No categorical columns found in this dataset.")
 
-st.subheader("4️⃣ Correlation Matrix")
+st.subheader("Correlation matrix")
 numeric_df = df.select_dtypes(include="number")
 
 if numeric_df.shape[1] >= 2:
     correlation = numeric_df.corr()
     try:
         st.dataframe(correlation.style.background_gradient(cmap="coolwarm", axis=None).format(precision=3), width="stretch")
-    except Exception:
+    except Exception as error:
+        # styled rendering is a nicety; fall back to plain numbers, loudly
+        logger.warning("correlation styling skipped: %s: %s", type(error).__name__, error)
         st.dataframe(correlation.round(3), width="stretch")
 else:
-    st.info("ℹ️ At least two numeric columns are required for correlation analysis.")
+    st.info("At least two numeric columns are required for correlation analysis.")
 
-st.subheader("5️⃣ Outlier Detection (IQR Method)")
+st.subheader("Outlier detection (IQR method)")
 numeric_columns = numeric_df.columns
 
 if len(numeric_columns) == 0:

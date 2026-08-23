@@ -3,13 +3,13 @@ from pathlib import Path
 
 from Utils.Preprocessing import remove_duplicates, fill_missing_values, drop_missing_values
 from Utils.paths import (
-    DATASETS_DIR, list_dataset_files, read_dataset, read_tabular,
-    SUPPORTED_DATASET_EXTENSIONS,
+    AIConversionRequired, DATASETS_DIR, list_dataset_files, read_dataset,
+    read_tabular, SUPPORTED_DATASET_EXTENSIONS,
 )
 from Utils.dataset_ui import render_sidebar
 
-st.title("🧹 Data Cleaning & Preprocessing")
-st.markdown("Clean duplicate rows, handle missing values, and prepare datasets for modeling.")
+st.title("Data cleaning")
+st.markdown("Remove duplicate rows and resolve missing values, then save the result as a new dataset.")
 
 dataset_folder = DATASETS_DIR
 available_files = list_dataset_files()
@@ -25,7 +25,7 @@ selected_filename = None
 
 if source_option == "Select from Datasets Folder":
     if not available_files:
-        st.info("ℹ️ No datasets found in `Datasets/`. Please upload a dataset first.")
+        st.info("No datasets found in `Datasets/`. Ingest one on the Upload page first.")
     else:
         selected_filename = st.selectbox("Select Dataset to Clean:", available_files)
         try:
@@ -41,11 +41,16 @@ else:
         selected_filename = uploaded_file.name
         try:
             df = read_tabular(uploaded_file, filename=selected_filename)
+        except AIConversionRequired:
+            st.warning(
+                f"`{selected_filename}` has no native table structure. "
+                "Convert it with Gemini on the **Ingest data** page first, then clean the converted copy here."
+            )
         except Exception as e:
             st.error(f"Error reading file: {e}")
 
 if df is not None:
-    st.subheader("📋 Original Dataset Summary")
+    st.subheader("Original dataset")
     dup_count = int(df.duplicated().sum())
     missing_count = int(df.isnull().sum().sum())
 
@@ -62,7 +67,7 @@ if df is not None:
     with st.expander("Preview Original Data"):
         st.dataframe(df.head(10), width="stretch")
 
-    st.subheader("⚙️ Cleaning Options")
+    st.subheader("Cleaning options")
     col_opt1, col_opt2 = st.columns(2)
     with col_opt1:
         do_remove_dups = st.checkbox("Remove Duplicate Rows", value=True)
@@ -78,7 +83,7 @@ if df is not None:
             ]
         )
 
-    if st.button("🚀 Apply Data Cleaning", type="primary"):
+    if st.button("Apply cleaning", type="primary"):
         cleaned_df = df.copy()
 
         if do_remove_dups:
@@ -108,14 +113,14 @@ if df is not None:
             "df": cleaned_df,
             "orig_rows": df.shape[0],
         }
-        st.success(f"🎉 Dataset cleaned successfully and saved as `{cleaned_name}`!")
+        st.success(f"Cleaned dataset saved as `{cleaned_name}`.")
 
     result = st.session_state.get("last_clean_result")
     if result and result.get("source") == selected_filename:
         cleaned_df = result["df"]
         cleaned_name = result["name"]
 
-        st.subheader("✨ Cleaned Dataset Summary")
+        st.subheader("Cleaned result")
         c1, c2, c3, c4 = st.columns(4)
         with c1:
             st.metric("Rows", f"{cleaned_df.shape[0]:,}", delta=cleaned_df.shape[0] - result["orig_rows"])
@@ -130,7 +135,7 @@ if df is not None:
 
         csv_bytes = cleaned_df.to_csv(index=False).encode("utf-8")
         st.download_button(
-            label="📥 Download Cleaned CSV",
+            label="Download cleaned CSV",
             data=csv_bytes,
             file_name=cleaned_name,
             mime="text/csv"

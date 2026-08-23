@@ -1,0 +1,21 @@
+# CloudInsight AI — application theme.
+# Light and dark variants defined natively so users can also switch via Settings.
+# Tokens mirrored in Utils/theme.py CSS variables; change both together.
+[theme]
+base = "light"
+baseRadius = "small"
+baseFontSize = 15
+
+[theme.light]
+primaryColor = "#2563EB"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F7F8FA"
+textColor = "#101828"
+borderColor = "#E4E7EC"
+
+[theme.dark]
+primaryColor = "#3B82F6"
+backgroundColor = "#0B0F19"
+secondaryBackgroundColor = "#111827"
+textColor = "#E5E7EB"
+borderColor = "#263042"

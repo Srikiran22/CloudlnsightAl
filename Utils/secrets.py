@@ -17,8 +17,7 @@ def ask(name, label, help_text=""):
     if slot not in st.session_state:
         st.session_state[slot] = ""
     value = st.text_input(label, value=st.session_state[slot], type="password", help=help_text)
-    if value:
-        st.session_state[slot] = value
+    st.session_state[slot] = value
     return value
 
 

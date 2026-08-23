@@ -1,78 +1,71 @@
 # AI Handoff
 
-- **Last Updated:** 2026-08-22
-- **Previous Agent:** OpenCode (ox-alpha)
-- **Previous Model:** opencode/x-preview-f-free
-- **Previous Application:** OpenCode CLI
+- **Last Updated:** 2026-08-23
+- **Current Agent:** ox-alpha
+- **Current Model:** x-preview-f-free (opencode/x-preview-f-free)
+- **Current Application:** OpenCode CLI
 
 ## What We Are Building
 
-CloudInsight AI — a Streamlit analytics platform. Recently implemented: universal file ingestion with Gemini conversion, detailed 10-section PDF reports, six-feature expansion, runtime-only secret handling for Gemini/AWS, and a full de-AI restyle of the Python sources.
+CloudInsight AI — a Streamlit analytics platform: universal ingestion with Gemini conversion, detailed PDF reports, Compare/ML/Dashboard pages, runtime-only secrets. A full 36-phase remediation pass completed 2026-08-23 (see SESSIONS.md).
 
 ## Current Objective
 
-None active — all requested features implemented and verified.
+None open. Project is post-remediation; next work should be feature-driven.
 
 ## Current Status
 
-Completed and verified: 24/24 unit tests pass; 9/9 pages boot headlessly (bug_hunt.py). Secrets are now runtime-entered and wiped from memory after each completed API task unless the user opts to keep them.
+71/93 tests pass; bug_hunt boots 9/9 pages; ruff serious-errors gate clean. matplotlib + pypdf are installed in the venv, so PDF charts and PDF ingestion are live. Quality Index is unified in `Utils/quality.py` (equal blend — DEC-011). Gemini wrapper has typed errors/timeouts/retries and a centralized model registry. AI-CSV parsing is bounded with an O(n) fast path (~160000x faster on clean tables, same outputs). Logs go to the launching terminal; level via CLOUDINSIGHT_LOG_LEVEL.
 
 ## What Has Been Done (latest session)
 
-- New `Utils/secrets.py`: `ask()` renders password fields backed by session slots; `release(*names, keep_key=...)` wipes after a finished task unless "Keep in memory for this session" was ticked; `drop()` clears immediately; nothing ever written to disk
-- `Pages/AI.py`: key entered in sidebar; wiped after each successful insights/chat call (toast confirmation); explicit clear button
-- `Pages/Upload.py`: Gemini key wiped after successful conversion; AWS access/secret wiped after fetch/download; re-entry prompt shown when files are listed but keys were cleared; removed legacy `aws_key`/`aws_secret` session writes that duplicated secrets
-- Removed env-var secret seeding (`GEMINI_API_KEY`) and the python-dotenv auto-load + dependency
-- De-AI restyle of all Python files per DEC-010: formulaic docstrings/banners stripped, terse lowercase comments only where logic is subtle, type hints thinned, minor internal consolidations (`_datetime_to_epoch`, `_matplotlib`); public APIs, kwargs, prompts, UI strings, error messages untouched
-- Earlier sessions: universal ingestion, 10-section PDF reports, Compare page, ML persistence, templates/batch, cached loading, memory system
+- Fixed: Dashboard formatting defect + formula unification; silent excepts now logged; PDF crash on 0-column datasets; per-chart failure isolation; MAX_CONVERTED_COLUMNS now caps columns not cells
+- Hardened: upload size guard (200MB) + duplicate-name disambiguation; chat history cap (100); preprocessing strategy validation; S3 error mapping + listing cap; bounded retries for transient Gemini failures only
+- Added: Utils/logsys.py, Utils/quality.py, Utils/compare_logic.py; 43 new tests; CI ruff gate + boot-check step; README rewritten (.env instructions removed — they never matched the runtime-key design)
+- Decisions: DEC-011 (canonical quality index), DEC-012 (keep dual Gemini SDKs — legacy package is what this venv has)
 
 ## What Is In Progress
 
-Nothing.
+None.
 
 ## What Remains
 
-- Readme refresh for new formats/features
-- `pip install pypdf matplotlib` to unlock PDF input + report charts (currently degrade gracefully)
+- Nothing blocking. Optional future items in STATE.md Risks section.
 
 ## Important Decisions
 
-- DEC-009: Secrets are runtime-entered, memory-only, wiped after each completed API task unless the user keeps them
-- DEC-010: De-AI restyle with frozen public surface (APIs/kwargs/prompts/UI strings/error messages)
-- DEC-005: Native parsers first; AI only as fallback via `AIConversionRequired`
-- DEC-006: Gemini conversion returns strict CSV, validated before entering session state
-- DEC-007: matplotlib/pypdf optional at runtime; graceful degradation everywhere
-- DEC-008: joblib model bundles + JSON templates + mtime-keyed cache (no external services)
+- DEC-001..010: see DECISIONS.md (Markdown memory; HANDOFF entry point; no CoT storage; precedence order; native parsers first; strict validated CSV from AI; optional chart deps; plain-file persistence; memory-only secrets; de-AI restyle)
+- DEC-011: one canonical equal-blend Data Quality Index in Utils/quality.py
+- DEC-012: dual Gemini SDK support retained until venv migrates to google-genai
 
 ## Important Constraints
 
 - Downstream pages rely on `current_df`/`dataset_name` session keys and the `Datasets/` folder — keep those contracts intact
-- All AI prompts stay bounded (12k chars) and include untrusted-content guards
-- New formats must get native readers before considering AI conversion
-- Keep the restyle discipline: no formulaic docstrings/banners; check tests/pages before any rename
+- All AI prompts stay bounded and include untrusted-content guards
 - Never reintroduce env-file secret seeding or disk persistence of credentials
+- Keep the restyle discipline: terse comments, no formulaic docstrings; check tests/pages before any rename
+- Quality Index changes must touch quality.py + PDF note + README + QualityIndexTests together
 
 ## Known Problems
 
-- None known. Pre-existing cosmetic Arrow warning on Compare page (mixed-type Mean columns) is auto-fixed by Streamlit.
+None confirmed. See STATE.md Risks for accepted limitations.
 
 ## Files Recently Changed
 
-- `Utils/secrets.py` (new), `Pages/AI.py`, `Pages/Upload.py`
-- All of `Utils/*`, remaining `Pages/*`, `App.py`, `tests/test_core.py` (restyle only), `requirements.txt`
+- New: `Utils/logsys.py`, `Utils/quality.py`, `Utils/compare_logic.py`
+- Modified: `Utils/{Gemini,AIConvert,ML,PDF,S3,Preprocessing,dataset_ui,paths,theme}.py`, `Pages/{Upload,Cleaning,Compare,EDA,Dashboard,ML,AI}.py`, `App.py`, `tests/test_core.py`, `Readme.md`, `requirements.txt`, `.github/workflows/tests.yml`
 
 ## What The Next Agent Should Do
 
 1. Read this file, then `AI/MODEL.md` and `AI/TASK.md`; check `AI/SESSIONS.md` for recent history
-2. Run: `& .\venv\Scripts\python.exe -m unittest discover -s tests` (expect 24/24)
+2. Run: `& .\venv\Scripts\python.exe -m unittest discover -s tests` (expect 93/93)
 3. Also run `& .\venv\Scripts\python.exe bug_hunt.py` (expect 9/9 pages OK)
 4. Verify claims above against code before changing anything
 5. Record a pre-task snapshot in SESSIONS.md before your first edit
 
 ## Verification Needed
 
-- Manual browser smoke test: enter Gemini/AWS keys with keep-box unticked, run a task, confirm fields clear and toast appears
-- Confirm `pip install pypdf matplotlib` enables PDF input and charts
+- Manual browser smoke test of theme toggle + secret wipe UX (headless checks cover logic only)
 
 ## Do Not Forget
 

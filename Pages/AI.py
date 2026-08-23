@@ -1,17 +1,23 @@
 import streamlit as st
 
-from Utils.Gemini import generate_executive_insights, chat_with_gemini_dataset
+from Utils.Gemini import (
+    generate_executive_insights, chat_with_gemini_dataset,
+    GEMINI_MODELS, DEFAULT_GEMINI_MODEL, GeminiError, MAX_CHAT_HISTORY,
+)
 from Utils.secrets import ask, value_of, keep_box, release, drop
+from Utils.logsys import get_logger
 from Utils.dataset_ui import render_sidebar, select_working_dataset
 
-st.title("💡 Gemini AI Dataset Intelligence")
-st.markdown("Harness Google Gemini LLMs for automated executive summaries and natural-language dataset Q&A.")
+logger = get_logger("AI")
+
+st.title("AI insights")
+st.markdown("Gemini-powered executive summaries and conversational Q&A over the active dataset.")
 
 df, selected_file = select_working_dataset("Select Dataset for AI Analysis:")
 render_sidebar()
 
 with st.sidebar:
-    st.markdown("### 🔑 Gemini Configuration")
+    st.markdown('<div class="ci-side-label">Gemini settings</div>', unsafe_allow_html=True)
     ask(
         "gemini",
         "Enter Google Gemini API Key:",
@@ -24,14 +30,14 @@ with st.sidebar:
 
     chosen_model = st.selectbox(
         "Gemini Model:",
-        ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"],
-        index=0
+        GEMINI_MODELS,
+        index=GEMINI_MODELS.index(DEFAULT_GEMINI_MODEL)
     )
 
 api_key = value_of("gemini")
 
 if not api_key:
-    st.info("🔑 Please enter your **Google Gemini API Key** in the sidebar to activate AI insights and chat.")
+    st.info("Enter your **Google Gemini API key** in the sidebar to activate AI insights and chat.")
     st.stop()
 
 st.caption(f"Analyzing: `{selected_file}` ({df.shape[0]:,} rows × {df.shape[1]} cols)")
@@ -40,13 +46,12 @@ st.warning(
     "to Google Gemini. Use de-identified data when it contains sensitive information."
 )
 
-tab_insights, tab_chat = st.tabs(["🧠 Automated Executive Report", "💬 Conversational Dataset Q&A"])
+tab_insights, tab_chat = st.tabs(["Executive report", "Chat"])
 
 with tab_insights:
-    st.subheader("1️⃣ Automated Executive Intelligence")
-    st.markdown("Generate an in-depth data health audit, pattern discovery, and business recommendation report.")
+    st.markdown("Generate a data health audit, pattern discovery, and business recommendations.")
 
-    if st.button("✨ Generate AI Insights Report", type="primary"):
+    if st.button("Generate insights report", type="primary"):
         with st.spinner("Gemini is analyzing your dataset structure, metrics, and distributions..."):
             try:
                 insights_text = generate_executive_insights(
@@ -58,22 +63,24 @@ with tab_insights:
                 st.session_state[f"insights_{selected_file}"] = insights_text
                 if release("gemini", keep_key="gemini_keep"):
                     st.toast("Gemini key cleared from memory.")
+            except GeminiError as e:
+                st.error(f"Gemini error — {e}")
             except Exception as e:
-                st.error(f"❌ Gemini Error: {str(e)}")
+                logger.warning("insights generation failed: %s: %s", type(e).__name__, e)
+                st.error(f"Gemini error: {str(e)}")
 
     saved_insights = st.session_state.get(f"insights_{selected_file}")
     if saved_insights:
         st.markdown(saved_insights)
         st.download_button(
-            label="📥 Download Insights (Markdown)",
+            label="Download insights (Markdown)",
             data=saved_insights.encode("utf-8"),
             file_name=f"ai_insights_{selected_file}.md",
             mime="text/markdown"
         )
 
 with tab_chat:
-    st.subheader("2️⃣ Chat with Your Dataset")
-    st.markdown("Ask anything about your data in plain English (e.g. *'What are the strongest drivers of sales?'*, *'How should I clean column X?'*).")
+    st.markdown("Ask anything about your data in plain English.")
 
     chat_key = f"chat_messages_{selected_file}"
     if chat_key not in st.session_state:
@@ -85,6 +92,8 @@ with tab_chat:
 
     if user_prompt := st.chat_input("Ask a question about your dataset..."):
         st.session_state[chat_key].append({"role": "user", "content": user_prompt})
+        # bound stored history so long sessions cannot grow memory forever
+        del st.session_state[chat_key][:-MAX_CHAT_HISTORY]
         with st.chat_message("user"):
             st.markdown(user_prompt)
 
@@ -100,7 +109,11 @@ with tab_chat:
                     )
                     st.markdown(reply)
                     st.session_state[chat_key].append({"role": "assistant", "content": reply})
+                    del st.session_state[chat_key][:-MAX_CHAT_HISTORY]
                     if release("gemini", keep_key="gemini_keep"):
                         st.toast("Gemini key cleared from memory.")
+                except GeminiError as e:
+                    st.error(f"Gemini error — {e}")
                 except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
+                    logger.warning("chat failed: %s: %s", type(e).__name__, e)
+                    st.error(f"Error: {str(e)}")

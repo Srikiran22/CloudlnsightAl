@@ -11,8 +11,8 @@ from Utils.Charts import (
     create_correlation_heatmap
 )
 
-st.title("📈 Interactive Visualizations")
-st.markdown("Build publication-ready interactive charts to uncover patterns, trends, and distributions.")
+st.title("Visualize")
+st.markdown("Interactive charts for distributions, relationships, and composition.")
 
 df, selected_file = select_working_dataset("Select Dataset for Visualization:")
 render_sidebar()
@@ -23,14 +23,14 @@ numeric_cols = df.select_dtypes(include="number").columns.tolist()
 cat_cols = df.select_dtypes(exclude="number").columns.tolist()
 
 tab_dist, tab_rel, tab_cat, tab_corr = st.tabs([
-    "📊 Distributions",
-    "🎯 Relational & Trends",
-    "🔤 Categorical & Composition",
-    "🔥 Heatmap Matrix"
+    "Distributions",
+    "Relational & trends",
+    "Categorical & composition",
+    "Correlation heatmap"
 ])
 
 with tab_dist:
-    st.subheader("1️⃣ Distribution Analysis")
+    st.subheader("Distributions")
     if not numeric_cols:
         st.info("No numeric columns available for distribution plots.")
     else:
@@ -74,7 +74,7 @@ with tab_dist:
             st.plotly_chart(fig, width="stretch")
 
 with tab_rel:
-    st.subheader("2️⃣ Relational & Trend Analysis")
+    st.subheader("Relational & trends")
     if len(numeric_cols) < 2:
         st.info("At least 2 numeric columns are required for relational scatter plots.")
     else:
@@ -121,7 +121,7 @@ with tab_rel:
         st.plotly_chart(fig, width="stretch")
 
 with tab_cat:
-    st.subheader("3️⃣ Categorical & Composition Analysis")
+    st.subheader("Categorical & composition")
     cat_type = st.radio("Chart Type:", ["Bar / Count Chart", "Pie Chart", "Donut Chart", "Treemap"], horizontal=True)
 
     if cat_type == "Bar / Count Chart":
@@ -163,7 +163,7 @@ with tab_cat:
         st.plotly_chart(fig, width="stretch")
 
 with tab_corr:
-    st.subheader("4️⃣ Correlation Matrix Heatmap")
+    st.subheader("Correlation heatmap")
     if len(numeric_cols) < 2:
         st.info("At least 2 numeric columns are required to generate a correlation heatmap.")
     else:

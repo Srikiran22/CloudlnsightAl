@@ -2,35 +2,17 @@
 
 ## Objective
 
-Two-part task: (1) restyle the codebase so it no longer reads as 100% AI-generated, with zero functional change; (2) runtime-entry + post-use wipe of Gemini and AWS S3 secrets.
+Complete the 36-phase remediation requested against `cloudinsight_master_audit.md`, verifying every audit claim against code before acting.
 
 ## Steps
 
-### 1. `Utils/secrets.py` — in-memory secret helpers
-Runtime password prompts with per-secret "keep for this session" flag; release/purge functions. No disk writes.
-Status: completed
-
-### 2. Wire secret lifecycle into pages
-`Pages/Upload.py`: Gemini key (AI conversion) and AWS keys (S3) wiped after their task completes unless kept; re-entry guidance when creds cleared.
-`Pages/AI.py`: Gemini key wiped after insights/chat calls complete unless kept; explicit clear button.
-Status: completed
-
-### 3. De-AI styling pass over all Python sources
-Strip formulaic docstrings/narration comments, vary internal naming and structure, thin uniform type hints. Keep every public API, keyword arg, session key, prompt, UI string, error message identical (tests assert some messages).
-Status: completed
-
-### 4. Verification
-py_compile all sources; unittest suite (expect 24/24); bug_hunt page boots (expect 9/9).
-Status: completed — 22 files compile, 24/24 tests pass, 9/9 pages boot.
-
-## Current Step
-
-None — complete.
+1. Phase 0 — baseline: tests 28/28, pages 9/9, env facts verified. Status: completed.
+2. Phases 1–13, 15, 21–33 — verified fixes + hardening (quality index, parser bounds, Gemini taxonomy, S3 mapping, PDF edges, state contract, logging, theme fallback). Status: completed.
+3. Phases 16–19 — test suite 28 → 71; CI ruff gate + boot check; annotated requirements. Status: completed.
+4. Phase 20 — README rewritten to match runtime-key reality; deployment/security/troubleshooting added. Status: completed.
+5. Phases 34–36 — full verification (71/71, 9/9 pages, ruff clean, e2e 10/10 workflows) + second-pass audit sweep (excepts justified, HTML safe, no duplicated logic). Status: completed.
+6. Phase 37 — final report delivered in-session; AI/* docs updated. Status: completed.
 
 ## Blockers
 
 None.
-
-## Next Action
-
-Await user instructions. Optional: manual browser smoke test of the key-wipe UX.

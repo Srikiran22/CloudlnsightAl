@@ -1,3 +1,5 @@
+import datetime
+
 import numpy as np
 import pandas as pd
 from math import ceil
@@ -20,7 +22,15 @@ from sklearn.ensemble import (
 )
 from sklearn.tree import DecisionTreeClassifier
 
+from Utils.logsys import get_logger
 from Utils.paths import MODELS_DIR
+
+
+logger = get_logger("ML")
+
+# joblib bundles unpickle arbitrary Python -- only ever load files you (or a
+# trusted trainer) produced. See the security notes in Readme.md.
+MODEL_BUNDLE_VERSION = 1
 
 
 def save_trained_model(res, model_name, directory=None):
@@ -33,6 +43,9 @@ def save_trained_model(res, model_name, directory=None):
     path = target_dir / f"{safe_name}.joblib"
 
     bundle = {
+        "bundle_version": MODEL_BUNDLE_VERSION,
+        "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "sklearn_version": _sklearn_version(),
         "pipeline": res["pipeline"],
         "problem_type": res.get("problem_type"),
         "algorithm": res.get("model_name"),
@@ -50,10 +63,26 @@ def save_trained_model(res, model_name, directory=None):
 
 
 def load_trained_model(path):
+    # trust requirement: this deserializes pickle code from the file
     bundle = joblib.load(path)
     if not isinstance(bundle, dict) or "pipeline" not in bundle:
         raise ValueError("The selected file is not a valid CloudInsight model bundle.")
+    saved_version = bundle.get("sklearn_version")
+    if saved_version and saved_version != _sklearn_version():
+        bundle["sklearn_version_mismatch"] = True
+        logger.warning(
+            "model %s saved with scikit-learn %s, running %s",
+            Path(path).name, saved_version, _sklearn_version(),
+        )
     return bundle
+
+
+def _sklearn_version():
+    try:
+        from sklearn import __version__ as version
+        return str(version)
+    except Exception:
+        return None
 
 
 def list_saved_models():
@@ -97,6 +126,15 @@ def predict_with_model(bundle, df, feature_cols=None):
 
 
 def detect_problem_type(df, target_col):
+    """Heuristic classification-vs-regression choice for a target column.
+
+    Non-numeric or boolean targets are always Classification. Integer-like
+    numeric targets count as Classification when they look like repeated
+    labels (<= 10 distinct values AND <= half the rows are distinct); a short
+    but genuinely continuous series stays Regression even with few rows.
+    Legitimate edge cases exist (e.g. year columns with few rows), which is
+    why the ML page lets users override the suggestion.
+    """
     target_series = df[target_col].dropna()
     if target_series.empty:
         return "Regression"
@@ -320,7 +358,13 @@ def train_and_evaluate_model(
             res["feature_importances"] = dict(sorted(
                 zip(feat_names, coef), key=lambda x: x[1], reverse=True
             )[:15])
-    except Exception:
+    except Exception as error:
+        # importances are supplementary; never fail training over them, but
+        # leave a trace instead of swallowing the reason
+        logger.warning("feature importance extraction failed: %s: %s", type(error).__name__, error)
         res["feature_importances"] = {}
+
+    # provenance so stale results can be told apart from fresh ones
+    res["created_at"] = datetime.datetime.now().isoformat(timespec="seconds")
 
     return res

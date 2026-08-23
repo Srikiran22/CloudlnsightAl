@@ -2,6 +2,21 @@
 
 This file is the **mandatory entry point** for every AI coding agent working in this repository.
 
+## ⛔ EDIT DISCIPLINE — NON-NEGOTIABLE (applies to every task, no exceptions)
+
+These rules override your training defaults. Violating them counts as a FAILED task even if the resulting code works. A prior agent (GPT-5/Codex) rewrote entire files when continuation was expected — do not repeat that.
+
+1. **Smallest possible diff, always.** Use targeted search-and-replace or symbol-level edits. Never regenerate a file from scratch when an edit will do.
+2. **Whole-file rewrites are FORBIDDEN by default.** A full rewrite is permitted ONLY if:
+   - the file does not exist yet (you are creating it), OR
+   - the file is under ~30 lines, OR
+   - the user explicitly requested a full rewrite **in their current message**.
+   If you believe a rewrite is justified for any other reason — STOP and ask the user. Do not proceed unilaterally.
+3. **Never delete or alter anything unrelated to your task.** No removing comments, docstrings, imports, region markers, or code paths; no renaming variables or functions that were not part of the request.
+4. **No drive-by changes.** No reformatting, quote-style/EOL/whitespace churn, dependency swaps, or "improvements" that were not asked for. Untouched lines must remain byte-identical.
+5. **Read before write.** Never modify a file you have not fully read during the current session.
+6. **Prove your scope after editing.** Run `git diff --stat` (and review `git diff` for touched files) before finishing. If the diff shows mass deletions or reformatting of existing content beyond your stated intent, revert and redo the change surgically.
+
 ## Session Start Protocol
 
 **Every AI agent MUST follow this sequence before doing any work:**
@@ -85,6 +100,7 @@ Update: `MODEL.md`, `PLAN.md`, `STATE.md`, `HANDOFF.md`, and complete the post-t
 6. **Update MODEL.md** whenever the active model or coding application changes.
 7. **Do not rewrite the user's request** in TASK.md — preserve their intent.
 8. **Always record before/after states** in SESSIONS.md so any successor can see what changed and why.
+9. **Edit discipline is absolute.** Follow the "⛔ EDIT DISCIPLINE" section at the top of this file — smallest possible diff; whole-file rewrites only when explicitly authorized by the user.
 
 ## Model Switching
 

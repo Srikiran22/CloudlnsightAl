@@ -5,25 +5,25 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 from Utils.dataset_ui import render_sidebar, select_working_dataset
+from Utils.quality import quality_metrics
+from Utils.theme import plot_template
 
-st.title("🎛️ Executive Data Dashboard")
-st.markdown("Monitor data health indicators, key performance metrics, and interactive column filters.")
+st.title("Dashboard")
+st.markdown("Data health indicators, live filtering, and quick distributions.")
 
 df, selected_file = select_working_dataset("Select Dataset for Dashboard:")
 render_sidebar()
 st.caption(f"Active: `{selected_file}`")
 
-rows, cols = df.shape
-total_cells = max(rows * cols, 1)
-missing_cells = int(df.isnull().sum().sum())
-completeness_score = ((total_cells - missing_cells) / total_cells) * 100
+metrics = quality_metrics(df)
+rows, cols = metrics["rows"], metrics["cols"]
+missing_cells = metrics["missing_cells"]
+completeness_score = metrics["completeness"]
+dup_rows = metrics["duplicate_rows"]
+uniqueness_score = metrics["uniqueness"]
+health_index = metrics["index"]
 
-dup_rows = int(df.duplicated().sum())
-uniqueness_score = ((rows - dup_rows) / max(rows, 1)) * 100
-
-health_index = (completeness_score * 0.6) + (uniqueness_score * 0.4)
-
-st.subheader("1️⃣ Data Health & Integrity Index")
+st.subheader("Data health index")
 g1, g2, g3 = st.columns(3)
 
 with g1:
@@ -55,14 +55,18 @@ with g2:
     st.metric("Features / Columns", f"{cols}")
 
 with g3:
-    st.metric("Uniqueness Rate", f"{uniqueness_score:.1f}%", help="Percentage of distinct rows")
+    st.metric(
+        "Uniqueness Rate", f"{uniqueness_score:.1f}%",
+        help="Percentage of distinct rows. Quality Index = (completeness + uniqueness) / 2, "
+             "the same formula used in PDF reports.",
+    )
     st.metric("Missing Cells Count", f"{missing_cells:,}")
     st.metric("Duplicate Rows Count", f"{dup_rows:,}")
 
 st.markdown("---")
 
-st.subheader("2️⃣ Dynamic Slice & Dice Filter")
-st.markdown("Filter rows in real-time by selecting column conditions.")
+st.subheader("Filter rows")
+st.markdown("Slice the dataset by column conditions; filters combine in real time.")
 
 filter_cols = st.multiselect("Select Columns to Filter On:", df.columns.tolist())
 filtered_df = df.copy()
@@ -97,27 +101,27 @@ if filter_cols:
                     search = st.text_input(f"{fcol} contains:", key=f"dash_search_{fcol}")
                     if search:
                         filtered_df = filtered_df[
-                            filtered_df[fcol].astype(str).str.contains(search, case=False, na=False)
+                            filtered_df[fcol].astype(str).str.contains(search, case=False, na=False, regex=False)
                         ]
 
 st.caption(f"Showing **{filtered_df.shape[0]:,}** of {rows:,} rows after active filters.")
 st.dataframe(filtered_df.head(10), width="stretch")
 
 st.markdown("---")
-st.subheader("3️⃣ Feature Quick-Look Distributions")
+st.subheader("Quick distributions")
 num_cols = filtered_df.select_dtypes(include="number").columns.tolist()
 
 if num_cols:
     c_pick1, c_pick2 = st.columns(2)
     with c_pick1:
         q_col1 = st.selectbox("Metric 1:", num_cols, index=0, key="q1")
-        fig1 = px.histogram(filtered_df, x=q_col1, title=f"Distribution of {q_col1}", template="plotly_white", color_discrete_sequence=["#3B82F6"])
+        fig1 = px.histogram(filtered_df, x=q_col1, title=f"Distribution of {q_col1}", template=plot_template(), color_discrete_sequence=["#3B82F6"])
         st.plotly_chart(fig1, width="stretch")
 
     with c_pick2:
         if len(num_cols) > 1:
             q_col2 = st.selectbox("Metric 2:", num_cols, index=1, key="q2")
-            fig2 = px.box(filtered_df, y=q_col2, title=f"Box Plot of {q_col2}", template="plotly_white", color_discrete_sequence=["#10B981"])
+            fig2 = px.box(filtered_df, y=q_col2, title=f"Box Plot of {q_col2}", template=plot_template(), color_discrete_sequence=["#10B981"])
             st.plotly_chart(fig2, width="stretch")
 else:
     st.info("No numeric columns available for distribution charts.")

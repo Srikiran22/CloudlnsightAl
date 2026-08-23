@@ -9,9 +9,22 @@ def remove_duplicates(df):
     return cleaned_df.reset_index(drop=True)
 
 
+_NUMERIC_STRATEGIES = {"mean", "median", "zero"}
+_CATEGORICAL_STRATEGIES = {"mode", "unknown"}
+
+
 def fill_missing_values(df, numeric_strategy="mean", categorical_strategy="mode"):
-    # numeric_strategy: mean / median / zero
-    # categorical_strategy: mode / unknown
+    """Impute missing values column by column.
+
+    numeric_strategy: mean / median / zero (an all-null numeric column gets 0).
+    categorical_strategy: mode / unknown. Datetime columns forward/back-fill.
+    Invalid strategy names raise instead of silently imputing the wrong way.
+    """
+    if numeric_strategy not in _NUMERIC_STRATEGIES:
+        raise ValueError(f"Unknown numeric strategy: {numeric_strategy!r}")
+    if categorical_strategy not in _CATEGORICAL_STRATEGIES:
+        raise ValueError(f"Unknown categorical strategy: {categorical_strategy!r}")
+
     if df is None or df.empty:
         return df
 

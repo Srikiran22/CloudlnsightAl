@@ -2,51 +2,36 @@
 
 ## Identity
 
-- **Model:** ox-alpha
+- **Model:** x-preview-f-free
 - **Model ID:** opencode/x-preview-f-free
-- **Provider:** Undisclosed organization (the model's developer does not disclose its identity)
-- **Application:** OpenCode — interactive CLI coding agent
-- **Agent/Mode:** Interactive terminal agent with tool use (file read/write/edit, shell execution, search)
+- **Provider:** OpenCode
+- **Application:** OpenCode CLI
+- **Agent/Mode:** Interactive coding agent with workspace tools, PowerShell execution, and web access
 - **Version:** Unknown
 - **Session ID:** Unknown
-- **Started:** 2026-08-21
-- **Last Updated:** 2026-08-22
-
-> Note for successor agents: identify yourself here when you take over. Do not assume this
-> model's conclusions are correct — verify claims against the repository.
+- **Started:** 2026-08-23
+- **Last Updated:** 2026-08-23 (ox-alpha / OpenCode CLI session)
 
 ## Capabilities
 
-- Read, create, and edit files of any text format
-- Execute Windows PowerShell 5.1 commands (builds, tests, git, package installs)
-- Search codebases by filename pattern and by content regex
-- Launch parallel sub-agents for exploration or multi-step research tasks
-- Web search and URL fetching for documentation lookup
-- Structured task planning via an internal todo list
+- Read, create, and edit workspace files via dedicated edit tools (targeted, minimal diffs)
+- Run PowerShell commands and Python/Streamlit checks
+- Search codebase by symbol, glob, or regex; fetch/search web content
 
 ## Known Limitations
 
-- Cannot run or see GUI applications; verification is CLI-only
-- No persistent memory between sessions except what is written to these AI/ files
-- PowerShell 5.1 only (no bash); no `&&` chaining — use `;` / `if ($?)`
-- Cannot access private networks, databases, or cloud consoles without explicit credentials/tools
-- Knowledge cutoff applies; must search the web for current library versions
+- Filesystem writes are limited to the workspace and approved temporary directories
+- Network access and package installation may require approval
+- No access to private cloud accounts or credentials unless the user supplies them at runtime
 
 ## Important Environment
 
-- **OS:** Windows (win32)
-- **Shell:** Windows PowerShell 5.1
-- **Working Directory:** C:\Users\Srikiran\CloudInsightAI
-- **Runtime:** Python venv at `./venv` (use `& .\venv\Scripts\python.exe`)
-- **Project Type:** Streamlit application (Python) — CloudInsight AI analytics platform
-- **Relevant Tools:** unittest test suite in `tests/`, streamlit dev server on port 8501
-
-## Communication Notes
-
-- Responses are rendered in a terminal; keep output concise
-- User works in English; code comments should be minimal unless requested
+- **OS:** Windows
+- **Working Directory:** `C:\Users\Srikiran\CloudInsightAI`
+- **Runtime:** `venv\Scripts\python.exe`
+- **Project Type:** Streamlit analytics application
 
 ## Notes
 
-- This file must be rewritten by every new agent/model that takes over a session.
-- If a field cannot be determined, write `Unknown` — never invent information.
+- Verify prior-agent claims against the checked-out code and current test output.
+- Do not persist Gemini or AWS credentials to disk; keep DEC-009 intact.

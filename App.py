@@ -1,66 +1,76 @@
 import streamlit as st
 
-from Utils.dataset_ui import render_sidebar
+from Utils.dataset_ui import init_session_state, render_sidebar
+from Utils.theme import apply_theme
 
 st.set_page_config(
     page_title="CloudInsight AI",
-    page_icon="☁️",
+    page_icon=":material/analytics:",
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-if "current_df" not in st.session_state:
-    st.session_state["current_df"] = None
-if "dataset_name" not in st.session_state:
-    st.session_state["dataset_name"] = None
+apply_theme()
+init_session_state()
 
 
 def render_home():
+    st.title("CloudInsight AI")
+    st.markdown("An analytics workspace for ingesting, understanding, and modeling tabular data — with Gemini-assisted conversion of unstructured files.")
     render_sidebar()
-    st.title("☁️ CloudInsight AI")
-    st.subheader("Intelligent Data Analytics Platform with AI-Powered Insights")
 
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.metric("Cloud Storage", "Amazon S3")
-
-    with col2:
-        st.metric("AI Intelligence", "Gemini 1.5 / 2.0")
-
-    with col3:
-        st.metric("Machine Learning", "Scikit-Learn")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Storage", "Amazon S3")
+    with c2:
+        st.metric("AI", "Gemini 1.5 / 2.0")
+    with c3:
+        st.metric("Modeling", "Scikit-Learn")
 
     st.markdown("---")
 
-    st.markdown("""
-### 🚀 Platform Workflow
-1. **📂 Upload**: Ingest *any* data file — CSV, Excel, JSON, TSV, Parquet, XML, HTML, text, or PDF. Structured formats parse natively; unstructured ones are converted into clean tables by Gemini AI.
-2. **🧹 Data Cleaning**: Remove duplicates and impute/drop missing values with custom strategies.
-3. **⚖️ Compare**: Diff any two datasets — schema changes, missing-value drift, and numeric shifts.
-4. **📊 EDA**: In-depth statistics, correlation heatmaps, missing value analysis, and IQR outlier detection.
-5. **📈 Visualizations**: Interactive plotting and trend analysis.
-6. **🤖 Machine Learning**: Automated classification/regression, model persistence, and prediction exports.
-7. **💡 AI Insights**: Gemini-powered dataset interpretations and conversational Q&A.
-8. **📄 Export & Reports**: Detailed multi-section PDF reports with templates and batch generation.
-""")
+    left, right = st.columns([5, 4])
+    with left:
+        st.markdown(
+            """
+            #### How it works
+
+            1. **Ingest** — upload a file or connect to S3. Structured formats parse natively; text and PDFs are structured by Gemini.
+            2. **Prepare** — remove duplicates, impute or drop missing values, then compare datasets for schema and value drift.
+            3. **Explore** — statistics, correlations, outlier detection, and interactive charts.
+            4. **Model** — train classification or regression models, save them, and score new data.
+            5. **Share** — generate a detailed PDF report, optionally including an AI-written executive summary.
+            """
+        )
+    with right:
+        st.markdown(
+            """
+            #### Getting started
+
+            Load a dataset on the **Upload** page — everything else keys off
+            the active dataset shown in the sidebar.
+
+            A Gemini API key is only needed for AI conversion, insights,
+            and chat; it is entered at runtime and wiped from memory after
+            each task unless you choose to keep it for the session.
+            """
+        )
 
 
 pg = st.navigation(
     {
         "Home": [
-            st.Page(render_home, title="Home", icon="☁️", default=True),
+            st.Page(render_home, title="Home", icon=":material/home:", default=True),
         ],
         "Workspace": [
-            st.Page("Pages/Upload.py", title="Upload", icon="📂"),
-            st.Page("Pages/Cleaning.py", title="Cleaning", icon="🧹"),
-            st.Page("Pages/Compare.py", title="Compare", icon="⚖️"),
-            st.Page("Pages/EDA.py", title="EDA", icon="📊"),
-            st.Page("Pages/Visualization.py", title="Visualizations", icon="📈"),
-            st.Page("Pages/ML.py", title="Machine Learning", icon="🤖"),
-            st.Page("Pages/AI.py", title="AI Insights", icon="💡"),
-            st.Page("Pages/Report.py", title="PDF Report", icon="📄"),
-            st.Page("Pages/Dashboard.py", title="Dashboard", icon="🎛️"),
+            st.Page("Pages/Upload.py", title="Ingest data", icon=":material/upload:", default=False),
+            st.Page("Pages/Cleaning.py", title="Cleaning", icon=":material/cleaning_services:"),
+            st.Page("Pages/Compare.py", title="Compare", icon=":material/compare_arrows:"),
+            st.Page("Pages/EDA.py", title="EDA", icon=":material/query_stats:"),
+            st.Page("Pages/Visualization.py", title="Visualize", icon=":material/bar_chart:"),
+            st.Page("Pages/Dashboard.py", title="Dashboard", icon=":material/dashboard:"),
+            st.Page("Pages/ML.py", title="Machine learning", icon=":material/model_training:"),
+            st.Page("Pages/AI.py", title="AI insights", icon=":material/smart_toy:"),
+            st.Page("Pages/Report.py", title="PDF report", icon=":material/description:"),
         ],
     }
 )

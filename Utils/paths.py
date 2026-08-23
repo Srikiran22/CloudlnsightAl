@@ -1,3 +1,4 @@
+import csv
 import io
 import json
 from html.parser import HTMLParser
@@ -14,6 +15,10 @@ MODELS_DIR = PROJECT_ROOT / "Models"
 REPORT_TEMPLATES_DIR = REPORTS_DIR / "templates"
 
 CSV_ENCODINGS = ("utf-8", "utf-8-sig", "cp1252", "latin1")
+
+# uploads beyond this are refused before parsing (matches Streamlit's own
+# 200 MB default ceiling); raise it if your machine has memory to spare
+MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 
 TABULAR_EXTENSIONS = {
     ".csv", ".tsv", ".xlsx", ".xls", ".json", ".jsonl", ".ndjson",
@@ -83,27 +88,38 @@ def _read_csv_from_buffer(buffer):
 
 
 def _read_delimited_text(text):
+    """Native text-table policy.
+
+    A .txt/.log/.md/.rst/.sql file parses natively ONLY when csv.Sniffer
+    identifies one of the known field separators (comma, semicolon, tab,
+    pipe, colon) used consistently across the sampled lines. Whitespace is
+    deliberately NOT a candidate delimiter, so prose never becomes a junk
+    wide table -- unparseable text falls through to AIConversionRequired and
+    the Gemini path. (A line-per-record prose file with exactly one comma on
+    every line is genuinely ambiguous and still parses; that is inherent.)
+    """
     sample_lines = [line for line in text.splitlines() if line.strip()][:20]
     if len(sample_lines) < 2:
         return None
 
-    for delimiter in ["\t", ";", "|", ","]:
-        counts = [line.count(delimiter) for line in sample_lines]
-        if min(counts) >= 1 and len(set(counts)) == 1 and counts[0] >= 1:
-            try:
-                df = pd.read_csv(io.StringIO(text), sep=delimiter, engine="python")
-                if df.shape[1] >= 2:
-                    return df
-            except Exception:
-                continue
+    try:
+        dialect = csv.Sniffer().sniff("\n".join(sample_lines), delimiters=",;\t|:")
+        delimiter = dialect.delimiter
+    except csv.Error:
+        return None
 
     try:
-        df = pd.read_csv(io.StringIO(text), sep=None, engine="python")
-        if df.shape[1] >= 2:
-            return df
+        df = pd.read_csv(io.StringIO(text), sep=delimiter, engine="python")
     except Exception:
-        pass
-    return None
+        return None
+    if df.shape[1] < 2:
+        return None
+    # a separator that only ever appears at end-of-line produces a ghost
+    # column of empty cells (e.g. SQL statements ending in ';'); that is
+    # structure noise, not a table
+    if df.isna().all().any():
+        return None
+    return df
 
 
 def _read_json_from_buffer(buffer):

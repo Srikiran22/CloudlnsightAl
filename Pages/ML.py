@@ -10,14 +10,14 @@ from Utils.ML import (
 )
 from Utils.dataset_ui import render_sidebar, select_working_dataset
 
-st.title("🤖 Machine Learning Studio")
-st.markdown("Train, evaluate, and interpret predictive machine learning models with automated preprocessing.")
+st.title("Machine learning")
+st.markdown("Train, evaluate, and persist classification or regression models with automatic preprocessing.")
 
 df, selected_file = select_working_dataset("Select Dataset for Modeling:")
 render_sidebar()
 st.caption(f"Dataset: `{selected_file}` ({df.shape[0]:,} rows × {df.shape[1]} columns)")
 
-st.subheader("1️⃣ Problem Setup")
+st.subheader("Problem setup")
 col1, col2 = st.columns(2)
 
 with col1:
@@ -38,7 +38,7 @@ with col2:
         help=f"Auto-detected as: {auto_type}"
     )
 
-st.subheader("2️⃣ Feature Selection & Model Config")
+st.subheader("Features & algorithm")
 available_features = [col for col in df.columns if col != target_column]
 
 col_feat1, col_feat2 = st.columns([3, 2])
@@ -64,10 +64,10 @@ with col_split2:
     random_seed = st.number_input("Random State (Seed):", min_value=0, max_value=999, value=42)
 
 if not selected_features:
-    st.warning("⚠️ Please select at least one feature to train the model.")
+    st.warning("Select at least one feature to train the model.")
     st.stop()
 
-if st.button("🚀 Train & Evaluate Model", type="primary"):
+if st.button("Train & evaluate", type="primary"):
     with st.spinner(f"Training {chosen_algo} ({problem_type})..."):
         try:
             results = train_and_evaluate_model(
@@ -84,16 +84,16 @@ if st.button("🚀 Train & Evaluate Model", type="primary"):
             results["feature_cols"] = list(selected_features)
             st.session_state["ml_results"] = results
             st.success(
-                f"🎉 Successfully trained **{chosen_algo}** on {results['train_size']:,} samples "
-                f"and evaluated on {results['test_size']:,} test samples!"
+                f"Trained **{chosen_algo}** on {results['train_size']:,} samples "
+                f"and evaluated on {results['test_size']:,} test samples."
             )
         except Exception as e:
-            st.error(f"❌ Training failed: {str(e)}")
+            st.error(f"Training failed: {str(e)}")
 
 results = st.session_state.get("ml_results")
 if results and results.get("dataset_name") == selected_file:
     st.markdown("---")
-    st.subheader("3️⃣ Model Evaluation Metrics")
+    st.subheader("Evaluation metrics")
 
     if results["problem_type"] == "Classification":
         m1, m2, m3, m4 = st.columns(4)
@@ -158,7 +158,7 @@ if results and results.get("dataset_name") == selected_file:
         st.plotly_chart(fig_pred, width="stretch")
 
     if results.get("feature_importances"):
-        st.subheader("4️⃣ Top Feature Importance / Impact")
+        st.subheader("Feature importance")
         fi_df = pd.DataFrame(
             list(results["feature_importances"].items()),
             columns=["Feature", "Importance / Relative Weight"]
@@ -177,9 +177,9 @@ if results and results.get("dataset_name") == selected_file:
         st.plotly_chart(fig_fi, width="stretch")
 
 st.markdown("---")
-st.subheader("5️⃣ Model Persistence — Save, Load & Predict")
+st.subheader("Model persistence")
 
-tab_save, tab_load = st.tabs(["💾 Save Trained Model", "📦 Load Saved Model & Predict"])
+tab_save, tab_load = st.tabs(["Save trained model", "Load saved model & predict"])
 
 with tab_save:
     current_results = st.session_state.get("ml_results")
@@ -190,27 +190,36 @@ with tab_save:
             "Model Name:",
             value=f"{current_results.get('model_name', 'model')}_{current_results.get('problem_type', 'model')}".replace(" ", "_")
         )
-        if st.button("💾 Save Model to Models/ Folder"):
+        if st.button("Save model to Models/ folder"):
             try:
                 path = save_trained_model(current_results, save_name)
-                st.success(f"✅ Model saved as `{path.name}` in the Models/ folder.")
+                st.success(f"Model saved as `{path.name}` in the Models/ folder.")
             except Exception as e:
-                st.error(f"❌ Save failed: {str(e)}")
+                st.error(f"Save failed: {str(e)}")
 
 with tab_load:
+    st.caption(
+        "Only load `.joblib` bundles you trained yourself or received from a trusted source — "
+        "model files contain executable code."
+    )
     saved_models = list_saved_models()
     if not saved_models:
         st.info("No saved models yet. Train and save one first.")
     else:
         chosen_model_file = st.selectbox("Select Saved Model:", saved_models)
 
-        if st.button("🔮 Load Model & Predict on Active Dataset"):
+        if st.button("Load model & predict"):
             try:
                 bundle = load_trained_model(MODELS_DIR / chosen_model_file)
+                if bundle.get("sklearn_version_mismatch"):
+                    st.warning(
+                        "This model was saved with a different scikit-learn version; "
+                        "loading may fail or behave unexpectedly."
+                    )
                 predictions_df = predict_with_model(bundle, df)
 
                 st.success(
-                    f"✅ Loaded **{bundle.get('algorithm', 'model')}** "
+                    f"Loaded **{bundle.get('algorithm', 'model')}** "
                     f"({bundle.get('problem_type', '?')}) trained on `{bundle.get('dataset_name', '?')}`."
                 )
                 if bundle.get("metrics"):
@@ -227,7 +236,7 @@ with tab_load:
                 pred_cols = [c for c in predictions_df.columns if c.startswith("prediction")]
                 csv_bytes = predictions_df.to_csv(index=False).encode("utf-8")
                 st.download_button(
-                    label="📥 Download Full Predictions (CSV)",
+                    label="Download full predictions (CSV)",
                     data=csv_bytes,
                     file_name=f"predictions_{selected_file}",
                     mime="text/csv",
@@ -235,4 +244,4 @@ with tab_load:
                 )
                 st.caption(f"Prediction column(s): {', '.join(pred_cols)}")
             except Exception as e:
-                st.error(f"❌ Prediction failed: {str(e)}")
+                st.error(f"Prediction failed: {str(e)}")
