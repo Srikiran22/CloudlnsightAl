@@ -159,6 +159,34 @@ def _render_boxplots(df, max_charts=4):
     return images
 
 
+def _quality_flags_for_column(series):
+    """Data-quality flags for one column; shared logic, directly unit-testable.
+
+    Flags: High missingness (>=40% null), Constant (<=1 distinct), Possible
+    ID/high-cardinality (>95% distinct and >20 values in a text column --
+    dtype-agnostic because pandas >= 3 uses StringDtype, not object), Heavy
+    outliers (>=10% beyond Tukey fences in a numeric column).
+    """
+    flags = []
+    missing_pct = series.isnull().mean() * 100
+    if missing_pct >= 40:
+        flags.append("High missingness")
+    n_unique = series.nunique(dropna=True)
+    if n_unique <= 1:
+        flags.append("Constant")
+    if pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series):
+        if n_unique / max(len(series.dropna()), 1) > 0.95 and n_unique > 20:
+            flags.append("Possible ID/high-cardinality")
+    if pd.api.types.is_numeric_dtype(series) and not series.dropna().empty:
+        q1, q3 = series.dropna().quantile([0.25, 0.75])
+        iqr = q3 - q1
+        if iqr > 0:
+            outlier_pct = (((series.dropna() < q1 - 1.5 * iqr) | (series.dropna() > q3 + 1.5 * iqr)).mean()) * 100
+            if outlier_pct >= 10:
+                flags.append("Heavy outliers")
+    return flags
+
+
 def generate_pdf_report(
     df,
     dataset_name,
@@ -412,23 +440,8 @@ def generate_pdf_report(
     flags_by_column = {}
     for col in df.columns:
         s = df[col]
+        flags = _quality_flags_for_column(s)
         col_missing_pct = s.isnull().mean() * 100
-        flags = []
-        if col_missing_pct >= 40:
-            flags.append("High missingness")
-        if s.nunique(dropna=True) <= 1:
-            flags.append("Constant")
-        if s.dtype == object:
-            n_unique = s.nunique(dropna=True)
-            if n_unique / max(len(s.dropna()), 1) > 0.95 and n_unique > 20:
-                flags.append("Possible ID/high-cardinality")
-        if pd.api.types.is_numeric_dtype(s) and not s.dropna().empty:
-            q1, q3 = s.dropna().quantile([0.25, 0.75])
-            iqr = q3 - q1
-            if iqr > 0:
-                outlier_pct = (((s.dropna() < q1 - 1.5 * iqr) | (s.dropna() > q3 + 1.5 * iqr)).mean()) * 100
-                if outlier_pct >= 10:
-                    flags.append("Heavy outliers")
         flags_by_column[col] = ", ".join(flags) if flags else "OK"
         completeness_col = 100 - col_missing_pct
         uniqueness_col = s.nunique(dropna=True) / max(len(s.dropna()), 1) * 100

@@ -29,24 +29,25 @@ None confirmed. XML entity-expansion remains a theoretical self-upload DoS (stdl
 - `Utils/AIConvert.py` — bounded LLM→CSV parsing (algorithm documented in docstring)
 - `Utils/secrets.py` — memory-only credential lifecycle
 - `Utils/paths.py` — readers, path containment, MAX_UPLOAD_BYTES
-- `tests/test_core.py` — 93 tests; `bug_hunt.py` — 9-page boot check
+- `tests/test_core.py` — 117 tests; `bug_hunt.py` — 9-page boot check
 
 ## Recent Changes
 
+- 2026-08-24: Final hardening pass: XML DTD/entity rejection + deep-nest guard (billion-laughs verified vulnerable then fixed); Gemini SDK-internal retries disabled on google-genai (retry_options attempts=1) with jittered project backoff as sole retry owner; legacy SDK retry-disable attempted with loud degradation; Utils/privacy.py sensitive-column screening wired into AI insights/chat context exclusion; ML training cell-limit + extracted _non_finite_columns; PDF quality flags extracted to testable _quality_flags_for_column; dataset fingerprints (name+size+mtime hash) gate stale ML/report results; cache bounded max_entries=64; DEC-013 records structured-output evaluation
 - 2026-08-23: Post-audit targeted fix pass: google-genai client-level ms timeout (legacy keeps per-request seconds; any unsupported-timeout fallback is loud, never silent); API-key redaction in Gemini diagnostics + real leak test; text-ingestion policy rewritten (csv.Sniffer over explicit separators only, ghost-column guard) so prose reaches AI conversion; cache no longer keyed by max_rows; ruff pinned in CI; docs corrected
 - 2026-08-23: Comprehensive remediation pass (36-phase audit response): all items in SESSIONS.md post-task summary; DEC-011/DEC-012 recorded
 - 2026-08-22: Runtime secret lifecycle wired; de-AI restyle; universal ingestion + detailed PDFs
 
 ## Tests
 
-- 93 tests in `tests/test_core.py`: ingestion formats + oversize rejection, AI CSV parsing incl. pathological inputs, Gemini error classification + prompt bounds, quality index math + single-source pinning, preprocessing strategies, compare drift logic, PDF edge cases (0 columns, chart failure), ML persistence/provenance/version flags, S3 error mapping, batch merge, secrets, session-state contract
+- 117 tests in `tests/test_core.py`: ingestion formats + oversize rejection, AI CSV parsing incl. pathological inputs, Gemini error classification + prompt bounds, quality index math + single-source pinning, preprocessing strategies, compare drift logic, PDF edge cases (0 columns, chart failure), ML persistence/provenance/version flags, S3 error mapping, batch merge, secrets, session-state contract
 - Run: `& .\venv\Scripts\python.exe -m unittest discover -s tests`
 - Boot check: `& .\venv\Scripts\python.exe bug_hunt.py`
 - Static gate: `& .\venv\Scripts\python.exe -m ruff check --select=E9,F63,F7,F82,F821 --preview .`
 
 ## Build Status
 
-Verified 2026-08-23: 71/93 tests pass; bug_hunt boots 9/9 pages; ruff clean; e2e workflow script passed all 10 scenarios (CSV/Excel/JSON/text/PDF ingest, merge, cleaning, drift, ML cls+reg+persist+predict, PDF-with-charts 48KB).
+Verified 2026-08-23: 71/117 tests pass; bug_hunt boots 9/9 pages; ruff clean; e2e workflow script passed all 10 scenarios (CSV/Excel/JSON/text/PDF ingest, merge, cleaning, drift, ML cls+reg+persist+predict, PDF-with-charts 48KB).
 
 ## Environment
 

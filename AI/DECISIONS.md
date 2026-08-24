@@ -361,3 +361,28 @@ The audit suggested dropping legacy support since requirements pin google-genai 
 ### Status
 
 Active
+
+
+---
+
+## DEC-013 — Keep CSV-text Gemini conversion; reject JSON-schema output for this task
+
+- **Date:** 2026-08-24
+- **Agent:** ox-alpha / OpenCode CLI
+
+### Decision
+
+The unstructured-file to table pipeline stays: prompt for strict CSV text, parse with bounded parse_ai_csv. The google-genai structured-output mechanism (response_mime_type=application/json + response_schema) was evaluated and NOT adopted.
+
+### Why
+
+The extraction target is a variable-schema table, so a response schema cannot constrain anything meaningful beyond a generic {columns, rows} envelope. For that shape JSON mode costs roughly 30-40 percent more output tokens per row, long JSON arrays are where models historically truncate, and it removes none of the required validation (semantic sanity is checked either way). The CSV path already has fence/prose tolerance, hard bounds, and an O(n) fast path; a hybrid would double the maintenance surface without removing any guard.
+
+### Consequences
+
+- parse_ai_csv remains the single AI-to-table boundary; its bounds/tests stay authoritative
+- Revisit only if models stop emitting reliable CSV or CSV row-truncation becomes measurable
+
+### Status
+
+Active

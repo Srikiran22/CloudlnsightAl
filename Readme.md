@@ -154,10 +154,13 @@ GitHub Actions runs the unit tests plus the headless page-boot check on Python 3
 ## Security Notes
 
 - **Local-first by design.** There is no authentication. Anyone who can reach port 8501 can use the app and its stored state — keep it bound to localhost (`streamlit run App.py` defaults to localhost) and do not expose it to a network without adding an authenticating reverse proxy.
-- **Secrets are runtime-only**: entered in the UI, held in server-side memory, wiped after each task unless kept for the session. Nothing touches disk; nothing is logged.
+- **Secrets are runtime-only**: entered in the UI, held in server-side memory, wiped after each task unless kept for the session. Nothing touches disk; nothing is logged (Gemini diagnostics additionally redact the key from any SDK error text).
 - **Path containment**: dataset reads/writes are restricted to the project's `Datasets/` directory (traversal attempts rejected).
-- **Model bundles**: `.joblib` files contain executable code — load only bundles you trained or trust. The app displays this warning wherever models are loaded.
-- **AI output is sandboxed**: converted CSVs are validated before entering the app; insights/chat render as text and are never executed; prompts wrap untrusted content in guard tags as defense-in-depth.
+- **XML hardening**: XML datasets containing DTD/entity declarations are rejected before parsing — the stdlib parser is vulnerable to exponential entity expansion ("billion laughs"), so DTDs are treated as attack surface, not data. Deeply nested documents fail with a clean error.
+- **Privacy screening**: before AI insights/chat run, likely-sensitive columns (emails, phone numbers, IBANs, Luhn-valid card numbers, provider tokens like `sk-`/`AKIA`/`AIza`/JWT, password/token-named columns) are flagged and can be excluded from the Gemini context in one click.
+- **Model bundles**: `.joblib` files contain executable code — load only bundles you trained or trust. Bundles record creation time + sklearn version; loading warns on version mismatch. ML results and PDF downloads are fingerprinted to the dataset file they came from, so replacing a same-named file invalidates stale results.
+- **AI output is sandboxed**: converted CSVs pass bounded validation before entering the app; insights/chat render as text only; prompts wrap untrusted content in guard tags as defense-in-depth.
+- **Resource bounds**: 200 MB upload ceiling; XML/CSV/AI-response parse limits; ML training cell cap; dataset cache capped at 64 entries.
 
 ## Deployment
 

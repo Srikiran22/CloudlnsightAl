@@ -165,21 +165,45 @@ def _flatten_xml_element(element, parent_key=""):
     return record
 
 
+# stdlib expat resolves internal entities, so XML input is vulnerable to
+# exponential "billion laughs" expansion and quadratic text blowup; external
+# entities are never fetched (no network), but a DTD is never needed for
+# tabular data -- reject it outright before parsing
+MAX_XML_BYTES = MAX_UPLOAD_BYTES
+
+
+def _reject_dtd(payload):
+    if b"<!DOCTYPE" in payload[:65536].upper() or b"<!ENTITY" in payload[:65536].upper():
+        raise ValueError(
+            "XML datasets must not contain DTD/entity declarations "
+            "(they enable resource-exhaustion attacks); export plain elements."
+        )
+
+
 def _read_xml_from_buffer(buffer):
     buffer.seek(0)
-    root = ElementTree.fromstring(buffer.read())
-    elements = list(root)
+    payload = buffer.read()
+    _reject_dtd(payload)
+    try:
+        root = ElementTree.fromstring(payload)
+    except ElementTree.ParseError:
+        raise
+    except RecursionError as error:
+        raise ValueError("XML nesting is too deep to process.") from error
 
-    records = []
-    for element in elements:
-        flat = _flatten_xml_element(element)
-        # drop the leading "<roottag>_" from each key
-        prefix = f"{element.tag}_"
-        flat = {
-            (key[len(prefix):] if key.startswith(prefix) else key): value
-            for key, value in flat.items()
-        }
-        records.append(flat)
+    try:
+        records = []
+        for element in list(root):
+            flat = _flatten_xml_element(element)
+            # drop the leading "<roottag>_" from each key
+            prefix = f"{element.tag}_"
+            flat = {
+                (key[len(prefix):] if key.startswith(prefix) else key): value
+                for key, value in flat.items()
+            }
+            records.append(flat)
+    except RecursionError as error:
+        raise ValueError("XML nesting is too deep to process.") from error
     if not records:
         records.append(_flatten_xml_element(root))
     return pd.json_normalize(records)
@@ -236,8 +260,17 @@ def _read_html_from_buffer(buffer):
     rows = best_table[1:]
     width = max(len(row) for row in best_table)
     header += [f"column_{i}" for i in range(len(header), width)]
+    # repeated <th> text would create duplicate DataFrame columns, and
+    # df[name] on a duplicated column returns a DataFrame -- breaking every
+    # downstream page; de-duplicate instead (city, city_2, ...)
+    seen = {}
+    unique_header = []
+    for name in header:
+        count = seen.get(name, 0)
+        seen[name] = count + 1
+        unique_header.append(name if count == 0 else f"{name}_{count + 1}")
     normalized = [row + [""] * (width - len(row)) for row in rows]
-    return pd.DataFrame(normalized, columns=header)
+    return pd.DataFrame(normalized, columns=unique_header)
 
 
 def _read_parquet_from_buffer(buffer):

@@ -7,14 +7,27 @@ def merge_frames(frames):
     """Merge (filename, DataFrame) pairs into one dataset.
 
     A provenance column is inserted first so rows stay traceable to the file
-    they came from. It is named `uploaded_file` when `source_file` is data.
+    they came from. The name avoids colliding with columns the data already
+    uses: `source_file` is preferred, then `uploaded_file`, then numbered
+    fallbacks -- data columns are never duplicated or overwritten.
     """
     if not frames:
         raise ValueError("No data was extracted from the uploaded files.")
 
-    provenance_column = "source_file"
-    if any(provenance_column in df.columns for _, df in frames):
-        provenance_column = "uploaded_file"
+    existing = set()
+    for _, df in frames:
+        existing.update(df.columns)
+
+    base_names = ["source_file", "uploaded_file"]
+    provenance_column = next(
+        (name for name in base_names if name not in existing),
+        None,
+    )
+    if provenance_column is None:
+        counter = 2
+        while f"source_file_{counter}" in existing:
+            counter += 1
+        provenance_column = f"source_file_{counter}"
 
     parts = []
     for name, df in frames:

@@ -19,6 +19,9 @@ None open. Project is post-remediation; next work should be feature-driven.
 
 ## What Has Been Done (latest session)
 
+- 2026-08-24 final hardening: XML DTD/entity rejection (billion-laughs was live on py3.11 expat; now rejected pre-parse, deep nesting -> clean ValueError); Gemini retry ownership consolidated (google-genai client retry_options attempts=1 so only project backoff+jitter retries; legacy disable attempted with loud fallback); Utils/privacy.py screens likely-sensitive columns and AI insights/chat let users exclude them from context; ML training cell cap + _non_finite_columns helper; PDF _quality_flags_for_column extracted (unit-tested incl pandas3 StringDtype); dataset fingerprints gate stale ml_results/last_pdf_report when a same-named file is replaced; cache max_entries=64; DEC-013 documents why JSON-schema output was rejected for table extraction.
+
+
 - Fixed: Dashboard formatting defect + formula unification; silent excepts now logged; PDF crash on 0-column datasets; per-chart failure isolation; MAX_CONVERTED_COLUMNS now caps columns not cells
 - Hardened: upload size guard (200MB) + duplicate-name disambiguation; chat history cap (100); preprocessing strategy validation; S3 error mapping + listing cap; bounded retries for transient Gemini failures only
 - Added: Utils/logsys.py, Utils/quality.py, Utils/compare_logic.py; 43 new tests; CI ruff gate + boot-check step; README rewritten (.env instructions removed — they never matched the runtime-key design)
@@ -58,7 +61,7 @@ None confirmed. See STATE.md Risks for accepted limitations.
 ## What The Next Agent Should Do
 
 1. Read this file, then `AI/MODEL.md` and `AI/TASK.md`; check `AI/SESSIONS.md` for recent history
-2. Run: `& .\venv\Scripts\python.exe -m unittest discover -s tests` (expect 93/93)
+2. Run: `& .\venv\Scripts\python.exe -m unittest discover -s tests` (expect 117/117)
 3. Also run `& .\venv\Scripts\python.exe bug_hunt.py` (expect 9/9 pages OK)
 4. Verify claims above against code before changing anything
 5. Record a pre-task snapshot in SESSIONS.md before your first edit

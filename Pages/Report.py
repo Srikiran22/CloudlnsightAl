@@ -5,7 +5,10 @@ import datetime
 
 from Utils.PDF import generate_pdf_report
 from Utils.paths import REPORTS_DIR, REPORT_TEMPLATES_DIR, list_dataset_files, read_dataset
-from Utils.dataset_ui import render_sidebar, select_working_dataset, load_dataset_cached
+from Utils.dataset_ui import (
+    dataset_fingerprint, load_dataset_cached, render_sidebar, results_match_active,
+    select_working_dataset,
+)
 
 st.title("PDF report")
 st.markdown("Generate a detailed analytics report for the active dataset, save presets, or batch-generate for every dataset.")
@@ -105,6 +108,7 @@ if st.button("Generate PDF report", type="primary"):
             )
             st.session_state["last_pdf_report"] = {
                 "dataset": selected_file,
+                "dataset_fingerprint": dataset_fingerprint(selected_file),
                 "filename": pdf_filename,
                 "bytes": pdf_bytes,
             }
@@ -113,7 +117,11 @@ if st.button("Generate PDF report", type="primary"):
             st.error(f"PDF generation failed: {str(e)}")
 
 pdf_result = st.session_state.get("last_pdf_report")
-if pdf_result and pdf_result.get("dataset") == selected_file:
+if pdf_result and results_match_active(
+    {"dataset_name": pdf_result.get("dataset"),
+     "dataset_fingerprint": pdf_result.get("dataset_fingerprint")},
+    selected_file
+):
     st.download_button(
         label="Download PDF report",
         data=pdf_result["bytes"],

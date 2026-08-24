@@ -233,6 +233,49 @@ When this file grows large, move old entries to `history/YYYY-MM-DD-summary.md`.
 
 ---
 
+## [2026-08-24] Autonomous deep-improvement pass (probe-driven)
+
+**Agent:** ox-alpha / OpenCode CLI
+**User request:** Maximum-depth inspect/fix/test/break/verify cycle on the current repo; primary deliverable is the working codebase.
+
+### Pre-Task Snapshot
+- HEAD c5594ee pushed; 93/93 tests; 9/9 pages; ruff clean; only 3 known untracked personal docs
+
+### Post-Task Summary
+- Done vs planned: 8 probe hypotheses tested, 4 confirmed real defects fixed, 4 refuted with evidence. Fixes: (1) PDF high-cardinality quality flag was dead under pandas 3 StringDtype (`s.dtype == object` never true) — dtype-agnostic check + pypdf text-extraction test proving flags render; (2) duplicate HTML `<th>` produced duplicated DataFrame columns breaking every downstream page (`df[col]` -> DataFrame) — header deduplication; (3) merge_frames crashed (raw pandas ValueError) when data contained BOTH source_file and uploaded_file — robust free-name selection preserving existing merge contracts; (4) inf/overflow feature or regression-target values surfaced as deep sklearn errors — pre-validation naming offending columns. Added adversarial-AI test (injection prose yields inert cells only). Mutation verification: all four new protections disabled one-by-one, each test FAILED as required, files restored byte-clean.
+- Files changed: Utils/{PDF,paths,batch,ML}.py, tests/test_core.py
+- Verification: 99/99 unittest (+6); bug_hunt 9/9; ruff clean; probes 24/24 + e2e 10/10 re-run green; hostile S3 error shapes safe; cache invalidation on file change confirmed empirically; 100k x 20 quality metrics ~190ms; degenerate ML inputs reject cleanly
+- Unresolved: none from this pass; accepted risks unchanged
+- After state: 99/99; 9/9; lint clean; changes uncommitted pending user instruction
+
+---
+
+## [2026-08-24] Final high-value hardening & architecture pass
+
+**Agent:** ox-alpha / OpenCode CLI
+**User request:** Targeted P1/P2 pass: XML security, cache isolation audit, Gemini structured-output evaluation, retry ownership, sensitive-data protection, resource limits, dataset identity, targeted architecture. No speculative changes.
+
+### Pre-Task Snapshot
+- HEAD c5594ee pushed; 99/99 tests; 9/9 pages; probes 24/24; e2e 10/10; lint clean
+
+### Post-Task Summary
+- Done vs planned: investigated all 11 areas; implemented where justified, documented refusals elsewhere.
+  - XML (P1): billion-laughs CONFIRMED exploitable on py3.11 expat (552B payload -> 2M+ chars) via S3/upload path; DTD/entity declarations now rejected pre-parse; deep nesting -> clean ValueError instead of RecursionError; legit XML untouched. Adversarial tests incl. external-entity form; mutation-proven.
+  - Cache (P1): global cross-session sharing audited and ACCEPTED for local-first single-user scope (documented); added max_entries=64 growth bound; invalidation-on-change already verified empirically.
+  - Structured output (P1): google-genai response_schema evaluated vs CSV pipeline for variable-schema tables -> NOT materially better (token cost, long-array truncation risk, zero guards removed); kept CSV architecture, recorded DEC-013.
+  - Retries (P2): retry duplication eliminated — google-genai client now sends retry_options attempts=1 so project backoff(+jitter ±30%) is the sole retry owner; legacy SDK retry-disable attempted with loud degradation that never sacrifices the timeout; auth still immediate-fail.
+  - Privacy (P2): new Utils/privacy.py flags likely-sensitive columns (names; email/token/IBAN/Luhn-card/phone value patterns, sampled) with low-FP design; AI insights/chat offer one-click exclusion from Gemini context (refuses to strip dataset bare).
+  - Resources (P2): ML training cell cap (5M default) with clear sampling advice.
+  - Identity (P2): stat-based dataset fingerprints gate ml_results and last_pdf_report against same-name file replacement; legacy name-only results stay compatible.
+  - Architecture (P2): extracted _quality_flags_for_column (PDF) and _non_finite_columns (ML) as unit-testable helpers; skipped grand splits of the two large functions (risk > benefit, rule 15) and Streamlit forms/fragments (no measurable rerun win).
+  - Skipped-with-reasons: report-config persistence (marginal, no-DB rule), model-provenance additions beyond current metadata.
+- Files changed: Utils/{paths,Gemini,privacy*,dataset_ui,ML,PDF}.py, Pages/{AI,ML,Report}.py, tests/test_core.py, Readme.md, AI/{DECISIONS,STATE,HANDOFF,SESSIONS}.md (* = new)
+- Verification: 117/117 unittest (+18); bug_hunt 9/9; ruff clean; probes 24/24; e2e 10/10; mutations proven for DTD guard, cell guard, fingerprint staleness, retry_options assertion, email regex
+- Unresolved: none new; accepted risks unchanged (joblib trust, no-auth scope)
+- After state: 117/117; 9/9; lint clean; uncommitted pending user
+
+---
+
 ## Entry Template
 
 ```markdown

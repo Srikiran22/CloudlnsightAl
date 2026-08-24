@@ -4,6 +4,7 @@ from Utils.Gemini import (
     generate_executive_insights, chat_with_gemini_dataset,
     GEMINI_MODELS, DEFAULT_GEMINI_MODEL, GeminiError, MAX_CHAT_HISTORY,
 )
+from Utils.privacy import apply_exclusions, detect_sensitive_columns
 from Utils.secrets import ask, value_of, keep_box, release, drop
 from Utils.logsys import get_logger
 from Utils.dataset_ui import render_sidebar, select_working_dataset
@@ -46,6 +47,26 @@ st.warning(
     "to Google Gemini. Use de-identified data when it contains sensitive information."
 )
 
+# privacy screening: let the user exclude likely-sensitive columns from the
+# AI context entirely; everything below uses ai_df instead of df
+sensitive = detect_sensitive_columns(df)
+excluded_cols = []
+if sensitive:
+    reasons = ", ".join(f"`{col}` ({reason})" for col, reason in sorted(sensitive.items()))
+    st.warning(f"Possible sensitive columns detected: {reasons}.")
+    excluded_cols = st.multiselect(
+        "Columns to EXCLUDE from AI context:",
+        options=sorted(sensitive),
+        default=sorted(sensitive),
+        help="Excluded columns are removed from everything sent to Gemini.",
+    )
+ai_df, exclusions_applied = apply_exclusions(df, excluded_cols)
+if not exclusions_applied and excluded_cols:
+    st.error("All columns were selected for exclusion — sending nothing would make analysis "
+             "meaningless, so the full dataset stays in context. Deselect some columns.")
+if exclusions_applied:
+    logger.info("AI context excludes %d flagged column(s)", len(excluded_cols))
+
 tab_insights, tab_chat = st.tabs(["Executive report", "Chat"])
 
 with tab_insights:
@@ -56,7 +77,7 @@ with tab_insights:
             try:
                 insights_text = generate_executive_insights(
                     api_key=api_key,
-                    df=df,
+                    df=ai_df,
                     dataset_name=selected_file,
                     model_name=chosen_model
                 )
@@ -102,7 +123,7 @@ with tab_chat:
                 try:
                     reply = chat_with_gemini_dataset(
                         api_key=api_key,
-                        df=df,
+                        df=ai_df,
                         dataset_name=selected_file,
                         messages=st.session_state[chat_key],
                         model_name=chosen_model

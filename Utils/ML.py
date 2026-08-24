@@ -32,6 +32,10 @@ logger = get_logger("ML")
 # trusted trainer) produced. See the security notes in Readme.md.
 MODEL_BUNDLE_VERSION = 1
 
+# training cells above this risk multi-minute hangs in a blocking spinner;
+# users can sample or raise the constant consciously
+ML_MAX_TRAIN_CELLS = 5_000_000
+
 
 def save_trained_model(res, model_name, directory=None):
     if not res or "pipeline" not in res:
@@ -158,6 +162,18 @@ def detect_problem_type(df, target_col):
     return "Regression"
 
 
+def _non_finite_columns(frame, columns):
+    """Columns whose numeric values contain inf/overflow-sized entries."""
+    bad = []
+    for column in columns:
+        if column not in frame.columns:
+            continue
+        finite = pd.to_numeric(frame[column], errors="coerce").dropna()
+        if len(finite) and not np.isfinite(finite).all():
+            bad.append(column)
+    return bad
+
+
 def train_and_evaluate_model(
     df,
     target_col,
@@ -199,6 +215,28 @@ def train_and_evaluate_model(
 
     X = clean_df[feature_cols].copy()
     _datetime_to_epoch(X)
+
+    # fail fast with actionable names instead of a deep sklearn error later
+    bad_features = _non_finite_columns(X, feature_cols)
+    if bad_features:
+        raise ValueError(
+            "Feature columns contain infinity or overflow-sized values: "
+            f"{', '.join(bad_features)}. Clean or clip these columns before training."
+        )
+
+    if len(clean_df) * len(feature_cols) > ML_MAX_TRAIN_CELLS:
+        raise ValueError(
+            f"Training on {len(clean_df):,} rows × {len(feature_cols)} features exceeds the "
+            f"{ML_MAX_TRAIN_CELLS:,}-cell safety limit. Sample the dataset or reduce features."
+        )
+
+    if problem_type == "Regression":
+        numeric_target = pd.to_numeric(clean_df[target_col], errors="coerce").dropna()
+        if len(numeric_target) and not np.isfinite(numeric_target).all():
+            raise ValueError(
+                f"Regression target '{target_col}' contains infinity or "
+                "overflow-sized values."
+            )
 
     split_kwargs = {"test_size": test_size, "random_state": random_state}
     y_for_split = y

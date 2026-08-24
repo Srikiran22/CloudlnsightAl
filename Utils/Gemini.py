@@ -1,3 +1,4 @@
+import random
 import time
 
 import pandas as pd
@@ -105,37 +106,68 @@ def _redact(message, secret):
     return str(message).replace(secret, "***")
 
 
+def _retry_delay(attempt):
+    """Exponential backoff with +/-30% jitter so parallel failures spread out."""
+    base = _RETRY_BACKOFF_SECONDS[min(attempt - 1, len(_RETRY_BACKOFF_SECONDS) - 1)]
+    return base * random.uniform(0.7, 1.3)
+
+
 def _new_sdk_client(api_key):
-    """Build a google-genai client with an explicit request timeout.
+    """Build a google-genai client with explicit timeout and NO SDK retries.
 
     google-genai takes timeouts at client level as HttpOptions.timeout in
-    MILLISECONDS (verified against google-genai 2.x: generate_content itself
-    only accepts model/contents/config). If an installed version predates
-    http_options we fall back loudly -- never silently untimed.
+    MILLISECONDS and its own retry policy as HttpRetryOptions.attempts
+    (1 = no retries; verified against google-genai 2.x). Retrying is owned
+    exclusively by _generate_content -- SDK defaults would multiply with it.
+    If an installed version predates these options we fall back loudly,
+    never silently untimed or silently self-retrying.
     """
     from google import genai
 
     try:
         return genai.Client(
             api_key=api_key,
-            http_options={"timeout": REQUEST_TIMEOUT_SECONDS * 1000},
+            http_options={
+                "timeout": REQUEST_TIMEOUT_SECONDS * 1000,
+                "retry_options": {"attempts": 1},
+            },
         )
     except TypeError as error:
         logger.warning(
             "installed google-genai does not support http_options (%s); "
-            "proceeding WITHOUT an explicit timeout", _redact(error, api_key),
+            "proceeding WITHOUT an explicit timeout and WITHOUT disabling "
+            "SDK-internal retries", _redact(error, api_key),
         )
         return genai.Client(api_key=api_key)
 
 
 def _legacy_call(model, prompt):
-    # legacy SDK takes per-request options; seconds here, unlike the new SDK
+    # legacy SDK takes per-request options; seconds here, unlike the new SDK.
+    # The legacy transport ALSO self-retries by default, which would multiply
+    # with _generate_content's own bounded retries -- try to disable it, but
+    # never lose the timeout over it.
     try:
-        return model.generate_content(prompt, request_options={"timeout": REQUEST_TIMEOUT_SECONDS})
+        return model.generate_content(
+            prompt,
+            request_options={"timeout": REQUEST_TIMEOUT_SECONDS, "retry": None},
+        )
     except TypeError as error:
+        message = str(error)
+        if "retry" in message:
+            logger.warning(
+                "installed google-generativeai rejects disabling its internal "
+                "retries (%s); keeping timeout, SDK retries remain active",
+                _redact(message, ""),
+            )
+            try:
+                return model.generate_content(
+                    prompt, request_options={"timeout": REQUEST_TIMEOUT_SECONDS}
+                )
+            except TypeError:
+                pass
         logger.warning(
             "installed google-generativeai ignores request_options (%s); "
-            "proceeding WITHOUT an explicit timeout", error,
+            "proceeding WITHOUT an explicit timeout", message,
         )
         return model.generate_content(prompt)
 
@@ -177,7 +209,7 @@ def _generate_content(api_key, model_name, prompt):
             )
             if not retryable or attempt == RETRYABLE_ATTEMPTS:
                 raise last_error from error
-            time.sleep(_RETRY_BACKOFF_SECONDS[min(attempt - 1, len(_RETRY_BACKOFF_SECONDS) - 1)])
+            time.sleep(_retry_delay(attempt))
 
     try:
         text = response.text

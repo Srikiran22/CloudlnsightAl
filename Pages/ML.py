@@ -8,7 +8,10 @@ from Utils.ML import (
     detect_problem_type, train_and_evaluate_model,
     save_trained_model, load_trained_model, list_saved_models, predict_with_model
 )
-from Utils.dataset_ui import render_sidebar, select_working_dataset
+from Utils.dataset_ui import (
+    dataset_fingerprint, render_sidebar, results_match_active,
+    select_working_dataset,
+)
 
 st.title("Machine learning")
 st.markdown("Train, evaluate, and persist classification or regression models with automatic preprocessing.")
@@ -80,6 +83,7 @@ if st.button("Train & evaluate", type="primary"):
                 random_state=int(random_seed)
             )
             results["dataset_name"] = selected_file
+            results["dataset_fingerprint"] = dataset_fingerprint(selected_file)
             results["target_col"] = target_column
             results["feature_cols"] = list(selected_features)
             st.session_state["ml_results"] = results
@@ -91,7 +95,7 @@ if st.button("Train & evaluate", type="primary"):
             st.error(f"Training failed: {str(e)}")
 
 results = st.session_state.get("ml_results")
-if results and results.get("dataset_name") == selected_file:
+if results_match_active(results, selected_file):
     st.markdown("---")
     st.subheader("Evaluation metrics")
 
@@ -183,7 +187,7 @@ tab_save, tab_load = st.tabs(["Save trained model", "Load saved model & predict"
 
 with tab_save:
     current_results = st.session_state.get("ml_results")
-    if not current_results or current_results.get("dataset_name") != selected_file:
+    if not results_match_active(current_results, selected_file):
         st.info("Train a model above first, then save it here for reuse.")
     else:
         save_name = st.text_input(

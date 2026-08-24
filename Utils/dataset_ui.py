@@ -1,3 +1,4 @@
+import hashlib
 import streamlit as st
 from html import escape
 
@@ -30,11 +31,43 @@ def init_session_state():
         st.session_state["dataset_name"] = None
 
 
-@st.cache_data(show_spinner="Loading dataset...")
+def dataset_fingerprint(dataset):
+    """Cheap stable identity for a dataset FILE: name+size+mtime hash.
+
+    Filenames alone cannot tell a rewritten file apart from the original;
+    this 12-hex fingerprint can. It reads no file bytes, so it costs one
+    stat call and is safe to compute on every rerun.
+    """
+    path = resolve_dataset_path(dataset)
+    stat = path.stat()
+    raw = f"{path.name}|{stat.st_size}|{stat.st_mtime_ns}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def results_match_active(results, selected_file):
+    """True when stored analysis results still describe the active dataset.
+
+    Guards against the same filename being replaced on disk between training
+    and viewing. Results saved before fingerprints existed keep working on a
+    name-only basis.
+    """
+    if not results or results.get("dataset_name") != selected_file:
+        return False
+    expected = results.get("dataset_fingerprint")
+    if expected is None:
+        return True
+    try:
+        return dataset_fingerprint(selected_file) == expected
+    except OSError:
+        return False
+
+
+@st.cache_data(show_spinner="Loading dataset...", max_entries=64)
 def _load_cached_dataset(path_str, mtime_ns):
     # mtime_ns is only here so the cache busts when the file changes on disk.
     # max_rows is deliberately NOT part of the key: the full frame is cached
     # once per file version and row limits are applied by callers afterwards.
+    # max_entries bounds memory across many files/edits in one long session.
     return read_dataset(path_str)
 
 
