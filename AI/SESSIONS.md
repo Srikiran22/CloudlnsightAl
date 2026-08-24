@@ -8,6 +8,31 @@ When this file grows large, move old entries to `history/YYYY-MM-DD-summary.md`.
 
 ---
 
+## [2026-08-24] GitHub Actions CI failure diagnosis + repair
+
+**Agent:** ox-alpha / OpenCode CLI
+**User request:** Exhaustive audit + fix of the failing GitHub Actions workflow: py3.11 job exit code 1 (3.10/3.12 cancelled), Node.js 20 deprecation warnings; suspected `test_auth_failure_never_retries` importing `google.api_core.exceptions.Unauthenticated`.
+
+### Pre-Task Snapshot
+- Tests: 117/117 pass locally; bug_hunt 9/9; ruff 0.16.4 clean; working tree clean at origin/main (93ba99a)
+- Relevant files: `tests/test_core.py` (line 811), `.github/workflows/tests.yml`, `requirements.txt`
+- Diagnosis so far (verified): venv ships legacy google-generativeai -> transitive google-api-core, so the import works locally; CI installs only google-genai whose dependency list (PyPI metadata, v2.19.0) has NO google-api-core -> ModuleNotFoundError on CI. Production code never imports google.api_core (name-string classification). Node20 warnings came from the pre-v7 run; checkout/setup-python v7 are current latest and node24. Old revision lacked fail-fast:false; current has it.
+- Planned approach:
+  - Reproduce CI exactly: poison sys.modules["google.api_core"] and run only that test -> expect ModuleNotFoundError
+  - Fix test to try real import with local stub fallback (matches sibling fake-module convention); no production change needed
+  - Harden workflow: permissions contents:read, concurrency group cancel-in-progress, timeout-minutes
+  - Full verification: poisoned single test, full suite, ruff gate, bug_hunt
+
+### Post-Task Summary
+- Done vs planned: root cause confirmed by exact reproduction (poisoned sys.modules -> ModuleNotFoundError -> exit 1, matching CI); fixed with try-import + local stub fallback so the test no longer depends on a package CI never installs; workflow hardened. No production code changed.
+- Files changed: `tests/test_core.py` (one test), `.github/workflows/tests.yml` (permissions/concurrency/timeout), `AI/*` docs
+- Decisions: none recorded in DECISIONS.md needed — test now matches the existing fake-module convention used by sibling Gemini tests; classification stays name-based so stub and real SDK error behave identically. Actions stay at v7 (verified latest, node24 — Node20 warnings were from pre-v7 revisions).
+- Verification: poisoned repro FAILED before fix / PASSES after; full suite 117/117 OK; ruff --select=E9,F63,F7,F82,F821 --preview clean (0.16.4 == CI pin); bug_hunt 9/9 pages; git diff scoped to intended files only.
+- Unresolved: none. Optional future: consider adding py3.13 matrix leg once locally verifiable.
+- After state: 117/117 tests; 9/9 pages; ruff clean; workflow least-privilege + dedup + 30min cap; next push to main should run green.
+
+---
+
 ## [2026-08-22] Project bug audit
 
 **Agent:** GPT-5 / Codex desktop app

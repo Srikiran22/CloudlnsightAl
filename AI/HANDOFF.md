@@ -1,6 +1,6 @@
 # AI Handoff
 
-- **Last Updated:** 2026-08-23
+- **Last Updated:** 2026-08-24
 - **Current Agent:** ox-alpha
 - **Current Model:** x-preview-f-free (opencode/x-preview-f-free)
 - **Current Application:** OpenCode CLI
@@ -11,13 +11,15 @@ CloudInsight AI — a Streamlit analytics platform: universal ingestion with Gem
 
 ## Current Objective
 
-None open. Project is post-remediation; next work should be feature-driven.
+None open. 2026-08-24 CI failure fixed (google.api_core import in one test; workflow hardened) — next push to main should run green. Next work should be feature-driven.
 
 ## Current Status
 
 71/93 tests pass; bug_hunt boots 9/9 pages; ruff serious-errors gate clean. matplotlib + pypdf are installed in the venv, so PDF charts and PDF ingestion are live. Quality Index is unified in `Utils/quality.py` (equal blend — DEC-011). Gemini wrapper has typed errors/timeouts/retries and a centralized model registry. AI-CSV parsing is bounded with an O(n) fast path (~160000x faster on clean tables, same outputs). Logs go to the launching terminal; level via CLOUDINSIGHT_LOG_LEVEL.
 
 ## What Has Been Done (latest session)
+
+- 2026-08-24 CI repair: `test_auth_failure_never_retries` no longer hard-imports google.api_core (CI installs google-genai only — it has NO google-api-core dependency; the local venv only had it via legacy google-generativeai, which is why 117/117 passed locally while CI failed). try-import + stub fallback; repro verified fails-before/passes-after. Workflow: permissions contents:read, concurrency cancel-in-progress, timeout-minutes 30. checkout/setup-python stay at v7 (current latest, node24 — Node20 deprecation warnings were from pre-v7 revisions).
 
 - 2026-08-24 final hardening: XML DTD/entity rejection (billion-laughs was live on py3.11 expat; now rejected pre-parse, deep nesting -> clean ValueError); Gemini retry ownership consolidated (google-genai client retry_options attempts=1 so only project backoff+jitter retries; legacy disable attempted with loud fallback); Utils/privacy.py screens likely-sensitive columns and AI insights/chat let users exclude them from context; ML training cell cap + _non_finite_columns helper; PDF _quality_flags_for_column extracted (unit-tested incl pandas3 StringDtype); dataset fingerprints gate stale ml_results/last_pdf_report when a same-named file is replaced; cache max_entries=64; DEC-013 documents why JSON-schema output was rejected for table extraction.
 

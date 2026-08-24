@@ -13,3 +13,7 @@ Perform a comprehensive engineering remediation of CloudInsight AI per the 36-ph
 ## Current Status
 
 Completed 2026-08-23. All verified issues fixed, 43 tests added (28 → 71), docs corrected, second-pass audit clean. Full outcome in SESSIONS.md and the in-session final report.
+
+## Follow-up (2026-08-24)
+
+GitHub Actions CI failure diagnosed and fixed: `test_auth_failure_never_retries` imported `google.api_core` (absent on CI — google-genai does not depend on it); test now falls back to a local stub. Workflow hardened (permissions/concurrency/timeout). Details in SESSIONS.md 2026-08-24 entry.

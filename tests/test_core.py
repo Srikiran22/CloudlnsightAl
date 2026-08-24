@@ -808,7 +808,11 @@ class GeminiTimeoutWiringTests(unittest.TestCase):
         self.assertEqual(attempts["n"], 2)
 
     def test_auth_failure_never_retries(self):
-        from google.api_core.exceptions import Unauthenticated
+        try:
+            from google.api_core.exceptions import Unauthenticated
+        except ImportError:
+            class Unauthenticated(Exception):
+                pass
 
         from Utils.Gemini import GeminiError, _generate_content
         attempts = {"n": 0}
