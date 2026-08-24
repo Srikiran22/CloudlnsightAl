@@ -4,7 +4,7 @@ import json
 import datetime
 
 from Utils.PDF import generate_pdf_report
-from Utils.paths import REPORTS_DIR, REPORT_TEMPLATES_DIR, list_dataset_files, read_dataset
+from Utils.paths import REPORTS_DIR, REPORT_TEMPLATES_DIR, list_dataset_files, read_dataset, safe_stem
 from Utils.dataset_ui import (
     dataset_fingerprint, load_dataset_cached, render_sidebar, results_match_active,
     select_working_dataset,
@@ -64,6 +64,12 @@ include_charts = st.checkbox(
 template_name = st.text_input("Save current settings as template (name):", value="")
 if template_name and st.button("Save Template"):
     try:
+        # sanitized so a crafted name cannot write outside templates/
+        safe_template = safe_stem(template_name, fallback="")
+        if not safe_template:
+            raise ValueError(
+                "Template name must contain letters, numbers, spaces, '-' or '_'."
+            )
         REPORT_TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
         config = {
             "title": rep_title,
@@ -71,10 +77,10 @@ if template_name and st.button("Save Template"):
             "include_charts": include_charts,
             "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
         }
-        (REPORT_TEMPLATES_DIR / f"{template_name}.json").write_text(
+        (REPORT_TEMPLATES_DIR / f"{safe_template}.json").write_text(
             json.dumps(config, indent=2), encoding="utf-8"
         )
-        st.success(f"Template `{template_name}` saved.")
+        st.success(f"Template `{safe_template}` saved.")
     except Exception as e:
         st.error(f"Template save failed: {str(e)}")
 

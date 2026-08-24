@@ -23,7 +23,7 @@ from sklearn.ensemble import (
 from sklearn.tree import DecisionTreeClassifier
 
 from Utils.logsys import get_logger
-from Utils.paths import MODELS_DIR
+from Utils.paths import MODELS_DIR, safe_stem
 
 
 logger = get_logger("ML")
@@ -43,7 +43,7 @@ def save_trained_model(res, model_name, directory=None):
 
     target_dir = Path(directory) if directory is not None else MODELS_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
-    safe_name = "".join(ch for ch in model_name if ch.isalnum() or ch in "-_ ").strip() or "model"
+    safe_name = safe_stem(model_name)
     path = target_dir / f"{safe_name}.joblib"
 
     bundle = {

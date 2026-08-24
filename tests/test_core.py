@@ -882,6 +882,31 @@ class XMLSecurityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "DTD"):
             read_tabular(payload, filename="dtd.xml")
 
+    def test_dtd_padded_past_any_fixed_inspection_window_is_rejected(self):
+        # comments may legally precede the DOCTYPE; a 64KB-window check once
+        # let this billion-laughs variant through to expat
+        pad = b"<!--" + b"x" * 70000 + b"-->"
+        entities = (
+            b'<!ENTITY a0 "' + b"A" * 50 + b'">'
+            b'<!ENTITY a1 "&a0;&a0;">'
+        )
+        payload = (
+            b'<?xml version="1.0"?>' + pad
+            + b"<!DOCTYPE r [" + entities + b"]><r>&a1;</r>"
+        )
+        self.assertGreater(payload.find(b"<!DOCTYPE"), 65536)
+        t0 = time.perf_counter()
+        with self.assertRaisesRegex(ValueError, "DTD"):
+            read_tabular(payload, filename="padded.xml")
+        self.assertLess(time.perf_counter() - t0, 2.0)
+
+    def test_safe_stem_blocks_traversal_and_collapses_to_one_component(self):
+        from Utils.paths import safe_stem
+        self.assertEqual(safe_stem("../../etc passwd"), "etc passwd")
+        self.assertEqual(safe_stem("a/b\\c:d"), "abcd")
+        self.assertEqual(safe_stem("..//.."), "model")
+        self.assertEqual(safe_stem("", fallback="untitled"), "untitled")
+
     def test_deeply_nested_xml_fails_cleanly_not_recursionerror(self):
         deep = b"<r>" * 60000 + b"</r>" * 60000
         try:
@@ -1113,6 +1138,28 @@ class S3RobustnessTests(unittest.TestCase):
         message = describe_s3_error(raised.exception)
         self.assertIn("no longer exists", message)
 
+    def test_download_refuses_objects_over_the_ingest_limit(self):
+        from Utils.paths import MAX_UPLOAD_BYTES
+
+        class Client:
+            def get_object(self, **kwargs):
+                return {
+                    "ContentLength": MAX_UPLOAD_BYTES + 1,
+                    "Body": io.BytesIO(b"x,y\n1,2\n"),
+                }
+
+        with self.assertRaisesRegex(ValueError, "ingest limit"):
+            download_s3_dataset("bucket", "huge.csv", Client())
+
+    def test_download_accepts_objects_that_report_a_safe_contentlength(self):
+        class Client:
+            def get_object(self, **kwargs):
+                return {"ContentLength": 8, "Body": io.BytesIO(b"x,y\n1,2\n")}
+
+        df, body = download_s3_dataset("bucket", "ok/data.csv", Client())
+        self.assertEqual(df.shape, (1, 2))
+        self.assertEqual(body, b"x,y\n1,2\n")
+
 
 class DatasetCacheBehaviorTests(unittest.TestCase):
     def test_row_limits_apply_without_breaking_full_load(self):
@@ -1169,6 +1216,38 @@ class SessionStateContractTests(unittest.TestCase):
 
             set_active_dataset(pd.DataFrame({"a": [1]}), "demo.csv")
             self.assertEqual(fake_st.session_state["dataset_name"], "demo.csv")
+
+    def test_file_named_like_the_session_label_still_loads_as_a_file(self):
+        # regression: startswith("Active Session") used to hijack a stored
+        # file whose name begins with the session label and return no frame
+        from Utils import dataset_ui
+
+        session_df = pd.DataFrame({"a": [1]})
+        loaded = []
+        colliding_file = "Active Session: x.csv"
+
+        def fake_selectbox(label, options):
+            return colliding_file
+
+        fake_st = SimpleNamespace(
+            session_state={"current_df": session_df, "dataset_name": "demo.csv"},
+            selectbox=fake_selectbox,
+            warning=lambda *a, **k: None,
+            error=lambda *a, **k: None,
+            stop=lambda: None,
+        )
+
+        with patch.object(dataset_ui, "st", fake_st), \
+             patch.object(dataset_ui, "list_dataset_files",
+                          return_value=[colliding_file]), \
+             patch.object(dataset_ui, "load_dataset_cached",
+                          side_effect=lambda name, max_rows=None:
+                          (loaded.append(name), session_df)[1]):
+            df_out, name_out = dataset_ui.select_working_dataset("Pick:")
+
+        self.assertEqual(name_out, colliding_file)
+        self.assertEqual(loaded, [colliding_file])
+        self.assertIs(df_out, session_df)
 
 
 class ModelProvenanceTests(unittest.TestCase):

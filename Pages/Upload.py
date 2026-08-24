@@ -236,6 +236,8 @@ else:
                             )
                         else:
                             st.success(f"Downloaded `{file_name}` from Amazon S3.")
+                    except ValueError as ve:
+                        st.error(str(ve))
                     except Exception as e:
                         logger.warning("s3 download failed: %s: %s", type(e).__name__, e)
                         st.error(f"S3 download failed: {describe_s3_error(e)}")

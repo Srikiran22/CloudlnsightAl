@@ -34,11 +34,11 @@ def _numeric_mean(series):
 def column_drift_rows(df_a, df_b):
     """Per-column drift records for every column the datasets share.
 
-    Mean shift is relative: (mean_b - mean_a) / |mean_a| * 100, with |mean_a|
-    floored at 1e-12 so zero-mean columns compare against absolute deltas.
-    Categorical-only columns simply get no mean fields. A column is flagged
-    when dtype changes, missingness moves by >= 10 points, or the mean shifts
-    by >= 10 percent.
+    Mean shift is relative: (mean_b - mean_a) / |mean_a| * 100; near-zero
+    |mean_a| (<= 1e-12) falls back to a unit denominator so the drift reads
+    as the absolute delta. Categorical-only columns simply get no mean
+    fields. A column is flagged when dtype changes, missingness moves by
+    >= 10 points, or the mean shifts by >= 10 percent.
     """
     common, _, _ = schema_diff(df_a, df_b)
     rows = []

@@ -43,6 +43,17 @@ def ensure_project_directories():
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def safe_stem(value, fallback="model"):
+    """Reduce a user-supplied name to a single safe path component.
+
+    Keeps letters/digits/space/-/_ only (no separators, no traversal), so a
+    crafted name can never escape its target directory. Falls back when
+    nothing survives the filter.
+    """
+    cleaned = "".join(ch for ch in str(value) if ch.isalnum() or ch in "-_ ").strip()
+    return cleaned or fallback
+
+
 def list_dataset_files():
     ensure_project_directories()
     return sorted(
@@ -169,11 +180,14 @@ def _flatten_xml_element(element, parent_key=""):
 # exponential "billion laughs" expansion and quadratic text blowup; external
 # entities are never fetched (no network), but a DTD is never needed for
 # tabular data -- reject it outright before parsing
-MAX_XML_BYTES = MAX_UPLOAD_BYTES
 
 
 def _reject_dtd(payload):
-    if b"<!DOCTYPE" in payload[:65536].upper() or b"<!ENTITY" in payload[:65536].upper():
+    # the whole document is scanned: comments/PIs may legally precede the
+    # DOCTYPE and push it past any fixed-size inspection window. XML keywords
+    # are case-sensitive per spec, so an exact-case search is complete and
+    # avoids copying large payloads.
+    if b"<!DOCTYPE" in payload or b"<!ENTITY" in payload:
         raise ValueError(
             "XML datasets must not contain DTD/entity declarations "
             "(they enable resource-exhaustion attacks); export plain elements."

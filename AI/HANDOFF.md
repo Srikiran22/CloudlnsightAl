@@ -15,9 +15,11 @@ None open. 2026-08-24 CI failure fixed (google.api_core import in one test; work
 
 ## Current Status
 
-71/93 tests pass; bug_hunt boots 9/9 pages; ruff serious-errors gate clean. matplotlib + pypdf are installed in the venv, so PDF charts and PDF ingestion are live. Quality Index is unified in `Utils/quality.py` (equal blend — DEC-011). Gemini wrapper has typed errors/timeouts/retries and a centralized model registry. AI-CSV parsing is bounded with an O(n) fast path (~160000x faster on clean tables, same outputs). Logs go to the launching terminal; level via CLOUDINSIGHT_LOG_LEVEL.
+122/122 tests pass; bug_hunt boots 9/9 pages; ruff serious-errors gate clean. matplotlib + pypdf are installed in the venv, so PDF charts and PDF ingestion are live. Quality Index is unified in `Utils/quality.py` (equal blend — DEC-011). Gemini wrapper has typed errors/timeouts/retries and a centralized model registry. AI-CSV parsing is bounded with an O(n) fast path (~160000x faster on clean tables, same outputs). Logs go to the launching terminal; level via CLOUDINSIGHT_LOG_LEVEL.
 
 ## What Has Been Done (latest session)
+
+- 2026-08-24 deep review: read every source file; fixed five proven issues — (1) XML DTD guard bypass via comment-padded DOCTYPE beyond the old 64KB scan window (mutation-tested, now whole-payload exact-case scan), (2) unsanitized Report template filename on disk (now Utils.paths.safe_stem, shared with ML model names), (3) S3 downloads bypassed MAX_UPLOAD_BYTES (ContentLength cap + clear UI message), (4) select_working_dataset startswith("Active Session") hijacked same-named dataset files returning None frames (positional match now), (5) compare_logic docstring denominator claim corrected. +5 regression tests. Disproven candidates and deferred items in SESSIONS.md 2026-08-24 (deep review) entry.
 
 - 2026-08-24 CI repair: `test_auth_failure_never_retries` no longer hard-imports google.api_core (CI installs google-genai only — it has NO google-api-core dependency; the local venv only had it via legacy google-generativeai, which is why 117/117 passed locally while CI failed). try-import + stub fallback; repro verified fails-before/passes-after. Workflow: permissions contents:read, concurrency cancel-in-progress, timeout-minutes 30. checkout/setup-python stay at v7 (current latest, node24 — Node20 deprecation warnings were from pre-v7 revisions).
 

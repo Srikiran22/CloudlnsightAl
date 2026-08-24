@@ -33,6 +33,7 @@ None confirmed. XML entity-expansion remains a theoretical self-upload DoS (stdl
 
 ## Recent Changes
 
+- 2026-08-24 (2nd): Deep review pass: XML DTD guard now scans whole payload (64KB window was bypassable via comment-padded DOCTYPE — mutation-proven); Utils.paths.safe_stem shared sanitizer; Report template names sanitized; S3 downloads capped by MAX_UPLOAD_BYTES via ContentLength; select_working_dataset matches session option positionally (file named "Active Session ..." no longer hijacks); compare_logic docstring corrected. +5 tests -> 122.
 - 2026-08-24: CI repair: tests/test_core.py auth-retry test no longer hard-imports google.api_core (absent on CI; google-genai does not provide it) — try-import with stub fallback; workflow gains permissions contents:read, concurrency dedup, timeout-minutes 30. Verified: poisoned-env repro fails-before/passes-after, 117/117, ruff clean, bug_hunt 9/9.
 - 2026-08-24: Final hardening pass: XML DTD/entity rejection + deep-nest guard (billion-laughs verified vulnerable then fixed); Gemini SDK-internal retries disabled on google-genai (retry_options attempts=1) with jittered project backoff as sole retry owner; legacy SDK retry-disable attempted with loud degradation; Utils/privacy.py sensitive-column screening wired into AI insights/chat context exclusion; ML training cell-limit + extracted _non_finite_columns; PDF quality flags extracted to testable _quality_flags_for_column; dataset fingerprints (name+size+mtime hash) gate stale ML/report results; cache bounded max_entries=64; DEC-013 records structured-output evaluation
 - 2026-08-23: Post-audit targeted fix pass: google-genai client-level ms timeout (legacy keeps per-request seconds; any unsupported-timeout fallback is loud, never silent); API-key redaction in Gemini diagnostics + real leak test; text-ingestion policy rewritten (csv.Sniffer over explicit separators only, ghost-column guard) so prose reaches AI conversion; cache no longer keyed by max_rows; ruff pinned in CI; docs corrected
@@ -41,7 +42,7 @@ None confirmed. XML entity-expansion remains a theoretical self-upload DoS (stdl
 
 ## Tests
 
-- 117 tests in `tests/test_core.py`: ingestion formats + oversize rejection, AI CSV parsing incl. pathological inputs, Gemini error classification + prompt bounds, quality index math + single-source pinning, preprocessing strategies, compare drift logic, PDF edge cases (0 columns, chart failure), ML persistence/provenance/version flags, S3 error mapping, batch merge, secrets, session-state contract
+- 122 tests in `tests/test_core.py`: ingestion formats + oversize rejection, AI CSV parsing incl. pathological inputs, Gemini error classification + prompt bounds, quality index math + single-source pinning, preprocessing strategies, compare drift logic, PDF edge cases (0 columns, chart failure), ML persistence/provenance/version flags, S3 error mapping + size cap, batch merge, secrets, session-state contract, XML DTD window-bypass regression
 - Run: `& .\venv\Scripts\python.exe -m unittest discover -s tests`
 - Boot check: `& .\venv\Scripts\python.exe bug_hunt.py`
 - Static gate: `& .\venv\Scripts\python.exe -m ruff check --select=E9,F63,F7,F82,F821 --preview .`

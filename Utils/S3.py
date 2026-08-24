@@ -9,7 +9,10 @@ from pathlib import Path
 import pandas as pd
 
 from Utils.logsys import get_logger
-from Utils.paths import AIConversionRequired, read_tabular, SUPPORTED_DATASET_EXTENSIONS
+from Utils.paths import (
+    AIConversionRequired, MAX_UPLOAD_BYTES, read_tabular,
+    SUPPORTED_DATASET_EXTENSIONS,
+)
 
 
 logger = get_logger("S3")
@@ -80,6 +83,15 @@ def list_s3_datasets(bucket_name, client):
 
 def download_s3_dataset(bucket_name, file_key, client):
     obj = client.get_object(Bucket=bucket_name, Key=file_key)
+    content_length = obj.get("ContentLength")
+    # same resource guard as local uploads: never stream an unbounded object
+    # into memory just because the bucket holds it
+    if content_length and content_length > MAX_UPLOAD_BYTES:
+        raise ValueError(
+            f"S3 object is about {content_length / (1024 * 1024):.0f} MB; the "
+            f"ingest limit is {MAX_UPLOAD_BYTES // (1024 * 1024)} MB. Download "
+            "it manually and trim the file first."
+        )
     body = obj["Body"].read()
     try:
         df = read_tabular(body, filename=Path(file_key).name)

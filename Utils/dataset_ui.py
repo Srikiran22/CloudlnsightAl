@@ -119,7 +119,9 @@ def select_working_dataset(selectbox_label, max_rows=None):
         st.stop()
 
     selected_option = st.selectbox(selectbox_label, options)
-    if selected_option.startswith("Active Session"):
+    # positional comparison: a stored FILE may itself be named like the
+    # session label, so startswith() would misroute it and yield no dataframe
+    if df_session is not None and selected_option == options[0]:
         return df_session, name_session or "Session Dataset"
 
     try:

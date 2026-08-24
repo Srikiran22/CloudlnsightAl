@@ -8,6 +8,31 @@ When this file grows large, move old entries to `history/YYYY-MM-DD-summary.md`.
 
 ---
 
+## [2026-08-24] Final deep engineering review + justified fixes
+
+**Agent:** ox-alpha / OpenCode CLI
+**User request:** One final extremely thorough review pass: full recon of every module, understand-before-judging, blast-radius mapping, prove real problems before fixing; smallest safe changes only; re-verify all baseline guarantees (117 tests, 9 boots, lint); fix nothing that is a deliberate design choice.
+
+### Pre-Task Snapshot
+- Tests: 117/117 pass locally (re-verify); bug_hunt 9/9; ruff --select=E9,F63,F7,F82,F821 clean; tree clean at origin/main after CI-fix push (5d24b7b)
+- Relevant files: entire repo — App.py, bug_hunt.py, Utils/* (16), Pages/* (9), tests/test_core.py, .streamlit/config.toml, .github/workflows/tests.yml, requirements.txt
+- Planned approach:
+  - Read every source file end-to-end before judging anything; map callers/callees of shared helpers
+  - Re-verify baseline guarantees with actual runs
+  - Hunt for real correctness/security/state bugs; reproduce each candidate before fixing
+  - Smallest justified diffs + targeted regression tests; no style churn, no design-choice rewrites
+
+### Post-Task Summary
+- Done vs planned: every source file read end-to-end; baseline re-verified (117/117 -> 122/122 after additions, 9/9 boots, ruff clean). Five real issues found, proven, and fixed; ~10 candidates disproven or accepted as deliberate design.
+- Files changed: `Utils/paths.py` (full-payload DTD scan + new safe_stem helper), `Utils/S3.py` (ContentLength ingest cap), `Pages/Upload.py` (surface size-rejection message), `Pages/Report.py` (template-name sanitization), `Utils/dataset_ui.py` (positional session-option match), `Utils/ML.py` (uses shared safe_stem), `Utils/compare_logic.py` (docstring accuracy), `tests/test_core.py` (+5 regression tests)
+- Key findings: (1) SECURITY — XML DTD guard scanned only first 64KB; comment padding pushed a billion-laughs DOCTYPE past the window; mutation-tested old-guard bypass then fixed by whole-payload exact-case scan. (2) SECURITY-CONSISTENCY — Report template name wrote unsanitized to disk (traversal), unlike ML model names. (3) RELIABILITY — S3 download had no MAX_UPLOAD_BYTES cap (only path bypassing it). (4) CORRECTNESS — select_working_dataset startswith("Active Session") hijacked same-named files returning None frame. (5) DOC — compare_logic docstring misstated zero-mean denominator.
+- Disproven/not-real: datetime NaT astype under pandas 3.0.5 works; pie-chart string-sum unreachable (UI restricts to numeric); drop_missing_values threshold unused by UI; .xls without xlrd degrades with catchable error; deep JSON RecursionError is page-catchable; upload overwrite semantics intentional per fingerprint design.
+- Verification: full suite 122/122 OK; ruff gate clean; bug_hunt 9/9; ad-hoc 8-step E2E chain probe (ingest->cache->clean->compare->ML persist/predict->PDF+charts->privacy->fingerprint staleness->AI-CSV) 8/8; mutation check proved padded-DTD test fails against old guard.
+- Unresolved/deferred: xlrd for legacy .xls (new-dependency decision); JSON deep-nest could get a cleaner ValueError like XML (cosmetic).
+- After state: 122/122 tests; 9/9 pages; lint clean; all prior guarantees intact plus one closed security bypass.
+
+---
+
 ## [2026-08-24] GitHub Actions CI failure diagnosis + repair
 
 **Agent:** ox-alpha / OpenCode CLI
