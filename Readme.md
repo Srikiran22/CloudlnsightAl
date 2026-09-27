@@ -1,190 +1,306 @@
 # CloudInsight AI
 
-**Any file in. Clean insights out.**
+CloudInsight AI is a local-first data analytics application built with Streamlit. It provides a single workspace for ingesting datasets, cleaning and comparing them, exploring the data, training machine-learning models, generating PDF reports, and using Google Gemini for optional AI-assisted analysis.
 
-CloudInsight AI is a local-first data analytics studio built with Streamlit, Pandas, Scikit-Learn, Plotly, ReportLab, and Google Gemini. Upload virtually any data file — structured or not — and go from raw content to ML models and publication-ready PDF reports without writing code.
+The application is designed to keep the normal analytics workflow local. External services are only used for features that explicitly require them, such as Gemini analysis or the optional Amazon S3 browser.
 
-![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![Streamlit](https://img.shields.io/badge/Streamlit-1.36%2B-red)
+## Features
 
----
+### Data ingestion
 
-## Highlights
+Supported formats include:
 
-- **Universal ingestion** — CSV, Excel, JSON (nested), JSONL/NDJSON, TSV, Parquet, XML, HTML tables, delimited text, PDFs (via optional `pypdf`)
-- **AI-powered structuring** — unstructured files (logs, plain text, PDF content) are converted into clean tables by Google Gemini
-- **One-click cleaning** — duplicate removal + smart missing-value imputation with before/after deltas
-- **Dataset comparison** — schema diffs, missing-value drift, and numeric mean-shift flags between any two datasets
-- **ML studio** — automated classification/regression detection, 8 algorithms, model persistence (save/load/predict), prediction exports
-- **Executive PDF reports** — up to 10 detailed sections: quality scoring, extended statistics, outlier bounds, categorical & correlation analysis, charts (optional `matplotlib`), page numbering
-- **Report templates & batch mode** — save report configurations; generate reports for every dataset in one click
-- **Gemini intelligence** — executive data audits and conversational Q&A over your dataset
-- **Fast by default** — cached dataset loading keyed by file path + modification time
+- CSV
+- Excel
+- JSON and nested JSON
+- JSONL / NDJSON
+- TSV
+- Parquet
+- XML
+- HTML tables
+- Delimited text
+- PDF, when `pypdf` is installed
+
+Structured formats are parsed locally first. Gemini is used as a fallback for files that cannot be handled by the native parsers.
+
+### Data preparation
+
+- Duplicate-row removal
+- Missing-value handling
+- Before/after data-quality summaries
+- Cleaned dataset export
+- Multi-file ingestion with source tracking
+
+### Dataset comparison
+
+Compare two datasets for:
+
+- Schema differences
+- Missing-value changes
+- Duplicate profiles
+- Numeric mean shifts
+- Other basic distribution differences
+
+### Exploratory analysis
+
+The application provides:
+
+- Column and data-type summaries
+- Descriptive statistics
+- Correlation analysis
+- IQR-based outlier detection
+- Interactive visualizations
+- Distribution plots
+- Categorical analysis
+
+### Machine learning
+
+The ML page supports classification and regression workflows using scikit-learn.
+
+The application includes:
+
+- Automatic problem-type detection
+- Preprocessing pipelines
+- Multiple classification and regression algorithms
+- Model evaluation
+- Model persistence
+- Prediction
+- Exportable results
+- Model metadata and scikit-learn version tracking
+
+Preprocessing is kept inside the scikit-learn pipeline so transformations are fitted only on the relevant training data.
+
+### Reports
+
+PDF reports are generated with ReportLab and can include:
+
+- Dataset summary
+- Data Quality Index
+- Column information
+- Numerical statistics
+- Outlier analysis
+- Categorical analysis
+- Correlation analysis
+- Data-quality flags
+- Sample records
+- Optional charts
+- Optional Gemini-generated insights
+
+Report templates can be saved and reused, and reports can also be generated in batch.
+
+### Gemini integration
+
+Gemini is optional and is used for:
+
+- Converting unsupported or unstructured files into tabular data
+- Executive dataset analysis
+- Dataset chat
+
+The Gemini integration includes request timeouts, bounded retries for transient failures, model selection, response validation, and limits on the amount of data sent to the model.
+
+### Amazon S3
+
+The application can browse datasets stored in Amazon S3. AWS credentials are requested only when the S3 feature is used.
 
 ## Requirements
 
 - Python 3.10+
 - Windows, macOS, or Linux
-- No database, no cloud account required. Gemini/AWS keys are strictly optional per-feature.
+- No database is required
+- Gemini and AWS credentials are optional and only needed for their respective features
 
-## Getting Started
+## Installation
 
-### 1. Install dependencies
+Create a virtual environment:
 
 ```bash
 python -m venv venv
-.\venv\Scripts\activate        # Windows  (macOS/Linux: source venv/bin/activate)
+```
+
+Activate it:
+
+### Windows
+
+```powershell
+.\venv\Scripts\activate
+```
+
+### macOS / Linux
+
+```bash
+source venv/bin/activate
+```
+
+Install the dependencies:
+
+```bash
 pip install -r requirements.txt
 ```
 
-All of `requirements.txt` is safe to install; `pypdf` and `matplotlib` unlock PDF ingestion and report charts respectively, and the app degrades gracefully without them.
+`pypdf` enables PDF input and `matplotlib` enables charts in generated PDF reports.
 
-### 2. Run the application
+## Run the application
 
 ```bash
 streamlit run App.py
 ```
 
-The app opens at `http://localhost:8501`.
+By default, Streamlit starts the application at:
 
-### 3. API keys (entered at runtime — never on disk)
+```
+http://localhost:8501
+```
 
-There is **no `.env` file and no key configuration file**. When a feature needs credentials, the app asks for them in the UI:
+## Credentials
 
-- A Google Gemini API key ([get one free at AI Studio](https://aistudio.google.com/)) is needed only for file conversion, executive insights, and chat.
-- AWS access + secret keys are needed only for the S3 browser.
+The application does not require a `.env` file.
 
-Keys live in server-side session memory only. After each completed API task they are wiped automatically unless you tick "Keep in memory for this session". You can always clear them with the sidebar button.
+Credentials are entered through the application when a feature needs them.
 
-> **Privacy note:** AI features send a compact dataset summary (bounded to ~12k characters) to Google Gemini. Use de-identified data for sensitive sources.
+### Google Gemini
 
-## Feature Tour
+A Gemini API key is required only for:
 
-| Page | What it does |
-|------|--------------|
-| **Ingest data** | Local files or S3; native parsing first, Gemini conversion as fallback; multi-file merge with source tracking |
-| **Cleaning** | Remove duplicates, impute/drop missing values, download cleaned CSVs |
-| **Compare** | Side-by-side dataset diff: schema, drift, duplication profiles |
-| **EDA** | Column audit, descriptive stats, correlation matrix, IQR outlier detection |
-| **Visualize** | Histograms, box/violin plots, scatter/bubble, bar/pie/treemap, heatmaps |
-| **Dashboard** | Data-quality gauge, dynamic filtering, quick-look distributions |
-| **Machine learning** | Auto problem detection, train/evaluate 8 algorithms, save & reuse models |
-| **AI insights** | Automated executive reports + chat with your dataset |
-| **PDF report** | Detailed multi-section reports, reusable templates, batch generation |
+- AI-assisted file conversion
+- Executive insights
+- Dataset chat
 
-## The Data Quality Index
+The key is held in server-side session memory and is cleared after completed API tasks unless the user chooses to keep it for the current session.
 
-Both the Dashboard gauge and the PDF report use ONE shared formula:
+### Amazon S3
+
+AWS credentials are required only for the S3 browser.
+
+### Privacy
+
+When Gemini is used, the application sends a bounded representation of the dataset to the external model service. Sensitive columns can be detected and excluded before AI analysis.
+
+Do not upload confidential or personally identifiable data to external services unless the data handling requirements of your environment allow it.
+
+## Application pages
+
+| Page | Purpose |
+|---|---|
+| Ingest data | Load local files or browse S3 datasets |
+| Cleaning | Remove duplicates and handle missing values |
+| Compare | Compare schemas and dataset characteristics |
+| EDA | Explore columns, statistics, correlations, and outliers |
+| Visualize | Create interactive charts |
+| Dashboard | View dataset health and summary metrics |
+| Machine learning | Train, evaluate, save, and reuse models |
+| AI insights | Generate Gemini-based analysis and chat with the dataset |
+| PDF report | Create detailed reports and reusable report templates |
+
+## Data Quality Index
+
+The Dashboard and PDF report use the same Data Quality Index implementation.
 
 ```
 Quality Index = (completeness + uniqueness) / 2
 ```
 
-where *completeness* is the share of non-empty cells (%) and *uniqueness* is the share of distinct rows (%). Equal weights are deliberate — symmetric and easy to explain.
+Where:
 
-## What's inside the generated PDF report?
+- **Completeness** is the percentage of non-empty cells.
+- **Uniqueness** is the percentage of distinct rows.
 
-1. High-level summary with the composite Data Quality Index
-2. Complete column structure with unique-value counts
-3. Extended numerical statistics (quartiles, skewness, kurtosis)
-4. Full Tukey-IQR outlier audit with bounds
-5. Categorical column analysis (top values, frequencies)
-6. Strongest correlation pairs (|r| ≥ 0.30)
-7. Per-column quality flags (high missingness, constants, heavy outliers)
-8. Sample records
-9. Distribution charts: histograms, box plots, correlation heatmap *(requires matplotlib; each chart fails independently without breaking the report)*
-10. Optional Gemini executive insights
+The calculation is intentionally simple so that the score is consistent and easy to interpret.
 
-Sections renumber automatically when charts or insights are omitted.
-
-## Machine learning notes
-
-- Preprocessing (imputation, scaling, one-hot encoding) lives **inside** the sklearn Pipeline and is fitted on training folds only — no data leakage.
-- Problem type is auto-detected but overridable: non-numeric targets are classification; integer-like targets with ≤10 distinct values covering ≤half the rows are treated as class labels.
-- Models persist as `.joblib` bundles in `Models/` with metadata (algorithm, target, features, source dataset, metrics, sklearn version, creation time). Loading warns if the saved scikit-learn version differs from the running one.
-
-## Project Structure
+## Project structure
 
 ```
 CloudInsightAI/
-├── App.py               # Entry point & navigation
-├── Pages/               # One Streamlit page per feature (UI orchestration)
-├── Utils/               # Reusable logic
-│   ├── paths.py         # Universal format readers + path safety
-│   ├── AIConvert.py     # LLM → DataFrame conversion pipeline
-│   ├── Gemini.py        # Gemini client wrapper (errors/timeouts/models)
-│   ├── quality.py       # Shared Data Quality Index
-│   ├── compare_logic.py # Dataset diff math
-│   ├── logsys.py        # Logging setup
-│   └── ...              # ML, PDF, Charts, S3, secrets, theme, batch
-├── tests/               # Unit tests (unittest suite)
-├── bug_hunt.py          # Headless boot check of every page
-├── Datasets/            # Your uploaded files (gitignored)
-├── Models/              # Saved ML models (gitignored)
-├── Reports/             # Generated PDFs & templates (gitignored)
-└── AI/                  # Agent memory system for AI coding assistants
+├── App.py                 # Application entry point
+├── Pages/                 # Streamlit pages
+├── Utils/                 # Shared application logic
+│   ├── paths.py           # File readers and path validation
+│   ├── AIConvert.py       # AI-assisted table conversion
+│   ├── Gemini.py          # Gemini integration
+│   ├── quality.py         # Data Quality Index
+│   ├── compare_logic.py   # Dataset comparison logic
+│   ├── PDF.py             # PDF report generation
+│   ├── S3.py              # Amazon S3 integration
+│   ├── ML.py              # ML utilities
+│   ├── Preprocessing.py   # Data preprocessing
+│   └── ...                # Logging, secrets, UI, charts, and helpers
+├── tests/                 # Automated tests
+├── Models/                # Saved models; gitignored
+├── Datasets/              # Uploaded datasets; gitignored
+├── Reports/               # Generated reports; gitignored
+├── bug_hunt.py            # Headless application boot check
+└── requirements.txt        # Python dependencies
 ```
 
 ## Development
 
+Run the unit tests:
+
 ```bash
-# Run the full unit test suite
 python -m unittest discover -s tests -v
-
-# Headless boot-check of every app page
-python bug_hunt.py
-
-# Optional: serious-error static checks (same gate as CI)
-pip install ruff && ruff check --select=E9,F63,F7,F82,F821 --preview .
 ```
 
-### Logs
-
-The app logs to the terminal where you ran `streamlit run App.py`. Default level is `WARNING`; set more detail with:
+Run the headless page check:
 
 ```bash
-set CLOUDINSIGHT_LOG_LEVEL=INFO      # Windows (export on macOS/Linux)
+python bug_hunt.py
 ```
 
-Secrets, dataset contents, and raw model responses are never logged.
+Run Ruff's serious-error checks:
 
-### CI
+```bash
+pip install ruff
+ruff check --select=E9,F63,F7,F82,F821 --preview .
+```
 
-GitHub Actions runs the unit tests plus the headless page-boot check on Python 3.10–3.12, with a ruff pass limited to serious errors (undefined names, syntax-level mistakes).
+The CI workflow runs the test suite and application boot checks across supported Python versions.
 
-## Security Notes
+## Logging
 
-- **Local-first by design.** There is no authentication. Anyone who can reach port 8501 can use the app and its stored state — keep it bound to localhost (`streamlit run App.py` defaults to localhost) and do not expose it to a network without adding an authenticating reverse proxy.
-- **Secrets are runtime-only**: entered in the UI, held in server-side memory, wiped after each task unless kept for the session. Nothing touches disk; nothing is logged (Gemini diagnostics additionally redact the key from any SDK error text).
-- **Path containment**: dataset reads/writes are restricted to the project's `Datasets/` directory (traversal attempts rejected).
-- **XML hardening**: XML datasets containing DTD/entity declarations are rejected before parsing — the stdlib parser is vulnerable to exponential entity expansion ("billion laughs"), so DTDs are treated as attack surface, not data. Deeply nested documents fail with a clean error.
-- **Privacy screening**: before AI insights/chat run, likely-sensitive columns (emails, phone numbers, IBANs, Luhn-valid card numbers, provider tokens like `sk-`/`AKIA`/`AIza`/JWT, password/token-named columns) are flagged and can be excluded from the Gemini context in one click.
-- **Model bundles**: `.joblib` files contain executable code — load only bundles you trained or trust. Bundles record creation time + sklearn version; loading warns on version mismatch. ML results and PDF downloads are fingerprinted to the dataset file they came from, so replacing a same-named file invalidates stale results.
-- **AI output is sandboxed**: converted CSVs pass bounded validation before entering the app; insights/chat render as text only; prompts wrap untrusted content in guard tags as defense-in-depth.
-- **Resource bounds**: 200 MB upload ceiling; XML/CSV/AI-response parse limits; ML training cell cap; dataset cache capped at 64 entries.
+Logs are written to the terminal that launched Streamlit.
 
-## Deployment
+The default level is `WARNING`. To enable more detailed logging:
 
-This app targets local single-user use. If you later deploy it:
+### Windows
 
-1. Put it behind an authenticating proxy (SSO/OAuth) — the app itself has none.
-2. Use HTTPS at the proxy.
-3. Provide per-user storage isolation; today all users would share one `Datasets/` folder and server-side session state is per-browser-session.
-4. Set `server.address` / firewall rules deliberately; Streamlit's default binding is localhost.
+```powershell
+$env:CLOUDINSIGHT_LOG_LEVEL="INFO"
+```
 
-See `AI/HANDOFF.md` for architecture context if you plan to extend it.
+### macOS / Linux
 
-## Troubleshooting
+```bash
+export CLOUDINSIGHT_LOG_LEVEL=INFO
+```
 
-| Symptom | Fix |
-|---------|-----|
-| PDF upload says pypdf required | `pip install pypdf` |
-| PDF reports have no charts | `pip install matplotlib`, regenerate |
-| Gemini errors about auth/model | Check the key; try another model from the dropdown |
-| "rate limit" messages | Wait a moment; the app already retries transient failures twice |
-| S3 listing empty | Verify bucket region matches the AWS Region field and keys allow ListBucket |
-| Theme toggle does nothing | Your Streamlit version dropped the runtime hook — switch via Settings menu |
-| Slow huge uploads | Files beyond ~200 MB are refused; split or sample first |
+API keys, dataset contents, and raw model responses are not written to application logs.
 
----
+## Security considerations
 
-*Private project — all rights reserved. Not licensed for redistribution.*
+The application is intended primarily for local, single-user use.
+
+Important considerations:
+
+- There is no built-in authentication.
+- Keep the application bound to localhost unless an appropriate authentication layer is added.
+- Dataset paths are restricted to the application's dataset directory.
+- XML files containing DTD/entity declarations are rejected.
+- Upload and parser limits prevent unbounded resource use.
+- AI responses are validated before converted data enters the application.
+- Saved `.joblib` files should only be loaded when their source is trusted.
+- ML artifacts record relevant provenance and scikit-learn version information.
+- Sensitive columns can be excluded from Gemini context.
+
+These controls improve the application's safety but should not be treated as a substitute for a production security architecture.
+
+## Known limitations
+
+- The application is designed for local single-user use.
+- There is no built-in authentication or multi-user isolation.
+- Gemini and S3 features depend on external services.
+- Very large datasets are constrained by upload and processing limits.
+- Model bundles can have compatibility issues across scikit-learn versions.
+- Production deployment requires additional storage isolation, authentication, and operational controls.
+
+## License
+
+This repository is currently intended as a private portfolio project and does not include a redistribution license.
