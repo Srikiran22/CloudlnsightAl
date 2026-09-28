@@ -62,21 +62,21 @@ with s3:
     st.markdown(f"**Only in B** ({len(only_b)})")
     st.caption(", ".join(str(c) for c in only_b) if only_b else "None")
 
-# per-column drift table
+# per-column comparison table
 if not common:
     st.info("The two datasets share no columns — nothing to compare at column level.")
     st.stop()
 
-st.subheader("Column-level drift")
+st.subheader("Column-level metric comparison & shifts")
 
 drift_df = pd.DataFrame(column_drift_rows(df_a, df_b))
 flagged_count = int((drift_df["Flags"] != "OK").sum())
 st.dataframe(drift_df, width="stretch", hide_index=True)
 
 if flagged_count:
-    st.warning(f"{flagged_count} of {len(common)} common columns show notable drift (dtype change, ≥10% missingness change, or ≥10% mean shift).")
+    st.warning(f"{flagged_count} of {len(common)} common columns show notable metric shifts (dtype change, ≥10% missingness change, or ≥10% mean shift).")
 else:
-    st.success("No significant drift detected across common columns.")
+    st.success("No significant metric shifts detected across common columns.")
 
 # duplication profile
 st.subheader("Duplication profile")

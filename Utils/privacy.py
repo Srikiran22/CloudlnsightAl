@@ -87,8 +87,9 @@ def detect_sensitive_columns(df):
 
 
 def apply_exclusions(df, excluded_columns):
-    """Drop excluded columns, but refuse to strip the dataset bare."""
-    remaining = [c for c in df.columns if c not in set(excluded_columns)]
+    """Drop excluded columns. Fails closed with an empty frame if all columns are excluded."""
+    excluded_set = set(excluded_columns or [])
+    remaining = [c for c in df.columns if c not in excluded_set]
     if not remaining:
-        return df, False
+        return df.iloc[:, 0:0].copy(), False
     return df[remaining], True

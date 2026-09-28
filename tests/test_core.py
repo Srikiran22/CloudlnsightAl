@@ -305,11 +305,11 @@ class AdversarialInputTests(unittest.TestCase):
         cols = list(df.columns)
         self.assertEqual(len(cols), len(set(cols)))
         self.assertEqual(cols[0], "city")
-        self.assertIn("city_2", cols)
-        # a single-column selection must stay a Series, not a DataFrame
-        self.assertTrue(pd.api.types.is_scalar(df["paris_x"] if "paris_x" in cols
-                                              else df.iloc[0, 0]) or True)
+        # each column selection must stay a Series with unique names
         self.assertIsInstance(df["city"], pd.Series)
+        self.assertIsInstance(df["city_2"], pd.Series)
+        self.assertEqual(df["city"].iloc[0], "paris")
+        self.assertEqual(df["city_2"].iloc[0], "11")
 
     def test_merge_picks_free_provenance_name_when_both_taken(self):
         frames = [
@@ -968,9 +968,11 @@ class PrivacyScreeningTests(unittest.TestCase):
         reduced, applied = apply_exclusions(df, ["secret"])
         self.assertTrue(applied)
         self.assertEqual(list(reduced.columns), ["keep"])
-        untouched, applied = apply_exclusions(df, ["secret", "keep"])
+        # All columns excluded -> fail closed: 0-column frame returned, applied is False
+        empty_df, applied = apply_exclusions(df, ["secret", "keep"])
         self.assertFalse(applied)
-        self.assertEqual(list(untouched.columns), list(df.columns))
+        self.assertEqual(list(empty_df.columns), [])
+        self.assertEqual(len(empty_df), len(df))
 
 
 class DatasetIdentityTests(unittest.TestCase):

@@ -52,39 +52,29 @@ if upload_mode == "Local file":
     if uploaded_files:
         seen_names = set()
         for uploaded in uploaded_files:
-            name = Path(uploaded.name).name
-            # duplicate upload names would silently overwrite each other on
-            # disk and double rows in the merge; disambiguate instead
-            if name in seen_names:
-                stem, suffix = Path(name).stem, Path(name).suffix
-                counter = 2
-                while f"{stem}_{counter}{suffix}" in seen_names:
-                    counter += 1
-                name = f"{stem}_{counter}{suffix}"
-                st.warning(f"Duplicate file name — second `{uploaded.name}` stored as `{name}`.")
-            seen_names.add(name)
+            raw_name = Path(uploaded.name).name
+            target_name = get_unique_filename(raw_name, directory=DATASETS_DIR, extra_names=seen_names)
+            seen_names.add(target_name)
+            if target_name != raw_name:
+                st.info(f"Existing dataset `{raw_name}` preserved — upload saved as `{target_name}`.")
 
             try:
-                single_df = read_tabular(uploaded, filename=name)
+                single_df = read_tabular(uploaded, filename=target_name)
                 DATASETS_DIR.mkdir(parents=True, exist_ok=True)
-                target_name = get_unique_filename(name, directory=DATASETS_DIR, extra_names=seen_names)
-                if target_name != name:
-                    st.info(f"Existing dataset `{name}` preserved — new upload saved as `{target_name}`.")
-                seen_names.add(target_name)
                 uploaded.seek(0)
                 with open(DATASETS_DIR / target_name, "wb") as fh:
                     fh.write(uploaded.getbuffer())
                 parsed.append((target_name, single_df))
             except AIConversionRequired as needed:
-                valid_conv = get_valid_conversion(name, needed.raw_text)
+                valid_conv = get_valid_conversion(target_name, needed.raw_text)
                 if valid_conv:
-                    st.info(f"Reusing verified conversion `{valid_conv}` for `{name}`.")
+                    st.info(f"Reusing verified conversion `{valid_conv}` for `{target_name}`.")
                     parsed.append((valid_conv, read_dataset(valid_conv)))
                 else:
-                    pending.append((name, needed))
+                    pending.append((target_name, needed))
             except Exception as read_error:
-                logger.warning("ingest failed for %s: %s: %s", name, type(read_error).__name__, read_error)
-                failures.append((name, str(read_error)))
+                logger.warning("ingest failed for %s: %s: %s", target_name, type(read_error).__name__, read_error)
+                failures.append((target_name, str(read_error)))
 
     if failures:
         for fname, reason in failures:
@@ -135,36 +125,54 @@ if upload_mode == "Local file":
             else:
                 with st.spinner("Gemini is structuring your files..."):
                     still_pending = []
-                    for fname, needed in pending:
-                        try:
-                            converted = convert_to_dataframe(
-                                api_key=value_of("gemini"),
-                                raw_text=needed.raw_text,
-                                filename=fname,
-                                model_name=chosen_model,
-                                extra_instructions=(hints or "").strip() or None,
-                            )
-                            ext_tag = Path(fname).suffix.lstrip(".").lower() or "txt"
-                            target_stem = f"{Path(fname).stem}_{ext_tag}_converted.csv"
-                            converted_name = get_unique_filename(target_stem, directory=DATASETS_DIR)
-                            DATASETS_DIR.mkdir(parents=True, exist_ok=True)
-                            converted.to_csv(DATASETS_DIR / converted_name, index=False)
-                            record_conversion(converted_name, fname, needed.raw_text)
-                            parsed.append((converted_name, converted))
-                            st.success(
-                                f"Converted `{fname}` to {converted.shape[0]:,} rows × "
-                                f"{converted.shape[1]} cols, saved as `{converted_name}`."
-                            )
-                        except GeminiError as conv_error:
-                            still_pending.append((fname, needed))
-                            st.error(f"`{fname}` conversion failed — {conv_error}")
-                        except Exception as conv_error:
-                            still_pending.append((fname, needed))
-                            logger.warning("conversion failed for %s: %s: %s",
-                                           fname, type(conv_error).__name__, conv_error)
-                            st.error(f"`{fname}` conversion failed: {conv_error}")
-                    if release("gemini", keep_key="gemini_keep"):
-                        st.toast("Gemini key cleared from memory.")
+                    try:
+                        for fname, needed in pending:
+                            try:
+                                valid_conv = get_valid_conversion(
+                                    fname,
+                                    needed.raw_text,
+                                    model_name=chosen_model,
+                                    extra_instructions=(hints or "").strip() or None,
+                                )
+                                if valid_conv:
+                                    st.info(f"Reusing verified conversion `{valid_conv}` for `{fname}`.")
+                                    parsed.append((valid_conv, read_dataset(valid_conv)))
+                                    continue
+                                converted = convert_to_dataframe(
+                                    api_key=value_of("gemini"),
+                                    raw_text=needed.raw_text,
+                                    filename=fname,
+                                    model_name=chosen_model,
+                                    extra_instructions=(hints or "").strip() or None,
+                                )
+                                ext_tag = Path(fname).suffix.lstrip(".").lower() or "txt"
+                                target_stem = f"{Path(fname).stem}_{ext_tag}_converted.csv"
+                                converted_name = get_unique_filename(target_stem, directory=DATASETS_DIR)
+                                DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+                                converted.to_csv(DATASETS_DIR / converted_name, index=False)
+                                record_conversion(
+                                    converted_name,
+                                    fname,
+                                    needed.raw_text,
+                                    model_name=chosen_model,
+                                    extra_instructions=(hints or "").strip() or None,
+                                )
+                                parsed.append((converted_name, converted))
+                                st.success(
+                                    f"Converted `{fname}` to {converted.shape[0]:,} rows × "
+                                    f"{converted.shape[1]} cols, saved as `{converted_name}`."
+                                )
+                            except GeminiError as conv_error:
+                                still_pending.append((fname, needed))
+                                st.error(f"`{fname}` conversion failed — {conv_error}")
+                            except Exception as conv_error:
+                                still_pending.append((fname, needed))
+                                logger.warning("conversion failed for %s: %s: %s",
+                                               fname, type(conv_error).__name__, conv_error)
+                                st.error(f"`{fname}` conversion failed: {conv_error}")
+                    finally:
+                        if release("gemini", keep_key="gemini_keep"):
+                            st.toast("Gemini key cleared from memory.")
                     pending = still_pending
 
     if parsed:
@@ -210,11 +218,12 @@ else:
                     st.success(f"Found {len(s3_files)} dataset(s) in S3 bucket `{bucket}`!")
                 else:
                     st.info(f"No supported data files found in S3 bucket `{bucket}`.")
-                if release("aws_access", "aws_secret", keep_key="aws_keep"):
-                    st.toast("AWS credentials cleared from memory.")
             except Exception as e:
                 logger.warning("s3 listing failed: %s: %s", type(e).__name__, e)
                 st.error(f"S3 connection error: {describe_s3_error(e)}")
+            finally:
+                if release("aws_access", "aws_secret", keep_key="aws_keep"):
+                    st.toast("AWS credentials cleared from memory.")
 
         s3_files_avail = st.session_state.get("s3_files", [])
         if s3_files_avail:
@@ -232,8 +241,6 @@ else:
                         DATASETS_DIR.mkdir(parents=True, exist_ok=True)
                         local_s3_path = DATASETS_DIR / file_name
                         local_s3_path.write_bytes(raw_bytes)
-                        if release("aws_access", "aws_secret", keep_key="aws_keep"):
-                            st.toast("AWS credentials cleared from memory.")
                         if df is None:
                             st.warning(
                                 f"`{file_name}` was downloaded to `Datasets/` but has no native table "
@@ -247,6 +254,9 @@ else:
                     except Exception as e:
                         logger.warning("s3 download failed: %s: %s", type(e).__name__, e)
                         st.error(f"S3 download failed: {describe_s3_error(e)}")
+                    finally:
+                        if release("aws_access", "aws_secret", keep_key="aws_keep"):
+                            st.toast("AWS credentials cleared from memory.")
 
 if df is not None and file_name is not None:
     set_active_dataset(df, file_name)

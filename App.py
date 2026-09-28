@@ -1,6 +1,7 @@
 import streamlit as st
 
 from Utils.dataset_ui import init_session_state, render_sidebar
+from Utils.Gemini import DEFAULT_GEMINI_MODEL
 from Utils.theme import apply_theme
 
 st.set_page_config(
@@ -22,7 +23,7 @@ def render_home():
     with c1:
         st.metric("Storage", "Amazon S3")
     with c2:
-        st.metric("AI", "Gemini 1.5 / 2.0")
+        st.metric("AI", f"Gemini ({DEFAULT_GEMINI_MODEL})")
     with c3:
         st.metric("Modeling", "Scikit-Learn")
 

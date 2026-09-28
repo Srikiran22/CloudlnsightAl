@@ -193,6 +193,10 @@ def train_and_evaluate_model(
         raise ValueError(f"Target column not found: {target_col}")
     if not feature_cols:
         raise ValueError("Select at least one input feature.")
+    if target_col in feature_cols:
+        raise ValueError(
+            f"Target column '{target_col}' cannot be included in feature columns (prevents target leakage)."
+        )
     missing_features = [col for col in feature_cols if col not in df.columns]
     if missing_features:
         raise ValueError(f"Feature columns not found: {', '.join(missing_features)}")

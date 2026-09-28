@@ -59,6 +59,9 @@ with tab_dist:
             with c_pts:
                 points_opt = st.selectbox("Points Display:", ["outliers", "all", "suspectedoutliers", "none"])
                 points_opt = False if points_opt == "none" else points_opt
+                if points_opt == "all" and len(df) > 10_000:
+                    st.info("Displaying outliers only for large dataset (>10,000 rows) to keep browser responsive.")
+                    points_opt = "outliers"
             with c_grp:
                 group_col = st.selectbox("Categorical Axis (Optional):", ["None"] + cat_cols, key="box_group")
                 group_col = None if group_col == "None" else group_col
@@ -115,8 +118,12 @@ with tab_rel:
             )
         else:
             show_markers = st.checkbox("Show Data Markers", value=True)
+            line_df = df
+            if len(df) > 25_000:
+                st.info(f"Plotting a representative sample of 25,000 rows (from {len(df):,} total) to maintain browser responsiveness.")
+                line_df = df.sample(n=25_000, random_state=42)
             fig = create_line_chart(
-                df,
+                line_df,
                 x_col=x_axis,
                 y_col=y_axis,
                 hue_col=color_by,

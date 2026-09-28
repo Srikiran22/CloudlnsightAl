@@ -5,7 +5,7 @@ import datetime
 
 from Utils.PDF import generate_pdf_report
 from Utils.paths import (
-    REPORTS_DIR, REPORT_TEMPLATES_DIR, get_unique_filename,
+    REPORTS_DIR, REPORT_TEMPLATES_DIR, get_dataset_row_count, get_unique_filename,
     list_dataset_files, safe_stem,
 )
 from Utils.dataset_ui import (
@@ -171,9 +171,12 @@ if st.button("Generate reports for all datasets"):
 
     for index, file_name in enumerate(all_files):
         try:
-            full_df = load_dataset_cached(file_name)
-            total_source_rows = len(full_df)
-            batch_df = full_df.head(int(max_batch)) if total_source_rows > int(max_batch) else full_df
+            batch_cap = int(max_batch)
+            total_source_rows = get_dataset_row_count(file_name)
+            batch_df = load_dataset_cached(file_name, max_rows=batch_cap)
+            analyzed_rows = len(batch_df)
+            if total_source_rows is None:
+                total_source_rows = analyzed_rows
             filename_out, _ = _build_report(
                 file_name,
                 batch_df,
@@ -181,7 +184,7 @@ if st.button("Generate reports for all datasets"):
                 author,
                 include_charts,
                 source_rows=total_source_rows,
-                analyzed_rows=len(batch_df),
+                analyzed_rows=analyzed_rows,
             )
             generated.append(filename_out)
         except Exception as e:

@@ -5,6 +5,8 @@
 # release() gets called once the work that needed the secret has finished;
 # it wipes the slot(s) again unless the user ticked the keep box.
 
+from contextlib import contextmanager
+
 import streamlit as st
 
 
@@ -49,3 +51,12 @@ def release(*names, **opts):
 def drop(*names):
     for name in names:
         st.session_state.pop(_slot(name), None)
+
+
+@contextmanager
+def temporary_secret(*names, keep_key=None):
+    """Context manager ensuring secrets are released even if an error or timeout occurs."""
+    try:
+        yield
+    finally:
+        release(*names, keep_key=keep_key)

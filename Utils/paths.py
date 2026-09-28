@@ -6,6 +6,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from xml.etree import ElementTree
 
+import numpy as np
 import pandas as pd
 
 
@@ -85,41 +86,135 @@ def enforce_size_limit(size_in_bytes, label="File"):
         )
 
 
-def record_conversion(converted_name, source_name, raw_text):
+CONVERSION_MANIFEST_VERSION = "v1"
+
+
+def compute_conversion_provenance(raw_text, model_name=None, extra_instructions=None):
+    """Deterministic hash incorporating source content, model, instructions, and version."""
+    norm_model = (model_name or "").strip().lower()
+    norm_instr = (extra_instructions or "").strip()
+    hasher = hashlib.sha256()
+    hasher.update(raw_text.encode("utf-8"))
+    hasher.update(b"|")
+    hasher.update(norm_model.encode("utf-8"))
+    hasher.update(b"|")
+    hasher.update(norm_instr.encode("utf-8"))
+    hasher.update(b"|")
+    hasher.update(CONVERSION_MANIFEST_VERSION.encode("utf-8"))
+    return hasher.hexdigest()[:32]
+
+
+def record_conversion(
+    converted_name,
+    source_name,
+    raw_text,
+    model_name=None,
+    extra_instructions=None,
+    manifest_path=None,
+):
     """Record provenance metadata for an AI-converted file in the manifest."""
     ensure_project_directories()
+    manifest_file = Path(manifest_path) if manifest_path is not None else CONVERSIONS_MANIFEST
     manifest = {}
-    if CONVERSIONS_MANIFEST.exists():
+    if manifest_file.exists():
         try:
-            manifest = json.loads(CONVERSIONS_MANIFEST.read_text(encoding="utf-8"))
+            manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
         except Exception:
             manifest = {}
-    source_hash = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()[:16]
+    prov_hash = compute_conversion_provenance(raw_text, model_name=model_name, extra_instructions=extra_instructions)
     manifest[converted_name] = {
         "source_name": source_name,
-        "source_hash": source_hash,
+        "provenance_hash": prov_hash,
+        "model_name": (model_name or "").strip(),
+        "extra_instructions_hash": (
+            hashlib.sha256((extra_instructions or "").strip().encode("utf-8")).hexdigest()[:16]
+            if extra_instructions
+            else ""
+        ),
+        "version": CONVERSION_MANIFEST_VERSION,
         "source_length": len(raw_text),
     }
-    CONVERSIONS_MANIFEST.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    manifest_file.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
-def get_valid_conversion(source_name, raw_text):
-    """Return existing converted filename if it matches this source content, else None."""
-    if not CONVERSIONS_MANIFEST.exists():
+def get_valid_conversion(
+    source_name,
+    raw_text,
+    model_name=None,
+    extra_instructions=None,
+    manifest_path=None,
+    datasets_dir=None,
+):
+    """Return existing converted filename if it matches source content, model, and instructions, else None."""
+    manifest_file = Path(manifest_path) if manifest_path is not None else CONVERSIONS_MANIFEST
+    target_dir = Path(datasets_dir) if datasets_dir is not None else DATASETS_DIR
+    if not manifest_file.exists():
         return None
     try:
-        manifest = json.loads(CONVERSIONS_MANIFEST.read_text(encoding="utf-8"))
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
     except Exception:
         return None
-    source_hash = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()[:16]
+    prov_hash = compute_conversion_provenance(raw_text, model_name=model_name, extra_instructions=extra_instructions)
     for conv_name, meta in manifest.items():
         if (
             meta.get("source_name") == source_name
-            and meta.get("source_hash") == source_hash
-            and (DATASETS_DIR / conv_name).exists()
+            and meta.get("provenance_hash") == prov_hash
+            and (target_dir / conv_name).exists()
         ):
             return conv_name
     return None
+
+
+def get_dataset_row_count(dataset):
+    """Lightweight determination of exact source row count without full dataset materialization."""
+    path = resolve_dataset_path(dataset)
+    suffix = path.suffix.lower()
+
+    if suffix in {".csv", ".tsv"}:
+        try:
+            count = 0
+            with path.open("rb") as f:
+                while chunk := f.read(1024 * 1024):
+                    count += chunk.count(b"\n")
+            return max(count - 1, 0) if count > 0 else 0
+        except Exception:
+            pass
+
+    if suffix == ".parquet":
+        try:
+            import pyarrow.parquet as pq
+            meta = pq.read_metadata(path)
+            return meta.num_rows
+        except Exception:
+            pass
+
+    if suffix in {".jsonl", ".ndjson"}:
+        try:
+            count = 0
+            with path.open("rb") as f:
+                while chunk := f.read(1024 * 1024):
+                    count += chunk.count(b"\n")
+            return count
+        except Exception:
+            pass
+
+    if suffix in {".xlsx", ".xls"}:
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(path, read_only=True)
+            sheet = wb.active
+            rows = max(sheet.max_row - 1, 0) if sheet.max_row is not None else None
+            wb.close()
+            if rows is not None:
+                return rows
+        except Exception:
+            pass
+
+    try:
+        df = read_dataset(dataset)
+        return len(df)
+    except Exception:
+        return None
 
 
 def list_dataset_files():
@@ -153,14 +248,22 @@ def _decode_text_buffer(buffer):
     return buffer.read().decode("utf-8", errors="replace")
 
 
+def _serialize_cell(value):
+    if isinstance(value, np.ndarray):
+        return json.dumps(value.tolist())
+    if isinstance(value, set):
+        return json.dumps(sorted(list(value)))
+    if isinstance(value, (list, dict)):
+        return json.dumps(value, sort_keys=True)
+    return value
+
+
 def _sanitize_unhashable_cells(df):
-    """Serialize list/dict cells into deterministic JSON strings so downstream
+    """Serialize list/dict/array cells into deterministic JSON strings so downstream
     hashing, grouping, duplicated, and unique operations work without TypeError."""
     for column in df.columns:
-        if df[column].map(lambda value: isinstance(value, (list, dict))).any():
-            df[column] = df[column].map(
-                lambda value: json.dumps(value, sort_keys=True) if isinstance(value, (list, dict)) else value
-            )
+        if df[column].map(lambda value: isinstance(value, (list, dict, set, np.ndarray))).any():
+            df[column] = df[column].map(_serialize_cell)
     return df
 
 
@@ -250,7 +353,12 @@ def _read_jsonl_from_buffer(buffer, nrows=None):
     return _sanitize_unhashable_cells(df)
 
 
-def _flatten_xml_element(element, parent_key="", index=None):
+MAX_XML_DEPTH = 50
+
+
+def _flatten_xml_element(element, parent_key="", index=None, depth=1, max_depth=MAX_XML_DEPTH):
+    if depth > max_depth:
+        raise ValueError(f"XML nesting exceeds maximum allowed depth of {max_depth}.")
     record = {}
     tag_suffix = f"_{index}" if index is not None else ""
     current_key = f"{parent_key}{element.tag}{tag_suffix}".strip("_")
@@ -274,7 +382,15 @@ def _flatten_xml_element(element, parent_key="", index=None):
         if tag_counts[tag] > 1:
             tag_seen[tag] = tag_seen.get(tag, 0) + 1
             child_index = tag_seen[tag]
-        record.update(_flatten_xml_element(child, parent_key=f"{current_key}_", index=child_index))
+        record.update(
+            _flatten_xml_element(
+                child,
+                parent_key=f"{current_key}_",
+                index=child_index,
+                depth=depth + 1,
+                max_depth=max_depth,
+            )
+        )
     return record
 
 
@@ -310,7 +426,7 @@ def _read_xml_from_buffer(buffer, nrows=None):
     try:
         records = []
         for element in list(root):
-            flat = _flatten_xml_element(element)
+            flat = _flatten_xml_element(element, depth=1)
             # drop the leading "<roottag>_" from each key
             prefix = f"{element.tag}_"
             flat = {
@@ -318,10 +434,17 @@ def _read_xml_from_buffer(buffer, nrows=None):
                 for key, value in flat.items()
             }
             records.append(flat)
-    except RecursionError as error:
-        raise ValueError("XML nesting is too deep to process.") from error
+    except (RecursionError, ValueError) as error:
+        if "nesting" in str(error).lower():
+            raise ValueError("XML nesting is too deep to process.") from error
+        raise
     if not records:
-        records.append(_flatten_xml_element(root))
+        try:
+            records.append(_flatten_xml_element(root, depth=1))
+        except (RecursionError, ValueError) as error:
+            if "nesting" in str(error).lower():
+                raise ValueError("XML nesting is too deep to process.") from error
+            raise
     df = pd.json_normalize(records)
     if nrows is not None and len(df) > nrows:
         df = df.head(nrows)
@@ -392,9 +515,15 @@ def _read_html_from_buffer(buffer):
     return pd.DataFrame(normalized, columns=unique_header)
 
 
-def _read_parquet_from_buffer(buffer):
+MAX_TEXT_EXTRACT_CHARS = 50_000
+
+
+def _read_parquet_from_buffer(buffer, nrows=None):
     buffer.seek(0)
-    return pd.read_parquet(buffer)
+    df = pd.read_parquet(buffer)
+    if nrows is not None and len(df) > nrows:
+        df = df.head(nrows)
+    return _sanitize_unhashable_cells(df)
 
 
 MAX_PDF_PAGES = 30
@@ -482,11 +611,7 @@ def read_tabular(source, filename=None, max_rows=None):
         return _read_jsonl_from_buffer(buffer, nrows=max_rows)
 
     if suffix == ".parquet":
-        buffer.seek(0)
-        df = pd.read_parquet(buffer)
-        if max_rows is not None and len(df) > max_rows:
-            df = df.head(max_rows)
-        return df
+        return _read_parquet_from_buffer(buffer, nrows=max_rows)
 
     if suffix == ".xml":
         return _read_xml_from_buffer(buffer, nrows=max_rows)
@@ -498,15 +623,52 @@ def read_tabular(source, filename=None, max_rows=None):
         return df
 
     if suffix in TEXT_EXTENSIONS:
-        text = _decode_text_buffer(buffer)
-        df = _read_delimited_text(text, nrows=max_rows)
-        if df is None:
-            raise AIConversionRequired(
-                "Plain text could not be parsed as a table; AI conversion required.",
-                raw_text=text,
-                filename=name,
-            )
-        return df
+        buffer.seek(0)
+        sample_bytes = buffer.read(65536)
+        sample_text = ""
+        for encoding in CSV_ENCODINGS:
+            try:
+                sample_text = sample_bytes.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        if not sample_text:
+            sample_text = sample_bytes.decode("utf-8", errors="replace")
+
+        df = _read_delimited_text(sample_text, nrows=max_rows)
+        if df is not None:
+            sample_lines = [line for line in sample_text.splitlines() if line.strip()][:20]
+            try:
+                dialect = csv.Sniffer().sniff("\n".join(sample_lines), delimiters=",;\t|:")
+                for encoding in CSV_ENCODINGS:
+                    try:
+                        buffer.seek(0)
+                        return pd.read_csv(buffer, sep=dialect.delimiter, encoding=encoding, nrows=max_rows)
+                    except UnicodeDecodeError:
+                        continue
+                buffer.seek(0)
+                return pd.read_csv(buffer, sep=dialect.delimiter, nrows=max_rows)
+            except Exception:
+                pass
+
+        buffer.seek(0)
+        bounded_bytes = buffer.read(MAX_TEXT_EXTRACT_CHARS * 4)
+        extracted = ""
+        for encoding in CSV_ENCODINGS:
+            try:
+                extracted = bounded_bytes.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        if not extracted:
+            extracted = bounded_bytes.decode("utf-8", errors="replace")
+        bounded_text = extracted[:MAX_TEXT_EXTRACT_CHARS]
+
+        raise AIConversionRequired(
+            "Plain text could not be parsed as a table; AI conversion required.",
+            raw_text=bounded_text,
+            filename=name,
+        )
 
     if suffix in DOCUMENT_EXTENSIONS:
         return _read_pdf_from_buffer(buffer, filename=name)

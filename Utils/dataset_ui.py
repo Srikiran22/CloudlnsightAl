@@ -3,7 +3,12 @@ import pandas as pd
 import streamlit as st
 from html import escape
 
-from Utils.paths import list_dataset_files, read_dataset, resolve_dataset_path
+from Utils.paths import (
+    _sanitize_unhashable_cells,
+    list_dataset_files,
+    read_dataset,
+    resolve_dataset_path,
+)
 from Utils.theme import toggle_theme_button
 
 
@@ -96,17 +101,28 @@ def dataset_fingerprint(dataset, force_refresh=False):
 
 
 def dataframe_fingerprint(df):
-    """Content fingerprint for an in-memory DataFrame using full SHA-256."""
+    """Deterministic cryptographic content fingerprint for an in-memory DataFrame.
+
+    Incorporates shape, column names, column order, data types, and all row values.
+    """
     if df is None:
         return ""
     meta = f"{df.shape}|{list(df.columns)}|{list(df.dtypes.astype(str))}"
     hasher = hashlib.sha256(meta.encode("utf-8"))
     try:
-        sample = df.head(50)
-        h = pd.util.hash_pandas_object(sample).sum()
-        hasher.update(str(h).encode("utf-8"))
+        row_hashes = pd.util.hash_pandas_object(df, index=False)
+        hasher.update(row_hashes.values.tobytes())
+    except TypeError:
+        try:
+            sanitized = _sanitize_unhashable_cells(df.copy(deep=False))
+            row_hashes = pd.util.hash_pandas_object(sanitized, index=False)
+            hasher.update(row_hashes.values.tobytes())
+        except Exception:
+            for col in df.columns:
+                hasher.update(df[col].astype(str).str.cat(sep=",").encode("utf-8", errors="replace"))
     except Exception:
-        pass
+        for col in df.columns:
+            hasher.update(df[col].astype(str).str.cat(sep=",").encode("utf-8", errors="replace"))
     return hasher.hexdigest()
 
 
@@ -204,7 +220,20 @@ def select_working_dataset(selectbox_label, max_rows=None):
 
     try:
         loaded_df = load_dataset_cached(selected_option, max_rows=max_rows)
-        set_active_dataset(loaded_df, selected_option)
+        if df_session is None:
+            set_active_dataset(loaded_df, selected_option)
+        else:
+            if hasattr(st, "info"):
+                st.info(
+                    f"Viewing stored dataset `{selected_option}`. Active session dataset (`{name_session}`) is preserved."
+                )
+            if hasattr(st, "button") and st.button(
+                f"Set `{selected_option}` as active working dataset",
+                key=f"set_active_{selected_option}",
+            ):
+                set_active_dataset(loaded_df, selected_option)
+                if hasattr(st, "rerun"):
+                    st.rerun()
         return loaded_df, selected_option
     except Exception as error:
         st.error(f"Failed to load `{selected_option}`: {error}")

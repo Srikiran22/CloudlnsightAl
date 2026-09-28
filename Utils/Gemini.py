@@ -267,6 +267,8 @@ def _truncate_cell(value):
 
 
 def get_dataset_summary_context(df, dataset_name):
+    if df is None or df.shape[1] == 0:
+        raise ValueError("Cannot summarize dataset: DataFrame has no columns or all columns were excluded.")
     rows, cols = df.shape
     context_df = df.iloc[:, :MAX_CONTEXT_COLUMNS]
 

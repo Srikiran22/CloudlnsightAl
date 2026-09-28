@@ -4,7 +4,7 @@ CloudInsight AI is primarily a portfolio project. Changes should keep the applic
 
 ## Development setup
 
-Follow the setup instructions in [Readme.md](Readme.md).
+Follow the setup instructions in [README.md](README.md).
 
 Run the test suite:
 

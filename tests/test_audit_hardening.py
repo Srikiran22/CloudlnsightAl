@@ -52,27 +52,80 @@ class UploadSafetyAndCollisionsTests(unittest.TestCase):
         self.assertEqual(u, "file_2.csv")
 
     def test_conversion_manifest_caching_and_staleness(self):
-        text_a = "name,val\nalice,1"
-        text_b = "name,val\nbob,2"
-        dummy_file = DATASETS_DIR / "doc_txt_converted.csv"
-        dummy_file.write_text("dummy", encoding="utf-8")
-        try:
-            record_conversion("doc_txt_converted.csv", "doc.txt", text_a)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            tmp_manifest = tmp_path / ".conversions.json"
+            tmp_datasets = tmp_path / "Datasets"
+            tmp_datasets.mkdir()
+            dummy_file = tmp_datasets / "doc_txt_converted.csv"
+            dummy_file.write_text("dummy", encoding="utf-8")
 
-            # Same text -> valid reuse
-            valid = get_valid_conversion("doc.txt", text_a)
+            text_a = "name,val\nalice,1"
+            text_b = "name,val\nbob,2"
+
+            record_conversion(
+                "doc_txt_converted.csv",
+                "doc.txt",
+                text_a,
+                model_name="gemini-3.8-flash",
+                extra_instructions="clean data",
+                manifest_path=tmp_manifest,
+            )
+
+            # Same text + model + instructions -> valid reuse
+            valid = get_valid_conversion(
+                "doc.txt",
+                text_a,
+                model_name="gemini-3.8-flash",
+                extra_instructions="clean data",
+                manifest_path=tmp_manifest,
+                datasets_dir=tmp_datasets,
+            )
             self.assertEqual(valid, "doc_txt_converted.csv")
 
             # Modified text -> stale, returns None
-            stale = get_valid_conversion("doc.txt", text_b)
-            self.assertIsNone(stale)
+            stale_text = get_valid_conversion(
+                "doc.txt",
+                text_b,
+                model_name="gemini-3.8-flash",
+                extra_instructions="clean data",
+                manifest_path=tmp_manifest,
+                datasets_dir=tmp_datasets,
+            )
+            self.assertIsNone(stale_text)
+
+            # Modified model -> invalidates reuse
+            diff_model = get_valid_conversion(
+                "doc.txt",
+                text_a,
+                model_name="gemini-2.5-pro",
+                extra_instructions="clean data",
+                manifest_path=tmp_manifest,
+                datasets_dir=tmp_datasets,
+            )
+            self.assertIsNone(diff_model)
+
+            # Modified instructions -> invalidates reuse
+            diff_instr = get_valid_conversion(
+                "doc.txt",
+                text_a,
+                model_name="gemini-3.8-flash",
+                extra_instructions="different prompt",
+                manifest_path=tmp_manifest,
+                datasets_dir=tmp_datasets,
+            )
+            self.assertIsNone(diff_instr)
 
             # Different extension, same stem -> does not collide
-            diff_ext = get_valid_conversion("doc.pdf", text_a)
+            diff_ext = get_valid_conversion(
+                "doc.pdf",
+                text_a,
+                model_name="gemini-3.8-flash",
+                extra_instructions="clean data",
+                manifest_path=tmp_manifest,
+                datasets_dir=tmp_datasets,
+            )
             self.assertIsNone(diff_ext)
-        finally:
-            if dummy_file.exists():
-                dummy_file.unlink()
 
 
 class ResourceAndMemoryLimitsTests(unittest.TestCase):

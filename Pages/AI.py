@@ -58,6 +58,8 @@ st.caption(
     "Automated privacy screening: uses pattern heuristics to detect likely-sensitive columns "
     "(emails, tokens, credit cards, phones, IBANs). This does not replace human data classification."
 )
+import hashlib
+
 sensitive = detect_sensitive_columns(df)
 excluded_cols = []
 if sensitive:
@@ -71,15 +73,23 @@ if sensitive:
     )
 ai_df, exclusions_applied = apply_exclusions(df, excluded_cols)
 if not exclusions_applied and excluded_cols:
-    st.error("All columns were selected for exclusion — sending nothing would make analysis "
-             "meaningless, so the full dataset stays in context. Deselect some columns.")
+    st.error(
+        "All columns were selected for exclusion. Sending zero columns makes AI analysis "
+        "impossible, and sending the original data would violate privacy exclusions. "
+        "Deselect some non-sensitive columns to proceed."
+    )
+    st.stop()
 if exclusions_applied:
     logger.info("AI context excludes %d flagged column(s)", len(excluded_cols))
 
 tab_insights, tab_chat = st.tabs(["Executive report", "Chat"])
 
-insights_key = f"insights_{selected_file}_{active_fp}"
-chat_key = f"chat_messages_{selected_file}_{active_fp}"
+excl_sig = ",".join(sorted(excluded_cols))
+ctx_str = f"{selected_file}|{active_fp}|{chosen_model}|{excl_sig}|v2"
+ctx_hash = hashlib.sha256(ctx_str.encode("utf-8")).hexdigest()[:16]
+
+insights_key = f"insights_{ctx_hash}"
+chat_key = f"chat_messages_{ctx_hash}"
 
 with tab_insights:
     st.markdown("Generate a data health audit, pattern discovery, and business recommendations.")
@@ -94,16 +104,16 @@ with tab_insights:
                     model_name=chosen_model
                 )
                 st.session_state[insights_key] = insights_text
-                # also mirror to primary key with fingerprint tracking
                 st.session_state[f"insights_{selected_file}"] = insights_text
                 st.session_state[f"insights_fp_{selected_file}"] = active_fp
-                if release("gemini", keep_key="gemini_keep"):
-                    st.toast("Gemini key cleared from memory.")
             except GeminiError as e:
                 st.error(f"Gemini error — {e}")
             except Exception as e:
                 logger.warning("insights generation failed: %s: %s", type(e).__name__, e)
                 st.error(f"Gemini error: {str(e)}")
+            finally:
+                if release("gemini", keep_key="gemini_keep"):
+                    st.toast("Gemini key cleared from memory.")
 
     saved_insights = st.session_state.get(insights_key)
     if saved_insights:
@@ -130,7 +140,6 @@ with tab_chat:
 
     if user_prompt := st.chat_input("Ask a question about your dataset..."):
         st.session_state[chat_key].append({"role": "user", "content": user_prompt})
-        # bound stored history so long sessions cannot grow memory forever
         del st.session_state[chat_key][:-MAX_CHAT_HISTORY]
         with st.chat_message("user"):
             st.markdown(user_prompt)
@@ -148,10 +157,11 @@ with tab_chat:
                     st.markdown(reply)
                     st.session_state[chat_key].append({"role": "assistant", "content": reply})
                     del st.session_state[chat_key][:-MAX_CHAT_HISTORY]
-                    if release("gemini", keep_key="gemini_keep"):
-                        st.toast("Gemini key cleared from memory.")
                 except GeminiError as e:
                     st.error(f"Gemini error — {e}")
                 except Exception as e:
                     logger.warning("chat failed: %s: %s", type(e).__name__, e)
                     st.error(f"Error: {str(e)}")
+                finally:
+                    if release("gemini", keep_key="gemini_keep"):
+                        st.toast("Gemini key cleared from memory.")
