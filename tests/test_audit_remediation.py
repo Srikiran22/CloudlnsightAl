@@ -281,5 +281,514 @@ class XMLResourceBoundaryTests(unittest.TestCase):
         self.assertEqual(df["name"].iloc[0], "Alice")
 
 
+class RowCountEdgeCaseTests(unittest.TestCase):
+    def test_csv_without_trailing_newline_returns_correct_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            csv_path = tmp_path / "single_row.csv"
+            csv_path.write_text("col_a,col_b\nval1,val2", encoding="utf-8")
+            with patch("Utils.paths.DATASETS_DIR", tmp_path):
+                self.assertEqual(get_dataset_row_count("single_row.csv"), 1)
+
+    def test_csv_header_only_without_newline_returns_zero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            csv_path = tmp_path / "header_only.csv"
+            csv_path.write_text("col_a,col_b", encoding="utf-8")
+            with patch("Utils.paths.DATASETS_DIR", tmp_path):
+                self.assertEqual(get_dataset_row_count("header_only.csv"), 0)
+
+    def test_csv_with_multiline_quoted_fields_counts_logical_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            csv_path = tmp_path / "multiline.csv"
+            content = 'id,comment\n1,"first line\nsecond line\nthird line"\n2,"single line"'
+            csv_path.write_text(content, encoding="utf-8")
+            with patch("Utils.paths.DATASETS_DIR", tmp_path):
+                self.assertEqual(get_dataset_row_count("multiline.csv"), 2)
+
+    def test_jsonl_without_trailing_newline_returns_correct_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            jsonl_path = tmp_path / "data.jsonl"
+            content = '{"id": 1, "name": "a"}\n{"id": 2, "name": "b"}'
+            jsonl_path.write_text(content, encoding="utf-8")
+            with patch("Utils.paths.DATASETS_DIR", tmp_path):
+                self.assertEqual(get_dataset_row_count("data.jsonl"), 2)
+
+
+class FingerprintCacheRealLookupTests(unittest.TestCase):
+    def test_real_cache_hit_does_not_reread_unchanged_file(self):
+        from Utils.dataset_ui import dataset_fingerprint, invalidate_dataset_cache
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fpath = tmp_path / "probe.csv"
+            fpath.write_text("a,b\n1,2", encoding="utf-8")
+
+            with patch("Utils.paths.DATASETS_DIR", tmp_path):
+                invalidate_dataset_cache("probe.csv")
+                fp1 = dataset_fingerprint("probe.csv")
+
+                def boom_open(*args, **kwargs):
+                    raise RuntimeError("File was reread despite being in cache!")
+
+                with patch.object(Path, "open", boom_open):
+                    fp2 = dataset_fingerprint("probe.csv")
+                    self.assertEqual(fp1, fp2)
+
+    def test_cache_misses_and_recomputes_after_file_modification(self):
+        from Utils.dataset_ui import dataset_fingerprint, invalidate_dataset_cache
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fpath = tmp_path / "probe_mod.csv"
+            fpath.write_text("a,b\n1,2", encoding="utf-8")
+
+            with patch("Utils.paths.DATASETS_DIR", tmp_path):
+                invalidate_dataset_cache("probe_mod.csv")
+                fp1 = dataset_fingerprint("probe_mod.csv")
+
+                fpath.write_text("a,b\n1,2\n3,4", encoding="utf-8")
+                fp2 = dataset_fingerprint("probe_mod.csv")
+                self.assertNotEqual(fp1, fp2)
+
+    def test_same_size_same_mtime_invalidation_and_force_refresh(self):
+        from Utils.dataset_ui import dataset_fingerprint, invalidate_dataset_cache
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fpath = tmp_path / "probe_same.csv"
+            fpath.write_text("a,b\n1,2", encoding="utf-8")
+            orig_stat = fpath.stat()
+
+            with patch("Utils.paths.DATASETS_DIR", tmp_path):
+                invalidate_dataset_cache("probe_same.csv")
+                fp1 = dataset_fingerprint("probe_same.csv")
+                self.assertEqual(len(fp1), 64)
+
+                # Overwrite with same byte length and preserve mtime
+                fpath.write_text("a,b\n3,4", encoding="utf-8")
+                import os
+                os.utime(fpath, ns=(orig_stat.st_atime_ns, orig_stat.st_mtime_ns))
+
+                # Normal call with force_refresh=False hits stat cache
+                cached_fp = dataset_fingerprint("probe_same.csv")
+                self.assertEqual(cached_fp, fp1)
+
+                # force_refresh=True bypasses cache and hashes full content
+                fresh_fp = dataset_fingerprint("probe_same.csv", force_refresh=True)
+                self.assertNotEqual(fresh_fp, fp1)
+                self.assertEqual(len(fresh_fp), 64)
+
+                # explicit invalidate_dataset_cache evicts the cache entry
+                invalidate_dataset_cache("probe_same.csv")
+                recomputed_fp = dataset_fingerprint("probe_same.csv")
+                self.assertEqual(recomputed_fp, fresh_fp)
+
+
+class CleaningUploadDiskCollisionTests(unittest.TestCase):
+    def test_upload_with_same_name_as_disk_file_uses_dataframe_fingerprint(self):
+        from Utils.dataset_ui import dataset_fingerprint, dataframe_fingerprint
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            disk_file = tmp_path / "data.csv"
+            disk_file.write_text("a,b\n1,2", encoding="utf-8")
+
+            uploaded_df = pd.DataFrame({"a": [99, 100], "b": [200, 300]})
+
+            with patch("Utils.paths.DATASETS_DIR", tmp_path):
+                disk_fp = dataset_fingerprint("data.csv")
+                upload_fp = dataframe_fingerprint(uploaded_df)
+                self.assertNotEqual(disk_fp, upload_fp)
+
+
+class MLInMemoryDatasetTests(unittest.TestCase):
+    def test_ml_results_match_in_memory_dataset_via_dataframe_fingerprint(self):
+        from Utils.dataset_ui import results_match_active, dataframe_fingerprint
+        df = pd.DataFrame({"feat": [1, 2, 3], "target": [0, 1, 0]})
+        fp = dataframe_fingerprint(df)
+        results = {
+            "dataset_name": "Active Session: working.csv",
+            "dataset_fingerprint": fp,
+        }
+        self.assertTrue(results_match_active(results, "Active Session: working.csv", df=df))
+
+        other_df = pd.DataFrame({"feat": [9, 9, 9], "target": [1, 1, 1]})
+        self.assertFalse(results_match_active(results, "Active Session: working.csv", df=other_df))
+
+
+class GeminiClientLifecycleTests(unittest.TestCase):
+    def test_gemini_client_closes_on_success(self):
+        from Utils.Gemini import _generate_once
+        closed = []
+        class MockClient:
+            class models:
+                @staticmethod
+                def generate_content(model, contents):
+                    return "response"
+            def close(self):
+                closed.append(True)
+
+        with patch("Utils.Gemini._new_sdk_client", return_value=MockClient()):
+            res = _generate_once("fake_key", "gemini-3.8-flash", "test prompt")
+            self.assertEqual(res, "response")
+            self.assertEqual(len(closed), 1)
+
+    def test_gemini_client_closes_on_failure(self):
+        from Utils.Gemini import _generate_once
+        closed = []
+        class MockClient:
+            class models:
+                @staticmethod
+                def generate_content(model, contents):
+                    raise RuntimeError("API crash")
+            def close(self):
+                closed.append(True)
+
+        with patch("Utils.Gemini._new_sdk_client", return_value=MockClient()):
+            with self.assertRaises(RuntimeError):
+                _generate_once("fake_key", "gemini-3.8-flash", "test prompt")
+            self.assertEqual(len(closed), 1)
+
+
+class ConversionManifestIntegrityTests(unittest.TestCase):
+    def test_output_tampering_invalidates_conversion_cache(self):
+        from Utils.paths import record_conversion, get_valid_conversion
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            manifest = tmp_path / ".conversions.json"
+            conv_file = tmp_path / "data_txt_converted.csv"
+            conv_file.write_text("col1,col2\nval1,val2", encoding="utf-8")
+
+            record_conversion(
+                "data_txt_converted.csv",
+                "data.txt",
+                "raw unstructured text",
+                model_name="gemini-3.8-flash",
+                manifest_path=manifest,
+                datasets_dir=tmp_path,
+            )
+
+            valid = get_valid_conversion(
+                "data.txt",
+                "raw unstructured text",
+                model_name="gemini-3.8-flash",
+                manifest_path=manifest,
+                datasets_dir=tmp_path,
+            )
+            self.assertEqual(valid, "data_txt_converted.csv")
+
+            conv_file.write_text("col1,col2\nTAMPERED,DATA", encoding="utf-8")
+            tampered = get_valid_conversion(
+                "data.txt",
+                "raw unstructured text",
+                model_name="gemini-3.8-flash",
+                manifest_path=manifest,
+                datasets_dir=tmp_path,
+            )
+            self.assertIsNone(tampered)
+
+    def test_conversion_lookup_does_not_reuse_prompted_conversion_when_unprompted(self):
+        from Utils.paths import record_conversion, get_valid_conversion
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            manifest = tmp_path / ".conversions.json"
+            conv_file = tmp_path / "data_txt_converted.csv"
+            conv_file.write_text("col1,col2\nval1,val2", encoding="utf-8")
+
+            record_conversion(
+                "data_txt_converted.csv",
+                "data.txt",
+                "raw unstructured text",
+                model_name="gemini-3.8-flash",
+                extra_instructions="only extract numeric tables",
+                manifest_path=manifest,
+                datasets_dir=tmp_path,
+            )
+
+            # Unprompted query must NOT reuse conversion that had custom instructions
+            unprompted = get_valid_conversion(
+                "data.txt",
+                "raw unstructured text",
+                model_name="gemini-3.8-flash",
+                extra_instructions="",
+                manifest_path=manifest,
+                datasets_dir=tmp_path,
+            )
+            self.assertIsNone(unprompted)
+
+            # Matching prompt succeeds
+            matched = get_valid_conversion(
+                "data.txt",
+                "raw unstructured text",
+                model_name="gemini-3.8-flash",
+                extra_instructions="only extract numeric tables",
+                manifest_path=manifest,
+                datasets_dir=tmp_path,
+            )
+            self.assertEqual(matched, "data_txt_converted.csv")
+
+
+class AIReportProvenanceTests(unittest.TestCase):
+    def test_ai_insights_not_reused_when_dataset_fingerprint_differs(self):
+        saved_insights = {
+            "dataset_name": "data.csv",
+            "dataset_fingerprint": "hash_a",
+            "model_name": "gemini-3.8-flash",
+            "text": "Executive Insights",
+        }
+        active_name = "data.csv"
+        active_fp = "hash_b"
+        reusable = (
+            saved_insights.get("dataset_name") == active_name
+            and saved_insights.get("dataset_fingerprint") == active_fp
+        )
+        self.assertFalse(reusable)
+
+    def test_ai_insights_not_reused_when_generation_provenance_differs(self):
+        import hashlib
+        active_name = "data.csv"
+        active_fp = "hash_a"
+        active_model = "gemini-3.8-flash"
+        active_exclusions = ["email"]
+
+        def make_ctx_hash(name, fp, model, exclusions):
+            excl_sig = ",".join(sorted(exclusions))
+            ctx_str = f"{name}|{fp}|{model}|{excl_sig}|v2"
+            return hashlib.sha256(ctx_str.encode("utf-8")).hexdigest()[:16]
+
+        base_ctx = make_ctx_hash(active_name, active_fp, active_model, active_exclusions)
+
+        # Different model produces different hash
+        diff_model_ctx = make_ctx_hash(active_name, active_fp, "gemini-2.5-pro", active_exclusions)
+        self.assertNotEqual(base_ctx, diff_model_ctx)
+
+        # Different exclusions produce different hash
+        diff_excl_ctx = make_ctx_hash(active_name, active_fp, active_model, ["email", "ssn"])
+        self.assertNotEqual(base_ctx, diff_excl_ctx)
+
+        # Different dataset content produces different hash
+        diff_fp_ctx = make_ctx_hash(active_name, "hash_modified", active_model, active_exclusions)
+        self.assertNotEqual(base_ctx, diff_fp_ctx)
+
+
+class S3StreamClosingTests(unittest.TestCase):
+    def test_streaming_body_closed_on_success_and_on_error(self):
+        from Utils.S3 import download_s3_dataset
+
+        closed_success = []
+        class MockBodySuccess:
+            def read(self, chunk_size):
+                if not hasattr(self, "_done"):
+                    self._done = True
+                    return b"a,b\n1,2"
+                return b""
+            def close(self):
+                closed_success.append(True)
+
+        mock_client = SimpleNamespace(
+            get_object=lambda Bucket, Key: {
+                "Body": MockBodySuccess(),
+                "ContentLength": 7,
+            }
+        )
+        df, _ = download_s3_dataset("mybucket", "test.csv", mock_client)
+        self.assertEqual(len(closed_success), 1)
+
+        closed_err = []
+        class MockBodyTooBig:
+            def read(self, chunk_size):
+                return b"X" * (1024 * 1024)
+            def close(self):
+                closed_err.append(True)
+
+        mock_client_err = SimpleNamespace(
+            get_object=lambda Bucket, Key: {
+                "Body": MockBodyTooBig(),
+                "ContentLength": 500 * 1024 * 1024,
+            }
+        )
+        with self.assertRaises(ValueError):
+            download_s3_dataset("mybucket", "huge.csv", mock_client_err)
+        self.assertEqual(len(closed_err), 1)
+
+    def test_streaming_body_closed_on_unstructured_content(self):
+        from Utils.S3 import download_s3_dataset
+        closed = []
+        class MockBody:
+            def read(self, size):
+                if not hasattr(self, "_done"):
+                    self._done = True
+                    return b"unstructured text"
+                return b""
+            def close(self):
+                closed.append(True)
+        mock_client = SimpleNamespace(
+            get_object=lambda Bucket, Key: {
+                "Body": MockBody(),
+                "ContentLength": 17,
+            }
+        )
+        df, raw_bytes = download_s3_dataset("b", "doc.txt", mock_client)
+        self.assertIsNone(df)
+        self.assertEqual(raw_bytes, b"unstructured text")
+        self.assertEqual(len(closed), 1)
+
+
+class SingleReportChartRowBoundTests(unittest.TestCase):
+    def test_pdf_chart_generation_bounds_rows(self):
+        from Utils.PDF import generate_pdf_report
+        large_df = pd.DataFrame({
+            "a": list(range(30_000)),
+            "b": [x * 1.5 for x in range(30_000)],
+        })
+        pdf_bytes = generate_pdf_report(
+            large_df,
+            "test_large.csv",
+            report_title="Test Report",
+            author_name="Tester",
+            include_charts=True,
+        )
+        self.assertGreater(len(pdf_bytes), 1000)
+
+    def test_pdf_report_distinguishes_source_and_analyzed_rows(self):
+        from Utils.PDF import generate_pdf_report
+        sample_df = pd.DataFrame({"col1": [1, 2, 3], "col2": [4, 5, 6]})
+        pdf_bytes = generate_pdf_report(
+            sample_df,
+            "sample.csv",
+            report_title="Batch Sample Report",
+            author_name="Auditor",
+            source_rows=100_000,
+            analyzed_rows=3,
+        )
+        self.assertGreater(len(pdf_bytes), 1000)
+
+
+class CSVFormulaHardeningTests(unittest.TestCase):
+    def test_csv_formula_injection_sanitization(self):
+        from Utils.paths import sanitize_for_csv_export
+        df = pd.DataFrame({
+            "formula_cmd": ["=cmd|' /C calc'!A0", "@SUM(A1:A10)", "+formula", "-formula"],
+            "numeric_neg": ["-15", "-42.5", "-1e4", -99],
+            "numeric_pos": ["+100", "+3.14", 50, "+0"],
+            "control_chars": ["\tcalc", "\rcalc", "safe string", "another safe"],
+        })
+        sanitized = sanitize_for_csv_export(df)
+
+        self.assertTrue(sanitized["formula_cmd"].iloc[0].startswith("'="))
+        self.assertTrue(sanitized["formula_cmd"].iloc[1].startswith("'@"))
+        self.assertTrue(sanitized["formula_cmd"].iloc[2].startswith("'+"))
+        self.assertTrue(sanitized["formula_cmd"].iloc[3].startswith("'-"))
+
+        self.assertEqual(sanitized["numeric_neg"].iloc[0], "-15")
+        self.assertEqual(sanitized["numeric_neg"].iloc[1], "-42.5")
+        self.assertEqual(sanitized["numeric_neg"].iloc[3], -99)
+        self.assertEqual(sanitized["numeric_pos"].iloc[0], "+100")
+        self.assertEqual(sanitized["numeric_pos"].iloc[1], "+3.14")
+
+        self.assertTrue(sanitized["control_chars"].iloc[0].startswith("'\t"))
+        self.assertTrue(sanitized["control_chars"].iloc[1].startswith("'\r"))
+        self.assertEqual(sanitized["control_chars"].iloc[2], "safe string")
+
+    def test_formula_injection_and_legitimate_numeric_values(self):
+        from Utils.paths import _sanitize_formula_val
+        cases = [
+            ("=SUM(A1:A2)", "'=SUM(A1:A2)"),
+            ("+123", "+123"),
+            ("-123", "-123"),
+            ("@cmd", "'@cmd"),
+            ("\tprefix", "'\tprefix"),
+            ("\rprefix", "'\rprefix"),
+            (-123, -123),
+            (-42.5, -42.5),
+            ("-123.45", "-123.45"),
+            (42, 42),
+            (3.14, 3.14),
+            ("42", "42"),
+            ("3.14", "3.14"),
+            ("-", "'-"),
+            ("+", "'+"),
+            ("=", "'="),
+            ("@", "'@"),
+            ("-1e5", "-1e5"),
+            ("+1.2e-3", "+1.2e-3"),
+        ]
+        for inp, expected in cases:
+            self.assertEqual(_sanitize_formula_val(inp), expected, f"Failed for {inp}")
+
+
+class HTMLSpanHandlingTests(unittest.TestCase):
+    def test_html_colspan_expands_columns(self):
+        html = """
+        <table>
+          <tr><th>Name</th><th colspan="2">Details</th></tr>
+          <tr><td>Alice</td><td>Developer</td><td>London</td></tr>
+        </table>
+        """
+        df = read_tabular(html.encode("utf-8"), filename="table.html")
+        self.assertEqual(df.shape[1], 3)
+        self.assertEqual(list(df.columns[:2]), ["Name", "Details"])
+
+    def test_html_rowspan_triggers_ai_conversion(self):
+        html = """
+        <table>
+          <tr><th>Name</th><th>Quarter</th><th>Revenue</th></tr>
+          <tr><td rowspan="2">Acme</td><td>Q1</td><td>100</td></tr>
+          <tr><td>Q2</td><td>120</td></tr>
+        </table>
+        """
+        with self.assertRaises(AIConversionRequired):
+            read_tabular(html.encode("utf-8"), filename="complex_table.html")
+
+
+class MLBundleVersionTests(unittest.TestCase):
+    def test_newer_bundle_version_rejected(self):
+        from Utils.ML import load_trained_model
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            m_path = tmp_path / "future_model.joblib"
+            import joblib
+            joblib.dump({"bundle_version": 999, "pipeline": "mock_pipeline"}, m_path)
+            with self.assertRaisesRegex(ValueError, "newer than supported version"):
+                load_trained_model(m_path)
+
+    def test_legacy_bundle_without_version_defaults_to_v1_and_succeeds(self):
+        from Utils.ML import load_trained_model
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            m_path = tmp_path / "legacy_v1_model.joblib"
+            import joblib
+            joblib.dump({"pipeline": "mock_pipeline"}, m_path)
+            bundle = load_trained_model(m_path)
+            self.assertIn("pipeline", bundle)
+
+    def test_invalid_bundle_version_rejected(self):
+        from Utils.ML import load_trained_model
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            m_path = tmp_path / "invalid_model.joblib"
+            import joblib
+            for bad_ver in [0, -1, "v1", 2.5]:
+                joblib.dump({"bundle_version": bad_ver, "pipeline": "mock_pipeline"}, m_path)
+                with self.assertRaises(ValueError):
+                    load_trained_model(m_path)
+
+
+class S3TruncationNoticeTests(unittest.TestCase):
+    def test_s3_truncation_reported_when_exceeding_20k(self):
+        from Utils.S3 import list_s3_datasets
+        class MockClient:
+            def list_objects_v2(self, **kwargs):
+                return {
+                    "Contents": [{"Key": f"data_{i}.csv"} for i in range(100)],
+                    "IsTruncated": True,
+                    "NextContinuationToken": "token",
+                }
+
+        with patch("Utils.S3.MAX_S3_OBJECTS_SCAN", 50):
+            files, meta = list_s3_datasets("mybucket", MockClient(), return_meta=True)
+            self.assertTrue(meta["truncated"])
+            self.assertGreaterEqual(meta["scanned"], 50)
+
+
 if __name__ == "__main__":
     unittest.main()

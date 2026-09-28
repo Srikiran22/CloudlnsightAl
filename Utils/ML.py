@@ -73,6 +73,13 @@ def load_trained_model(path):
     bundle = joblib.load(path)
     if not isinstance(bundle, dict) or "pipeline" not in bundle:
         raise ValueError("The selected file is not a valid CloudInsight model bundle.")
+    bundle_ver = bundle.get("bundle_version", 1)
+    if not isinstance(bundle_ver, int) or bundle_ver < 1 or bundle_ver > MODEL_BUNDLE_VERSION:
+        raise ValueError(
+            f"Model bundle version {bundle_ver} is newer than supported version {MODEL_BUNDLE_VERSION}."
+            if isinstance(bundle_ver, int) and bundle_ver > MODEL_BUNDLE_VERSION
+            else f"Model bundle version {bundle_ver} is unsupported."
+        )
     saved_version = bundle.get("sklearn_version")
     if saved_version and saved_version != _sklearn_version():
         bundle["sklearn_version_mismatch"] = True

@@ -106,9 +106,5 @@ tmp/
 .rememex/
 .codegraph/
 
-# Local agent session history & task scratch (local only)
-AI/SESSIONS.md
-AI/MODEL.md
-AI/TASK.md
-AI/PLAN.md
-AI/history/
+# Agent/session material (local only)
+AI/

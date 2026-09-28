@@ -4,7 +4,7 @@ from pathlib import Path
 from Utils.Preprocessing import remove_duplicates, fill_missing_values, drop_missing_values
 from Utils.paths import (
     AIConversionRequired, DATASETS_DIR, get_unique_filename, list_dataset_files, read_dataset,
-    read_tabular, SUPPORTED_DATASET_EXTENSIONS,
+    read_tabular, sanitize_for_csv_export, SUPPORTED_DATASET_EXTENSIONS,
 )
 from Utils.dataset_ui import (
     dataframe_fingerprint,
@@ -115,7 +115,8 @@ if df is not None:
         invalidate_dataset_cache(cleaned_name)
         set_active_dataset(cleaned_df, cleaned_name)
 
-        src_fp = dataset_fingerprint(selected_filename) if (selected_filename and selected_filename in available_files) else dataframe_fingerprint(df)
+        is_stored = (source_option == "Select from Datasets Folder")
+        src_fp = dataset_fingerprint(selected_filename) if (is_stored and selected_filename) else dataframe_fingerprint(df)
         st.session_state["last_clean_result"] = {
             "source": selected_filename,
             "source_fingerprint": src_fp,
@@ -126,7 +127,8 @@ if df is not None:
         st.success(f"Cleaned dataset saved as `{cleaned_name}`.")
 
     result = st.session_state.get("last_clean_result")
-    current_fp = dataset_fingerprint(selected_filename) if (selected_filename and selected_filename in available_files) else dataframe_fingerprint(df)
+    is_stored = (source_option == "Select from Datasets Folder")
+    current_fp = dataset_fingerprint(selected_filename) if (is_stored and selected_filename) else dataframe_fingerprint(df)
     if (
         result
         and result.get("source") == selected_filename
@@ -148,7 +150,7 @@ if df is not None:
 
         st.dataframe(cleaned_df.head(10), width="stretch")
 
-        csv_bytes = cleaned_df.to_csv(index=False).encode("utf-8")
+        csv_bytes = sanitize_for_csv_export(cleaned_df).to_csv(index=False).encode("utf-8")
         st.download_button(
             label="Download cleaned CSV",
             data=csv_bytes,

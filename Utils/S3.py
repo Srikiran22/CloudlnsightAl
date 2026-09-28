@@ -54,11 +54,12 @@ def describe_s3_error(error):
     return "An unexpected AWS error occurred."
 
 
-def list_s3_datasets(bucket_name, client):
+def list_s3_datasets(bucket_name, client, return_meta=False):
     suffixes = tuple(sorted(SUPPORTED_DATASET_EXTENSIONS))
     files = []
     request = {"Bucket": bucket_name}
     scanned = 0
+    truncated = False
 
     while True:
         response = client.list_objects_v2(**request)
@@ -68,7 +69,10 @@ def list_s3_datasets(bucket_name, client):
             if key.lower().endswith(suffixes):
                 files.append(key)
 
-        if not response.get("IsTruncated") or scanned >= MAX_S3_OBJECTS_SCAN:
+        is_truncated = bool(response.get("IsTruncated"))
+        if not is_truncated or scanned >= MAX_S3_OBJECTS_SCAN:
+            if is_truncated and scanned >= MAX_S3_OBJECTS_SCAN:
+                truncated = True
             break
 
         next_token = response.get("NextContinuationToken")
@@ -76,45 +80,54 @@ def list_s3_datasets(bucket_name, client):
             break
         request["ContinuationToken"] = next_token
 
+    if return_meta:
+        return files, {"truncated": truncated, "scanned": scanned, "max_scanned": MAX_S3_OBJECTS_SCAN}
     return files
 
 
 def download_s3_dataset(bucket_name, file_key, client):
     obj = client.get_object(Bucket=bucket_name, Key=file_key)
-    content_length = obj.get("ContentLength")
-    # same resource guard as local uploads: never stream an unbounded object
-    # into memory just because the bucket holds it
-    if content_length and content_length > MAX_UPLOAD_BYTES:
-        raise ValueError(
-            f"S3 object is about {content_length / (1024 * 1024):.0f} MB; the "
-            f"ingest limit is {MAX_UPLOAD_BYTES // (1024 * 1024)} MB. Download "
-            "it manually and trim the file first."
-        )
-
-    # Stream with a hard byte limit -- remains bounded even if ContentLength is missing
-    stream = obj["Body"]
-    chunks = []
-    bytes_read = 0
-    chunk_size = 64 * 1024
-
-    while True:
-        chunk = stream.read(chunk_size)
-        if not chunk:
-            break
-        bytes_read += len(chunk)
-        if bytes_read > MAX_UPLOAD_BYTES:
-            raise ValueError(
-                f"S3 download exceeded the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit while streaming."
-            )
-        chunks.append(chunk)
-
-    body = b"".join(chunks)
+    stream = obj.get("Body")
     try:
-        df = read_tabular(body, filename=Path(file_key).name)
-    except AIConversionRequired:
-        # unparseable formats still return the raw bytes so callers can save the file
-        return None, body
-    return df, body
+        content_length = obj.get("ContentLength")
+        # same resource guard as local uploads: never stream an unbounded object
+        # into memory just because the bucket holds it
+        if content_length and content_length > MAX_UPLOAD_BYTES:
+            raise ValueError(
+                f"S3 object is about {content_length / (1024 * 1024):.0f} MB; the "
+                f"ingest limit is {MAX_UPLOAD_BYTES // (1024 * 1024)} MB. Download "
+                "it manually and trim the file first."
+            )
+
+        # Stream with a hard byte limit -- remains bounded even if ContentLength is missing
+        chunks = []
+        bytes_read = 0
+        chunk_size = 64 * 1024
+
+        while True:
+            chunk = stream.read(chunk_size)
+            if not chunk:
+                break
+            bytes_read += len(chunk)
+            if bytes_read > MAX_UPLOAD_BYTES:
+                raise ValueError(
+                    f"S3 download exceeded the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit while streaming."
+                )
+            chunks.append(chunk)
+
+        body = b"".join(chunks)
+        try:
+            df = read_tabular(body, filename=Path(file_key).name)
+        except AIConversionRequired:
+            # unparseable formats still return the raw bytes so callers can save the file
+            return None, body
+        return df, body
+    finally:
+        if stream is not None and hasattr(stream, "close"):
+            try:
+                stream.close()
+            except Exception:
+                pass
 
 
 def upload_s3_dataset(df, bucket_name, file_key, client):

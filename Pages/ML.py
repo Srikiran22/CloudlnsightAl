@@ -4,13 +4,13 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 from Utils.theme import plot_template
-from Utils.paths import MODELS_DIR
+from Utils.paths import MODELS_DIR, resolve_dataset_path, sanitize_for_csv_export
 from Utils.ML import (
     detect_problem_type, train_and_evaluate_model,
     save_trained_model, load_trained_model, list_saved_models, predict_with_model
 )
 from Utils.dataset_ui import (
-    dataset_fingerprint, render_sidebar, results_match_active,
+    dataframe_fingerprint, dataset_fingerprint, render_sidebar, results_match_active,
     select_working_dataset,
 )
 
@@ -84,7 +84,12 @@ if st.button("Train & evaluate", type="primary"):
                 random_state=int(random_seed)
             )
             results["dataset_name"] = selected_file
-            results["dataset_fingerprint"] = dataset_fingerprint(selected_file)
+            is_file_backed = False
+            try:
+                is_file_backed = resolve_dataset_path(selected_file).is_file()
+            except Exception:
+                is_file_backed = False
+            results["dataset_fingerprint"] = dataset_fingerprint(selected_file) if is_file_backed else dataframe_fingerprint(df)
             results["target_col"] = target_column
             results["feature_cols"] = list(selected_features)
             st.session_state["ml_results"] = results
@@ -96,7 +101,7 @@ if st.button("Train & evaluate", type="primary"):
             st.error(f"Training failed: {str(e)}")
 
 results = st.session_state.get("ml_results")
-if results_match_active(results, selected_file):
+if results_match_active(results, selected_file, df=df):
     st.markdown("---")
     st.subheader("Evaluation metrics")
 
@@ -241,7 +246,7 @@ with tab_load:
                 st.dataframe(predictions_df.head(20), width="stretch")
 
                 pred_cols = [c for c in predictions_df.columns if c.startswith("prediction")]
-                csv_bytes = predictions_df.to_csv(index=False).encode("utf-8")
+                csv_bytes = sanitize_for_csv_export(predictions_df).to_csv(index=False).encode("utf-8")
                 st.download_button(
                     label="Download full predictions (CSV)",
                     data=csv_bytes,

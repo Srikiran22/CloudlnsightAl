@@ -76,11 +76,16 @@ def dataset_fingerprint(dataset, force_refresh=False):
     """Cryptographic content-derived fingerprint for a dataset file.
 
     Computes a full SHA-256 hash over the actual file content to guarantee
-    exact content identity, so modified or replaced files diverge
-    immediately regardless of matching size, timestamps, or boundary bytes.
+    exact content identity, with metadata-based caching (mtime_ns, size)
+    to avoid redundant disk reads when the file is unchanged.
     """
     path = resolve_dataset_path(dataset)
     path_str = str(path)
+    stat = path.stat()
+    cache_key = (path_str, stat.st_mtime_ns, stat.st_size)
+
+    if not force_refresh and cache_key in _CONTENT_HASH_CACHE:
+        return _CONTENT_HASH_CACHE[cache_key]
 
     hasher = hashlib.sha256()
     with path.open("rb") as f:
@@ -96,7 +101,7 @@ def dataset_fingerprint(dataset, force_refresh=False):
     if len(_CONTENT_HASH_CACHE) >= 128:
         _CONTENT_HASH_CACHE.pop(next(iter(_CONTENT_HASH_CACHE)), None)
 
-    _CONTENT_HASH_CACHE[(path_str, fp)] = fp
+    _CONTENT_HASH_CACHE[cache_key] = fp
     return fp
 
 
@@ -126,7 +131,7 @@ def dataframe_fingerprint(df):
     return hasher.hexdigest()
 
 
-def results_match_active(results, selected_file):
+def results_match_active(results, selected_file, df=None):
     """True when stored analysis results still describe the active dataset.
 
     Guards against the same filename being replaced on disk between training
@@ -139,9 +144,14 @@ def results_match_active(results, selected_file):
     if expected is None:
         return True
     try:
-        return dataset_fingerprint(selected_file) == expected
-    except OSError:
-        return False
+        path = resolve_dataset_path(selected_file)
+        if path.is_file():
+            return dataset_fingerprint(selected_file) == expected
+    except (ValueError, OSError):
+        pass
+    if df is not None:
+        return dataframe_fingerprint(df) == expected
+    return False
 
 
 @st.cache_data(show_spinner="Loading dataset...", max_entries=64)
@@ -195,7 +205,7 @@ def select_working_dataset(selectbox_label, max_rows=None):
     if df_session is not None:
         label = f"Active Session: {name_session}" if name_session else "Active Session"
         options.append(label)
-    options.extend(file for file in files if file != name_session)
+    options.extend(files)
 
     if not options:
         st.warning("No dataset loaded. Ingest one on the **Ingest data** page first.")

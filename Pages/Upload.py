@@ -66,7 +66,12 @@ if upload_mode == "Local file":
                     fh.write(uploaded.getbuffer())
                 parsed.append((target_name, single_df))
             except AIConversionRequired as needed:
-                valid_conv = get_valid_conversion(target_name, needed.raw_text)
+                active_model = st.session_state.get("ai_convert_model")
+                valid_conv = (
+                    get_valid_conversion(raw_name, needed.raw_text, model_name=active_model, extra_instructions="")
+                    if active_model
+                    else None
+                )
                 if valid_conv:
                     st.info(f"Reusing verified conversion `{valid_conv}` for `{target_name}`.")
                     parsed.append((valid_conv, read_dataset(valid_conv)))
@@ -212,12 +217,17 @@ else:
         if st.button("Fetch datasets", disabled=not (aws_key and aws_secret and bucket)):
             try:
                 s3_client = get_s3_client(aws_key, aws_secret, region)
-                s3_files = list_s3_datasets(bucket, s3_client)
+                s3_files, s3_meta = list_s3_datasets(bucket, s3_client, return_meta=True)
                 if s3_files:
                     st.session_state["s3_files"] = s3_files
                     st.success(f"Found {len(s3_files)} dataset(s) in S3 bucket `{bucket}`!")
                 else:
                     st.info(f"No supported data files found in S3 bucket `{bucket}`.")
+                if s3_meta.get("truncated"):
+                    st.warning(
+                        f"Notice: Bucket scan stopped after {s3_meta['scanned']:,} objects to protect performance. "
+                        "Some datasets in large buckets may not be shown."
+                    )
             except Exception as e:
                 logger.warning("s3 listing failed: %s: %s", type(e).__name__, e)
                 st.error(f"S3 connection error: {describe_s3_error(e)}")

@@ -6,11 +6,11 @@ import datetime
 from Utils.PDF import generate_pdf_report
 from Utils.paths import (
     REPORTS_DIR, REPORT_TEMPLATES_DIR, get_dataset_row_count, get_unique_filename,
-    list_dataset_files, safe_stem,
+    list_dataset_files, resolve_dataset_path, safe_stem,
 )
 from Utils.dataset_ui import (
-    dataset_fingerprint, load_dataset_cached, render_sidebar, results_match_active,
-    select_working_dataset,
+    dataframe_fingerprint, dataset_fingerprint, load_dataset_cached, render_sidebar,
+    results_match_active, select_working_dataset,
 )
 
 st.title("PDF report")
@@ -53,16 +53,30 @@ with c1:
 with c2:
     author = st.text_input("Prepared By:", value=default_author)
 
-curr_fp = dataset_fingerprint(selected_file)
-ai_saved = st.session_state.get(f"insights_{selected_file}_{curr_fp}") or (
-    st.session_state.get(f"insights_{selected_file}")
-    if st.session_state.get(f"insights_fp_{selected_file}") == curr_fp
-    else None
-)
+is_file_backed = False
+try:
+    is_file_backed = resolve_dataset_path(selected_file).is_file()
+except Exception:
+    is_file_backed = False
+curr_fp = dataset_fingerprint(selected_file) if is_file_backed else dataframe_fingerprint(df)
+
+latest_ai = st.session_state.get("latest_ai_insights")
+ai_saved = None
+if (
+    latest_ai
+    and latest_ai.get("dataset_name") == selected_file
+    and latest_ai.get("dataset_fingerprint") == curr_fp
+):
+    ai_saved = latest_ai.get("text")
+elif st.session_state.get(f"insights_{selected_file}_{curr_fp}"):
+    ai_saved = st.session_state.get(f"insights_{selected_file}_{curr_fp}")
+
 template_ai_pref = bool((applied_template or {}).get("include_ai", True))
 include_ai = False
 if ai_saved:
     include_ai = st.checkbox("Include Gemini AI Executive Insights section in PDF", value=template_ai_pref)
+    if latest_ai and latest_ai.get("model_name"):
+        st.caption(f"AI insights model: `{latest_ai.get('model_name')}`")
 
 include_charts = st.checkbox(
     "Include charts: histograms, box plots & correlation heatmap (requires matplotlib)",
@@ -127,13 +141,21 @@ def _build_report(dataset_name, dataframe, title, prepared_by, with_charts, ai_i
 if st.button("Generate PDF report", type="primary"):
     with st.spinner("Compiling PDF tables, statistics, and metadata..."):
         try:
+            total_source = None
+            if is_file_backed:
+                try:
+                    total_source = get_dataset_row_count(selected_file)
+                except Exception:
+                    total_source = None
             pdf_filename, pdf_bytes = _build_report(
                 selected_file, df, rep_title, author, include_charts,
                 ai_insights=(ai_saved if include_ai else None),
+                source_rows=total_source or df.shape[0],
+                analyzed_rows=df.shape[0],
             )
             st.session_state["last_pdf_report"] = {
                 "dataset": selected_file,
-                "dataset_fingerprint": dataset_fingerprint(selected_file),
+                "dataset_fingerprint": curr_fp,
                 "filename": pdf_filename,
                 "bytes": pdf_bytes,
             }
@@ -145,7 +167,8 @@ pdf_result = st.session_state.get("last_pdf_report")
 if pdf_result and results_match_active(
     {"dataset_name": pdf_result.get("dataset"),
      "dataset_fingerprint": pdf_result.get("dataset_fingerprint")},
-    selected_file
+    selected_file,
+    df=df,
 ):
     st.download_button(
         label="Download PDF report",

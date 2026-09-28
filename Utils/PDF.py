@@ -499,13 +499,24 @@ def generate_pdf_report(
     # 9 -- optional matplotlib charts
     charts_shown = False
     if include_charts and not num_df.empty:
-        chart_images = _safe_chart(_render_histograms, df, max_charts=4, default=[])
-        heatmap_buffer = _safe_chart(_render_correlation_heatmap, df)
-        box_images = _safe_chart(_render_boxplots, df, max_charts=4, default=[])
+        MAX_CHART_ROWS = 25_000
+        chart_sampled = len(df) > MAX_CHART_ROWS
+        chart_df = df.head(MAX_CHART_ROWS) if chart_sampled else df
+        chart_rows = len(chart_df)
+
+        chart_images = _safe_chart(_render_histograms, chart_df, max_charts=4, default=[])
+        heatmap_buffer = _safe_chart(_render_correlation_heatmap, chart_df)
+        box_images = _safe_chart(_render_boxplots, chart_df, max_charts=4, default=[])
 
         if chart_images or heatmap_buffer or box_images:
             charts_shown = True
             story.append(Paragraph("9. Distribution & Relationship Charts", heading2_style))
+            if chart_sampled:
+                story.append(Paragraph(
+                    f"<i>Note: Charts are rendered using a representative sample of {chart_rows:,} rows "
+                    f"(out of {rows:,} analyzed rows) for performance and visual clarity.</i>",
+                    note_style
+                ))
 
             def _image_grid(images, image_width=260, image_height=150):
                 grid_rows = []

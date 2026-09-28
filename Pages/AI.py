@@ -104,8 +104,15 @@ with tab_insights:
                     model_name=chosen_model
                 )
                 st.session_state[insights_key] = insights_text
-                st.session_state[f"insights_{selected_file}"] = insights_text
-                st.session_state[f"insights_fp_{selected_file}"] = active_fp
+                st.session_state["latest_ai_insights"] = {
+                    "dataset_name": selected_file,
+                    "dataset_fingerprint": active_fp,
+                    "model_name": chosen_model,
+                    "excluded_cols": sorted(list(excluded_cols)),
+                    "ctx_hash": ctx_hash,
+                    "text": insights_text,
+                }
+                st.session_state[f"insights_{selected_file}_{active_fp}"] = insights_text
             except GeminiError as e:
                 st.error(f"Gemini error — {e}")
             except Exception as e:

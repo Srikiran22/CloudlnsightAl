@@ -15,14 +15,14 @@ GEMINI_MODELS = [
     "gemini-3.5-flash",
     "gemini-2.5-flash",
     "gemini-2.5-pro",
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
 ]
 DEPRECATED_GEMINI_MODELS = {
     "gemini-2.0-flash": "gemini-3.8-flash",
     "gemini-2.0-flash-exp": "gemini-3.8-flash",
-    "gemini-1.0-pro": "gemini-1.5-pro",
-    "gemini-pro": "gemini-1.5-pro",
+    "gemini-1.5-flash": "gemini-3.8-flash",
+    "gemini-1.5-pro": "gemini-2.5-pro",
+    "gemini-1.0-pro": "gemini-2.5-pro",
+    "gemini-pro": "gemini-2.5-pro",
 }
 
 
@@ -173,58 +173,26 @@ def _new_sdk_client(api_key):
         ) from error
 
 
-def _legacy_call(model, prompt):
-    # legacy SDK takes per-request options; seconds here, unlike the new SDK.
-    # The legacy transport ALSO self-retries by default, which would multiply
-    # with _generate_content's own bounded retries -- try to disable it, but
-    # never lose the timeout over it.
+def _generate_once(api_key, model_name, prompt):
     try:
-        return model.generate_content(
-            prompt,
-            request_options={"timeout": REQUEST_TIMEOUT_SECONDS, "retry": None},
-        )
-    except TypeError as error:
-        message = str(error)
-        if "retry" in message:
-            logger.warning(
-                "installed google-generativeai rejects disabling its internal "
-                "retries (%s); keeping timeout, SDK retries remain active",
-                _redact(message, ""),
-            )
-            try:
-                return model.generate_content(
-                    prompt, request_options={"timeout": REQUEST_TIMEOUT_SECONDS}
-                )
-            except TypeError:
-                pass
-        logger.error(
-            "installed google-generativeai ignores request_options (%s); "
-            "failing closed to prevent unbounded requests",
-            message,
-        )
+        import importlib
+        importlib.import_module("google.genai")
+    except ImportError as error:
         raise GeminiError(
-            "Installed google-generativeai SDK does not support request timeout configuration. Please upgrade google-generativeai or google-genai.",
+            "The google-genai SDK is required for Gemini integration. Please install google-genai>=1.0.0.",
             kind="sdk",
             retryable=False,
         ) from error
 
-
-def _generate_once(api_key, model_name, prompt):
+    client = _new_sdk_client(api_key)
     try:
-        from google import genai
-    except ImportError:
-        genai = None
-
-    if genai is not None:
-        client = _new_sdk_client(api_key)
         return client.models.generate_content(model=model_name, contents=prompt)
-
-    # older installs may still ship only the retired google-generativeai package
-    import google.generativeai as legacy_genai
-
-    legacy_genai.configure(api_key=api_key)
-    model = legacy_genai.GenerativeModel(model_name)
-    return _legacy_call(model, prompt)
+    finally:
+        if hasattr(client, "close"):
+            try:
+                client.close()
+            except Exception:
+                pass
 
 
 def _generate_content(api_key, model_name, prompt):

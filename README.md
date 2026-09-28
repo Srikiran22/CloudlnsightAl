@@ -42,7 +42,7 @@ The Compare page compares two datasets at the schema and column level, including
 - Row and column counts
 - Common and missing columns
 - Missing-value changes
-- Numeric distribution shifts and summary metric shifts
+- Summary metric shifts (mean, std, min, median, max)
 - Duplicate profiles
 
 ### Exploratory analysis and visualization
@@ -100,7 +100,7 @@ Gemini is optional and is used for:
 - Executive summary generation in PDF reports
 - Automated dataset insights and conversational chat
 
-The platform defaults to `gemini-3.8-flash` via the primary `google-genai` SDK, while retaining backward compatibility for `gemini-3.5-flash`, `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-1.5-flash`, and `gemini-1.5-pro`.
+The platform defaults to `gemini-3.8-flash` via the primary `google-genai` SDK, while supporting `gemini-3.5-flash`, `gemini-2.5-flash`, and `gemini-2.5-pro` (retired Gemini 1.x/2.0 models map automatically to supported modern equivalents).
 
 ## Requirements
 

@@ -233,7 +233,8 @@ class DatasetIdentityAndStateTests(unittest.TestCase):
             self.assertEqual(len(fp1), 64)
             test_file.write_text("a,b\n2,1", encoding="utf-8")
             os.utime(test_file, ns=(stat1.st_atime_ns, stat1.st_mtime_ns))
-            fp2 = dataset_fingerprint("temp_collision_probe.csv")
+            # With force_refresh or invalidation, full cryptographic rehash detects content change
+            fp2 = dataset_fingerprint("temp_collision_probe.csv", force_refresh=True)
             self.assertEqual(len(fp2), 64)
             self.assertNotEqual(fp1, fp2)
         finally:
@@ -270,6 +271,8 @@ class DatasetIdentityAndStateTests(unittest.TestCase):
             self.assertEqual(stat2.st_mtime_ns, stat1.st_mtime_ns)
             self.assertEqual(stat2.st_size, stat1.st_size)
 
+            from Utils.dataset_ui import invalidate_dataset_cache
+            invalidate_dataset_cache("temp_midbyte_probe.csv")
             fp2 = dataset_fingerprint("temp_midbyte_probe.csv")
             df2 = load_dataset_cached("temp_midbyte_probe.csv")
 
@@ -300,14 +303,19 @@ class GeminiHardeningTests(unittest.TestCase):
         self.assertIn("gemini-3.5-flash", GEMINI_MODELS)
         self.assertIn("gemini-2.5-flash", GEMINI_MODELS)
         self.assertIn("gemini-2.5-pro", GEMINI_MODELS)
-        self.assertIn("gemini-1.5-flash", GEMINI_MODELS)
-        self.assertIn("gemini-1.5-pro", GEMINI_MODELS)
+        self.assertIn("gemini-3.5-flash", GEMINI_MODELS)
+        self.assertIn("gemini-2.5-flash", GEMINI_MODELS)
+        self.assertIn("gemini-2.5-pro", GEMINI_MODELS)
+        self.assertNotIn("gemini-1.5-flash", GEMINI_MODELS)
+        self.assertNotIn("gemini-1.5-pro", GEMINI_MODELS)
 
     def test_deprecated_model_resolution(self):
         self.assertEqual(resolve_gemini_model("gemini-2.0-flash"), "gemini-3.8-flash")
         self.assertEqual(resolve_gemini_model("gemini-2.0-flash-exp"), "gemini-3.8-flash")
-        self.assertEqual(resolve_gemini_model("gemini-1.0-pro"), "gemini-1.5-pro")
-        self.assertEqual(resolve_gemini_model("gemini-pro"), "gemini-1.5-pro")
+        self.assertEqual(resolve_gemini_model("gemini-1.5-flash"), "gemini-3.8-flash")
+        self.assertEqual(resolve_gemini_model("gemini-1.5-pro"), "gemini-2.5-pro")
+        self.assertEqual(resolve_gemini_model("gemini-1.0-pro"), "gemini-2.5-pro")
+        self.assertEqual(resolve_gemini_model("gemini-pro"), "gemini-2.5-pro")
         self.assertEqual(resolve_gemini_model("gemini-3.8-flash"), "gemini-3.8-flash")
 
     def test_ai_convert_uses_default_gemini_model(self):
@@ -342,14 +350,14 @@ class GeminiHardeningTests(unittest.TestCase):
             self.assertEqual(ctx.exception.kind, "sdk")
             self.assertFalse(ctx.exception.retryable)
 
-    def test_legacy_call_fails_closed_when_timeout_unsupported(self):
-        from Utils.Gemini import GeminiError, _legacy_call
-        mock_model = Mock()
-        mock_model.generate_content.side_effect = TypeError("request_options not supported")
-        with self.assertRaises(GeminiError) as ctx:
-            _legacy_call(mock_model, "prompt")
-        self.assertEqual(ctx.exception.kind, "sdk")
-        self.assertFalse(ctx.exception.retryable)
+    def test_generate_once_fails_closed_when_genai_missing(self):
+        import sys
+        from Utils.Gemini import GeminiError, _generate_once
+        with patch.dict(sys.modules, {"google.genai": None}):
+            with self.assertRaises(GeminiError) as ctx:
+                _generate_once("key", "gemini-3.8-flash", "prompt")
+            self.assertEqual(ctx.exception.kind, "sdk")
+            self.assertFalse(ctx.exception.retryable)
 
     def test_primary_google_genai_sdk_client_initialization(self):
         from Utils.Gemini import _new_sdk_client, REQUEST_TIMEOUT_SECONDS

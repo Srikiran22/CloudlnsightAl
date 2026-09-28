@@ -111,6 +111,7 @@ def record_conversion(
     model_name=None,
     extra_instructions=None,
     manifest_path=None,
+    datasets_dir=None,
 ):
     """Record provenance metadata for an AI-converted file in the manifest."""
     ensure_project_directories()
@@ -122,15 +123,30 @@ def record_conversion(
         except Exception:
             manifest = {}
     prov_hash = compute_conversion_provenance(raw_text, model_name=model_name, extra_instructions=extra_instructions)
+    target_dir = Path(datasets_dir) if datasets_dir is not None else (
+        manifest_file.parent if (manifest_file.parent / converted_name).is_file()
+        else (manifest_file.parent / "Datasets" if (manifest_file.parent / "Datasets" / converted_name).is_file() else DATASETS_DIR)
+    )
+    conv_path = target_dir / converted_name
+    output_hash = ""
+    if conv_path.is_file():
+        hasher = hashlib.sha256()
+        with conv_path.open("rb") as f:
+            while chunk := f.read(64 * 1024):
+                hasher.update(chunk)
+        output_hash = hasher.hexdigest()
+
     manifest[converted_name] = {
         "source_name": source_name,
         "provenance_hash": prov_hash,
         "model_name": (model_name or "").strip(),
+        "extra_instructions": (extra_instructions or "").strip(),
         "extra_instructions_hash": (
             hashlib.sha256((extra_instructions or "").strip().encode("utf-8")).hexdigest()[:16]
             if extra_instructions
             else ""
         ),
+        "output_hash": output_hash,
         "version": CONVERSION_MANIFEST_VERSION,
         "source_length": len(raw_text),
     }
@@ -154,14 +170,43 @@ def get_valid_conversion(
         manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
     except Exception:
         return None
-    prov_hash = compute_conversion_provenance(raw_text, model_name=model_name, extra_instructions=extra_instructions)
+
+    norm_source = Path(source_name).name
+    req_instr = (extra_instructions or "").strip()
+    req_model = (model_name or "").strip().lower() if model_name is not None else None
+
     for conv_name, meta in manifest.items():
-        if (
-            meta.get("source_name") == source_name
-            and meta.get("provenance_hash") == prov_hash
-            and (target_dir / conv_name).exists()
-        ):
-            return conv_name
+        if meta.get("version") != CONVERSION_MANIFEST_VERSION:
+            continue
+        if meta.get("source_name") != norm_source and meta.get("source_name") != source_name:
+            continue
+
+        meta_model = (meta.get("model_name") or "").strip().lower()
+        if req_model is not None and meta_model != req_model:
+            continue
+
+        meta_instr = (meta.get("extra_instructions") or "").strip()
+        if meta_instr != req_instr:
+            continue
+
+        entry_model = meta.get("model_name", "")
+        expected_prov = compute_conversion_provenance(raw_text, model_name=entry_model, extra_instructions=req_instr)
+        if meta.get("provenance_hash") != expected_prov:
+            continue
+
+        conv_file = target_dir / conv_name
+        if not conv_file.is_file():
+            continue
+
+        expected_out_hash = meta.get("output_hash")
+        if expected_out_hash:
+            hasher = hashlib.sha256()
+            with conv_file.open("rb") as f:
+                while chunk := f.read(64 * 1024):
+                    hasher.update(chunk)
+            if hasher.hexdigest() != expected_out_hash:
+                continue
+        return conv_name
     return None
 
 
@@ -171,12 +216,14 @@ def get_dataset_row_count(dataset):
     suffix = path.suffix.lower()
 
     if suffix in {".csv", ".tsv"}:
+        delimiter = "\t" if suffix == ".tsv" else ","
         try:
-            count = 0
-            with path.open("rb") as f:
-                while chunk := f.read(1024 * 1024):
-                    count += chunk.count(b"\n")
-            return max(count - 1, 0) if count > 0 else 0
+            with path.open("r", encoding="utf-8", errors="replace", newline="") as f:
+                reader = csv.reader(f, delimiter=delimiter)
+                header = next(reader, None)
+                if header is None:
+                    return 0
+                return sum(1 for _ in reader)
         except Exception:
             pass
 
@@ -190,11 +237,8 @@ def get_dataset_row_count(dataset):
 
     if suffix in {".jsonl", ".ndjson"}:
         try:
-            count = 0
-            with path.open("rb") as f:
-                while chunk := f.read(1024 * 1024):
-                    count += chunk.count(b"\n")
-            return count
+            with path.open("r", encoding="utf-8", errors="replace") as f:
+                return sum(1 for line in f if line.strip())
         except Exception:
             pass
 
@@ -265,6 +309,39 @@ def _sanitize_unhashable_cells(df):
         if df[column].map(lambda value: isinstance(value, (list, dict, set, np.ndarray))).any():
             df[column] = df[column].map(_serialize_cell)
     return df
+
+
+def _sanitize_formula_val(val):
+    if not isinstance(val, str):
+        return val
+    if not val:
+        return val
+    if val[0] in ("\t", "\r"):
+        return f"'{val}"
+    s = val.strip()
+    if not s:
+        return val
+    if s[0] in ("=", "+", "-", "@"):
+        try:
+            float(s)
+            return val
+        except ValueError:
+            return f"'{val}"
+    return val
+
+
+def sanitize_for_csv_export(df):
+    """Prepend single quote to string cells starting with formula triggers
+    (=, +, -, @, \\t, \\r) unless the value is a valid numeric literal.
+    Neutralizes CSV formula injection (DDE) when downloaded CSV is opened in Excel/Calc.
+    """
+    if df is None:
+        return None
+    df_out = df.copy()
+    for col in df_out.columns:
+        if df_out[col].dtype == object or pd.api.types.is_string_dtype(df_out[col]):
+            df_out[col] = df_out[col].map(_sanitize_formula_val)
+    return df_out
 
 
 def _read_csv_from_buffer(buffer, nrows=None):
@@ -456,9 +533,11 @@ class _HTMLTableParser(HTMLParser):
     def __init__(self):
         super().__init__()
         self.tables = []
+        self.has_rowspan = False
         self._table = None
         self._row = None
         self._cell = None
+        self._current_colspan = 1
 
     def handle_starttag(self, tag, attrs):
         if tag == "table":
@@ -467,6 +546,18 @@ class _HTMLTableParser(HTMLParser):
             self._row = []
         elif tag in {"td", "th"} and self._row is not None:
             self._cell = []
+            attrs_dict = dict(attrs)
+            try:
+                rspan = int(attrs_dict.get("rowspan", 1))
+                if rspan > 1:
+                    self.has_rowspan = True
+            except (ValueError, TypeError):
+                pass
+            try:
+                cspan = int(attrs_dict.get("colspan", 1))
+                self._current_colspan = min(max(cspan, 1), 100)
+            except (ValueError, TypeError):
+                self._current_colspan = 1
 
     def handle_endtag(self, tag):
         if tag == "table" and self._table is not None:
@@ -478,8 +569,13 @@ class _HTMLTableParser(HTMLParser):
                 self._table.append(self._row)
             self._row = None
         elif tag in {"td", "th"} and self._cell is not None:
-            self._row.append(" ".join("".join(self._cell).split()))
+            cell_text = " ".join("".join(self._cell).split())
+            self._row.append(cell_text)
+            if self._current_colspan > 1:
+                for _ in range(self._current_colspan - 1):
+                    self._row.append("")
             self._cell = None
+            self._current_colspan = 1
 
     def handle_data(self, data):
         if self._cell is not None:
@@ -490,6 +586,12 @@ def _read_html_from_buffer(buffer):
     html_text = _decode_text_buffer(buffer)
     parser = _HTMLTableParser()
     parser.feed(html_text)
+
+    if parser.has_rowspan:
+        raise AIConversionRequired(
+            "HTML table contains complex rowspan spans; AI conversion required.",
+            raw_text=html_text,
+        )
 
     if not parser.tables:
         raise AIConversionRequired(

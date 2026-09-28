@@ -6,7 +6,7 @@ import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import joblib
 import numpy as np
@@ -755,39 +755,12 @@ class GeminiTimeoutWiringTests(unittest.TestCase):
         self.assertEqual(calls, [("gemini-1.5-flash", "prompt")])
         self.assertEqual(response.text, "ok")
 
-    def test_legacy_path_receives_seconds_timeout(self):
-        from Utils.Gemini import REQUEST_TIMEOUT_SECONDS, _legacy_call
-        model = Mock()
-        model.generate_content.return_value = types.SimpleNamespace(text="ok")
-        _legacy_call(model, "prompt")
-        model.generate_content.assert_called_once_with(
-            "prompt",
-            request_options={"timeout": REQUEST_TIMEOUT_SECONDS, "retry": None},
-        )
-
-    def test_new_sdk_fallback_is_loud_not_silent(self):
-        from Utils.Gemini import GeminiError, _new_sdk_client
-
-        class OldClient:
-            def __init__(self, **kwargs):
-                if "http_options" in kwargs:
-                    raise TypeError("unexpected keyword 'http_options'")
-                self.models = types.SimpleNamespace()
-
-        with self._fake_new_sdk(OldClient):
+    def test_generate_once_fails_closed_when_genai_not_installed(self):
+        import sys
+        from Utils.Gemini import GeminiError, _generate_once
+        with patch.dict(sys.modules, {"google.genai": None}):
             with self.assertRaises(GeminiError) as ctx:
-                _new_sdk_client("key")
-        self.assertIn("timeout configuration", str(ctx.exception))
-        self.assertEqual(ctx.exception.kind, "sdk")
-        self.assertFalse(ctx.exception.retryable)
-
-    def test_legacy_fallback_is_loud_not_silent(self):
-        from Utils.Gemini import GeminiError, _legacy_call
-        model = Mock()
-        model.generate_content.side_effect = TypeError("request_options not supported")
-        with self.assertRaises(GeminiError) as ctx:
-            _legacy_call(model, "p")
-        self.assertIn("timeout configuration", str(ctx.exception))
+                _generate_once("key", "gemini-3.8-flash", "prompt")
         self.assertEqual(ctx.exception.kind, "sdk")
         self.assertFalse(ctx.exception.retryable)
 
@@ -841,21 +814,20 @@ class GeminiTimeoutWiringTests(unittest.TestCase):
             elapsed = _time.perf_counter() - t0
             self.assertLess(elapsed, 0.5)  # no real sleeping in this helper
 
-    def test_legacy_retry_disable_degrades_to_timeout_only(self):
-        from Utils.Gemini import REQUEST_TIMEOUT_SECONDS, _legacy_call
-        model = Mock()
-        model.generate_content.side_effect = [
-            TypeError("unexpected keyword 'retry'"),
-            types.SimpleNamespace(text="ok"),
-        ]
-        with self.assertLogs("cloudinsight.Gemini", level="WARNING") as captured:
-            _legacy_call(model, "p")
-        first_call = model.generate_content.call_args_list[0]
-        self.assertEqual(first_call.kwargs["request_options"]["retry"], None)
-        second_call = model.generate_content.call_args_list[1]
-        self.assertEqual(second_call.kwargs,
-                         {"request_options": {"timeout": REQUEST_TIMEOUT_SECONDS}})
-        self.assertIn("SDK retries remain active", "\n".join(captured.output))
+    def test_generate_once_closes_client_on_exit(self):
+        from Utils.Gemini import _generate_once
+        closed = []
+        class MockClient:
+            def __init__(self):
+                self.models = types.SimpleNamespace(
+                    generate_content=lambda **kwargs: types.SimpleNamespace(text="res")
+                )
+            def close(self):
+                closed.append(True)
+        with patch("Utils.Gemini._new_sdk_client", return_value=MockClient()):
+            res = _generate_once("key", "gemini-3.8-flash", "prompt")
+        self.assertEqual(res.text, "res")
+        self.assertEqual(len(closed), 1)
 
 
 class XMLSecurityTests(unittest.TestCase):
