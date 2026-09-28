@@ -10,7 +10,7 @@ import pandas as pd
 from Utils.paths import (
     get_unique_filename, enforce_size_limit, MAX_UPLOAD_BYTES,
     record_conversion, get_valid_conversion, read_tabular,
-    DATASETS_DIR,
+    DATASETS_DIR, ensure_project_directories,
 )
 from Utils.AIConvert import _field_count_quote_aware
 from Utils.S3 import download_s3_dataset
@@ -30,6 +30,8 @@ from Utils.Charts import (
 )
 from Utils.quality import quality_metrics, quality_index
 from Utils.PDF import generate_pdf_report
+
+ensure_project_directories()
 
 
 class UploadSafetyAndCollisionsTests(unittest.TestCase):
