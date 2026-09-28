@@ -1,6 +1,8 @@
 # Dataset-comparison math, extracted from the Compare page so it can be
 # tested without Streamlit. All thresholds live here.
 
+import json
+import numpy as np
 import pandas as pd
 
 
@@ -13,12 +15,12 @@ def schema_diff(df_a, df_b):
 
     Returns (common, only_a, only_b) as sorted lists of column names.
     """
-    cols_a = set(df_a.columns)
-    cols_b = set(df_b.columns)
+    cols_a = {str(c) for c in df_a.columns}
+    cols_b = {str(c) for c in df_b.columns}
     return (
-        sorted(cols_a & cols_b),
-        sorted(cols_a - cols_b),
-        sorted(cols_b - cols_a),
+        sorted(cols_a & cols_b, key=str),
+        sorted(cols_a - cols_b, key=str),
+        sorted(cols_b - cols_a, key=str),
     )
 
 
@@ -29,6 +31,32 @@ def _missing_pct(series):
 def _numeric_mean(series):
     numeric = pd.to_numeric(series, errors="coerce").dropna()
     return float(numeric.mean()) if not numeric.empty else None
+
+
+def _safe_nunique(series):
+    """Safe nunique that handles in-memory unhashable objects (lists/dicts/sets/ndarrays)
+    via deterministic serialization fallback, preserving accurate uniqueness counts."""
+    try:
+        return int(series.nunique(dropna=True))
+    except TypeError:
+        def _to_hashable(val):
+            if val is None:
+                return None
+            if isinstance(val, np.ndarray):
+                val = val.tolist()
+            else:
+                try:
+                    if pd.isna(val):
+                        return None
+                except (ValueError, TypeError):
+                    pass
+            if isinstance(val, (list, dict, set)):
+                try:
+                    return json.dumps(val, sort_keys=True)
+                except Exception:
+                    return str(val)
+            return str(val)
+        return int(series.dropna().map(_to_hashable).nunique())
 
 
 def column_drift_rows(df_a, df_b):
@@ -42,9 +70,17 @@ def column_drift_rows(df_a, df_b):
     the mean shifts by >= 10 percent (or notable absolute delta for near-zero baselines).
     """
     common, _, _ = schema_diff(df_a, df_b)
+    df_a_clean = df_a.copy()
+    df_b_clean = df_b.copy()
+    df_a_clean.columns = [str(c) for c in df_a.columns]
+    df_b_clean.columns = [str(c) for c in df_b.columns]
     rows = []
     for col in common:
-        sa, sb = df_a[col], df_b[col]
+        sa, sb = df_a_clean[col], df_b_clean[col]
+        if isinstance(sa, pd.DataFrame):
+            sa = sa.iloc[:, 0]
+        if isinstance(sb, pd.DataFrame):
+            sb = sb.iloc[:, 0]
         dtype_match = str(sa.dtype) == str(sb.dtype)
         miss_a, miss_b = _missing_pct(sa), _missing_pct(sb)
         mean_a, mean_b = _numeric_mean(sa), _numeric_mean(sb)
@@ -77,8 +113,8 @@ def column_drift_rows(df_a, df_b):
             "Mean A": round(mean_a, 3) if mean_a is not None else None,
             "Mean B": round(mean_b, 3) if mean_b is not None else None,
             "Mean Shift %": round(mean_drift, 1) if mean_drift is not None else ("N/A (baseline ≈ 0)" if is_near_zero_baseline else None),
-            "Unique A": int(sa.nunique(dropna=True)),
-            "Unique B": int(sb.nunique(dropna=True)),
+            "Unique A": _safe_nunique(sa),
+            "Unique B": _safe_nunique(sb),
             "Flags": "; ".join(flags) if flags else "OK",
         })
     return rows

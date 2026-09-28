@@ -6,6 +6,7 @@ import pandas as pd
 
 from Utils.Gemini import DEFAULT_GEMINI_MODEL, _generate_content
 from Utils.logsys import get_logger
+from Utils.paths import normalize_and_deduplicate_columns
 
 logger = get_logger("AIConvert")
 
@@ -58,8 +59,7 @@ _HEADER_TOKEN_RE = re.compile(r"^[\w.\-/%()]+$")
 
 def _normalize(df):
     df = df.dropna(axis=0, how="all").dropna(axis=1, how="all")
-    df.columns = [str(column).strip() for column in df.columns]
-    return df
+    return normalize_and_deduplicate_columns(df)
 
 
 def _cap_columns(df):

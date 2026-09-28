@@ -102,7 +102,8 @@ def create_bar_count_plot(df, x_col, y_col=None, agg_func="Count", hue_col=None,
             grouped,
             x=x_col if orientation == "v" else y_col,
             y=y_col if orientation == "v" else x_col,
-            color=x_col,
+            color=hue_col,
+            color_discrete_sequence=[px.colors.qualitative.Plotly[0]] if not hue_col else None,
             orientation=orientation,
             template=plot_template()
         )
@@ -112,12 +113,13 @@ def create_bar_count_plot(df, x_col, y_col=None, agg_func="Count", hue_col=None,
             df,
             x=x_col if orientation == "v" else None,
             y=x_col if orientation == "h" else None,
-            color=hue_col or x_col,
+            color=hue_col,
+            color_discrete_sequence=[px.colors.qualitative.Plotly[0]] if not hue_col else None,
             orientation=orientation,
             template=plot_template()
         )
         fig.update_layout(
-            title=f"Frequency Count of <b>{x_col}</b>",
+            title=f"Frequency Count of <b>{x_col}</b>" + (f" by {hue_col}" if hue_col else ""),
             xaxis_title=x_col if orientation == "v" else "Count",
             yaxis_title="Count" if orientation == "v" else x_col
         )

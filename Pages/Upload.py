@@ -17,7 +17,7 @@ from Utils.paths import (
 )
 from Utils.AIConvert import convert_to_dataframe
 from Utils.batch import merge_frames
-from Utils.dataset_ui import render_sidebar, set_active_dataset
+from Utils.dataset_ui import render_sidebar, set_active_dataset, invalidate_dataset_cache
 
 logger = get_logger("Upload")
 
@@ -64,6 +64,7 @@ if upload_mode == "Local file":
                 uploaded.seek(0)
                 with open(DATASETS_DIR / target_name, "wb") as fh:
                     fh.write(uploaded.getbuffer())
+                invalidate_dataset_cache(target_name)
                 parsed.append((target_name, single_df))
             except AIConversionRequired as needed:
                 active_model = st.session_state.get("ai_convert_model")
@@ -155,6 +156,7 @@ if upload_mode == "Local file":
                                 converted_name = get_unique_filename(target_stem, directory=DATASETS_DIR)
                                 DATASETS_DIR.mkdir(parents=True, exist_ok=True)
                                 converted.to_csv(DATASETS_DIR / converted_name, index=False)
+                                invalidate_dataset_cache(converted_name)
                                 record_conversion(
                                     converted_name,
                                     fname,
@@ -188,6 +190,7 @@ if upload_mode == "Local file":
             file_name = get_unique_filename("combined_dataset.csv", directory=DATASETS_DIR)
             DATASETS_DIR.mkdir(parents=True, exist_ok=True)
             combined.to_csv(DATASETS_DIR / file_name, index=False)
+            invalidate_dataset_cache(file_name)
             df = combined
 
 else:
@@ -251,6 +254,7 @@ else:
                         DATASETS_DIR.mkdir(parents=True, exist_ok=True)
                         local_s3_path = DATASETS_DIR / file_name
                         local_s3_path.write_bytes(raw_bytes)
+                        invalidate_dataset_cache(file_name)
                         if df is None:
                             st.warning(
                                 f"`{file_name}` was downloaded to `Datasets/` but has no native table "

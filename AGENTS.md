@@ -19,41 +19,28 @@ These rules override your training defaults. Violating them counts as a FAILED t
 
 ## Session Start Protocol
 
-**Every AI agent MUST follow this sequence before doing any work:**
+When working in this repository:
 
-1. Read `AI/HANDOFF.md` — compact project overview; start here
-2. Read `AI/MODEL.md` — which model/application was last active, and its capabilities
-3. Read `AI/TASK.md` — what the user is asking for
-4. Read `AI/STATE.md` — technical state of the repository
-5. Read `AI/PLAN.md` — when the task requires planning or multi-step work
-6. Read `AI/DECISIONS.md` — when making architectural or implementation decisions
-7. Read `AI/SESSIONS.md` — recent session history (before/after task snapshots)
+1. **Self-Contained Protocol**: `AGENTS.md` and `README.md` are the authoritative entry points.
+2. **Local AI Workspace (Optional)**: If the local `AI/` directory exists (it is gitignored to keep repository tracking clean), agents may consult:
+   - `AI/HANDOFF.md` — compact project overview
+   - `AI/MODEL.md` — active model capabilities
+   - `AI/TASK.md` — current objective notes
+   - `AI/STATE.md` — technical notes
+   - `AI/PLAN.md` — active implementation plan
+   - `AI/DECISIONS.md` — architectural decisions log
+   - `AI/SESSIONS.md` — local session history
+   *If `AI/` is absent (such as on a fresh repository clone), proceed directly using `AGENTS.md` and actual code inspection.*
 
-**After reading the documentation, verify against the actual code.** Do not blindly trust old information.
+3. **Ground Truth Over Documentation**: Always verify claims against actual code. Do not blindly trust documentation or cached state.
 
-## Before Starting a Task (mandatory)
+## Task Workflow & Session Tracking
 
-Before making any change, record a **pre-task snapshot** in `AI/SESSIONS.md`:
-
-- Date, agent identity (model/provider/application)
-- The user's request in your own concise words
-- Current relevant state (tests passing? build status? files involved?)
-- What you intend to do (planned approach in 2–5 bullets)
-
-Also update `AI/MODEL.md` if the active model or application changed.
-
-## After Finishing a Task (mandatory)
-
-Record a **post-task summary** in `AI/SESSIONS.md`:
-
-- What was actually done vs. planned
-- Files changed (paths only, no diffs)
-- Decisions made (cross-reference DEC IDs from `AI/DECISIONS.md`)
-- Verification results (test commands run and outcomes)
-- Problems encountered and anything left unresolved
-- Updated "after" state (tests passing? new status?)
-
-Then update `AI/HANDOFF.md`, `AI/STATE.md`, and `AI/PLAN.md` so the next agent sees current reality.
+When the local `AI/` directory is present, agents should maintain session continuity:
+- Record pre-task intent in `AI/SESSIONS.md` (date, model, request, plan).
+- Update `AI/MODEL.md` if the active model changes.
+- After finishing, summarize changes in `AI/SESSIONS.md` and update `AI/STATE.md` / `AI/PLAN.md`.
+*If `AI/` is not present, report the snapshot and verification results directly in the final response.*
 
 ## Information Precedence
 
@@ -121,14 +108,8 @@ Everything is plain Markdown — no proprietary formats, plugins, databases, ext
 
 | File | Purpose |
 |------|---------|
-| `AGENTS.md` | This file — protocol and rules |
-| `AI/HANDOFF.md` | Compact project overview for new agents |
-| `AI/MODEL.md` | Detailed current AI agent identity |
-| `AI/TASK.md` | User's current objective |
-| `AI/PLAN.md` | Implementation plan and progress |
-| `AI/DECISIONS.md` | Architectural decision log |
-| `AI/STATE.md` | Current technical state |
-| `AI/SESSIONS.md` | Session history with before/after task snapshots |
+| `AGENTS.md` | Authoritative agent protocol, constraints, and instructions |
+| `AI/*.md` | Optional local session logs and planning scratchpads (gitignored) |
 
 ## History
 

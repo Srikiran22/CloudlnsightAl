@@ -14,11 +14,17 @@ def _slot(name):
     return f"{name}_secret"
 
 
+def _ver(name):
+    return f"{name}_ver"
+
+
 def ask(name, label, help_text=""):
     slot = _slot(name)
+    ver = st.session_state.get(_ver(name), 0) if hasattr(st, "session_state") else 0
+    w_key = f"{name}_widget_{ver}"
     if slot not in st.session_state:
         st.session_state[slot] = ""
-    value = st.text_input(label, value=st.session_state[slot], type="password", help=help_text)
+    value = st.text_input(label, value=st.session_state[slot], type="password", help=help_text, key=w_key)
     st.session_state[slot] = value
     return value
 
@@ -43,6 +49,7 @@ def release(*names, **opts):
     wiped = []
     for name in names:
         old = st.session_state.pop(_slot(name), None)
+        st.session_state[_ver(name)] = st.session_state.get(_ver(name), 0) + 1
         if old not in (None, ""):
             wiped.append(name)
     return wiped
@@ -51,6 +58,7 @@ def release(*names, **opts):
 def drop(*names):
     for name in names:
         st.session_state.pop(_slot(name), None)
+        st.session_state[_ver(name)] = st.session_state.get(_ver(name), 0) + 1
 
 
 @contextmanager

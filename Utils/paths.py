@@ -5,6 +5,7 @@ import json
 from html.parser import HTMLParser
 from pathlib import Path
 from xml.etree import ElementTree
+import xml.parsers.expat
 
 import numpy as np
 import pandas as pd
@@ -302,12 +303,45 @@ def _serialize_cell(value):
     return value
 
 
+def normalize_and_deduplicate_columns(df):
+    """Normalize column names to stripped strings and deduplicate collisions (col, col_2, ...).
+    Eliminates mixed-type sorting/escaping crashes and DataFrame-returning duplicate indexing.
+    """
+    if df is None or not hasattr(df, "columns"):
+        return df
+    used_names = set()
+    counts = {}
+    unique_columns = []
+    for col in df.columns:
+        name = str(col).strip()
+        if not name:
+            name = "unnamed"
+        if name not in used_names:
+            candidate = name
+            counts[name] = 1
+        else:
+            count = counts.get(name, 1) + 1
+            candidate = f"{name}_{count}"
+            while candidate in used_names:
+                count += 1
+                candidate = f"{name}_{count}"
+            counts[name] = count
+        used_names.add(candidate)
+        unique_columns.append(candidate)
+    df.columns = unique_columns
+    return df
+
+
 def _sanitize_unhashable_cells(df):
     """Serialize list/dict/array cells into deterministic JSON strings so downstream
     hashing, grouping, duplicated, and unique operations work without TypeError."""
     for column in df.columns:
-        if df[column].map(lambda value: isinstance(value, (list, dict, set, np.ndarray))).any():
-            df[column] = df[column].map(_serialize_cell)
+        col_data = df[column]
+        if isinstance(col_data, pd.DataFrame):
+            col_data = col_data.iloc[:, 0]
+        if col_data.dtype == object or pd.api.types.is_string_dtype(col_data):
+            if col_data.map(lambda value: isinstance(value, (list, dict, set, np.ndarray))).any():
+                df[column] = col_data.map(_serialize_cell)
     return df
 
 
@@ -392,10 +426,44 @@ def _read_delimited_text(text, nrows=None):
     return df
 
 
+def _stream_json_array(text, nrows):
+    """Incremental decoder for JSON root arrays so only nrows objects are materialized."""
+    s_text = text.lstrip()
+    if not s_text.startswith("["):
+        return None
+    decoder = json.JSONDecoder()
+    idx = text.find("[") + 1
+    length = len(text)
+    records = []
+    while idx < length and len(records) < nrows:
+        while idx < length and text[idx] in " \t\r\n,":
+            idx += 1
+        if idx >= length or text[idx] == "]":
+            break
+        try:
+            obj, next_idx = decoder.raw_decode(text, idx)
+            records.append(obj)
+            idx = next_idx
+        except ValueError:
+            return None
+    return records
+
+
 def _read_json_from_buffer(buffer, nrows=None):
     buffer.seek(0)
     try:
         text = _decode_text_buffer(buffer)
+        if nrows is not None and nrows > 0:
+            streamed = _stream_json_array(text, nrows)
+            if streamed is not None:
+                try:
+                    norm_df = pd.json_normalize(streamed)
+                    if len(streamed) > 0 and norm_df.shape[1] == 0:
+                        norm_df = pd.DataFrame(streamed)
+                except TypeError:
+                    norm_df = pd.DataFrame(streamed)
+                return _sanitize_unhashable_cells(norm_df)
+
         data = json.loads(text)
         if isinstance(data, dict):
             list_keys = [k for k, v in data.items() if isinstance(v, list)]
@@ -407,9 +475,14 @@ def _read_json_from_buffer(buffer, nrows=None):
             if len(list_keys) == 1:
                 data = data[list_keys[0]]
         if isinstance(data, list):
-            norm_df = pd.json_normalize(data)
-            if nrows is not None and len(norm_df) > nrows:
-                norm_df = norm_df.head(nrows)
+            if nrows is not None and len(data) > nrows:
+                data = data[:nrows]
+            try:
+                norm_df = pd.json_normalize(data)
+                if len(data) > 0 and norm_df.shape[1] == 0:
+                    norm_df = pd.DataFrame(data)
+            except TypeError:
+                norm_df = pd.DataFrame(data)
             return _sanitize_unhashable_cells(norm_df)
     except (json.JSONDecodeError, UnicodeDecodeError):
         pass
@@ -478,44 +551,82 @@ def _flatten_xml_element(element, parent_key="", index=None, depth=1, max_depth=
 
 
 def _reject_dtd(payload):
-    # the whole document is scanned: comments/PIs may legally precede the
-    # DOCTYPE and push it past any fixed-size inspection window. XML keywords
-    # are case-sensitive per spec, so an exact-case search is complete and
-    # avoids copying large payloads.
+    # Fast multi-encoding text and raw-byte scan
     if b"<!DOCTYPE" in payload or b"<!ENTITY" in payload:
         raise ValueError(
             "XML datasets must not contain DTD/entity declarations "
             "(they enable resource-exhaustion attacks); export plain elements."
         )
 
+    for enc in ("utf-8", "utf-16", "utf-16-le", "utf-16-be", "utf-32", "utf-32-le", "utf-32-be", "cp1252", "latin1"):
+        try:
+            decoded = payload.decode(enc)
+            upper = decoded.upper()
+            if "<!DOCTYPE" in upper or "<!ENTITY" in upper:
+                raise ValueError(
+                    "XML datasets must not contain DTD/entity declarations "
+                    "(they enable resource-exhaustion attacks); export plain elements."
+                )
+        except (UnicodeDecodeError, LookupError):
+            pass
+
+    # Expat parser-level guard fails on any DTD/entity regardless of encoding or padding
+    try:
+        p = xml.parsers.expat.ParserCreate()
+        def _prohibit(*args, **kwargs):
+            raise ValueError(
+                "XML datasets must not contain DTD/entity declarations "
+                "(they enable resource-exhaustion attacks); export plain elements."
+            )
+        p.StartDoctypeDeclHandler = _prohibit
+        p.EntityDeclHandler = _prohibit
+        p.Parse(payload, True)
+    except ValueError:
+        raise
+    except Exception:
+        pass
+
 
 def _read_xml_from_buffer(buffer, nrows=None):
     buffer.seek(0)
     payload = buffer.read()
     _reject_dtd(payload)
-    try:
-        root = ElementTree.fromstring(payload)
-    except ElementTree.ParseError:
-        raise
-    except RecursionError as error:
-        raise ValueError("XML nesting is too deep to process.") from error
 
+    records = []
+    root = None
     try:
-        records = []
-        for element in list(root):
-            flat = _flatten_xml_element(element, depth=1)
-            # drop the leading "<roottag>_" from each key
-            prefix = f"{element.tag}_"
-            flat = {
-                key.removeprefix(prefix): value
-                for key, value in flat.items()
-            }
-            records.append(flat)
+        stream = io.BytesIO(payload)
+        context = ElementTree.iterparse(stream, events=("start", "end"))
+        depth = 0
+        for event, elem in context:
+            if event == "start":
+                if root is None:
+                    root = elem
+                depth += 1
+                if depth > MAX_XML_DEPTH:
+                    raise ValueError(f"XML nesting exceeds maximum allowed depth of {MAX_XML_DEPTH}.")
+            elif event == "end":
+                depth -= 1
+                if depth == 1 and elem != root:
+                    flat = _flatten_xml_element(elem, depth=1)
+                    prefix = f"{elem.tag}_"
+                    flat = {
+                        key.removeprefix(prefix): value
+                        for key, value in flat.items()
+                    }
+                    records.append(flat)
+                    root.remove(elem)
+                    elem.clear()
+                    if nrows is not None and len(records) >= nrows:
+                        break
+    except ElementTree.ParseError as error:
+        raise ValueError(f"Failed to parse XML dataset: {error}") from error
     except (RecursionError, ValueError) as error:
         if "nesting" in str(error).lower():
             raise ValueError("XML nesting is too deep to process.") from error
         raise
-    if not records:
+
+    if not records and root is not None:
         try:
             records.append(_flatten_xml_element(root, depth=1))
         except (RecursionError, ValueError) as error:
@@ -530,21 +641,33 @@ def _read_xml_from_buffer(buffer, nrows=None):
 
 class _HTMLTableParser(HTMLParser):
     # grabs the first <table> with at least a header row plus one data row
-    def __init__(self):
+    def __init__(self, max_rows=None):
         super().__init__()
         self.tables = []
+        self.table_row_counts = []
         self.has_rowspan = False
         self._table = None
+        self._table_total_rows = 0
+        self._table_stopped = False
         self._row = None
         self._cell = None
         self._current_colspan = 1
+        self.max_rows = max_rows
 
     def handle_starttag(self, tag, attrs):
         if tag == "table":
             self._table = []
+            self._table_total_rows = 0
+            self._table_stopped = False
+            self._row = None
+            self._cell = None
         elif tag == "tr" and self._table is not None:
-            self._row = []
-        elif tag in {"td", "th"} and self._row is not None:
+            self._table_total_rows += 1
+            if self.max_rows is not None and len(self._table) >= (self.max_rows + 1):
+                self._table_stopped = True
+            if not self._table_stopped:
+                self._row = []
+        elif tag in {"td", "th"} and self._row is not None and not self._table_stopped:
             self._cell = []
             attrs_dict = dict(attrs)
             try:
@@ -563,7 +686,9 @@ class _HTMLTableParser(HTMLParser):
         if tag == "table" and self._table is not None:
             if len(self._table) >= 2:
                 self.tables.append(self._table)
+                self.table_row_counts.append(self._table_total_rows)
             self._table = None
+            self._table_stopped = False
         elif tag == "tr" and self._row is not None:
             if self._row:
                 self._table.append(self._row)
@@ -578,13 +703,13 @@ class _HTMLTableParser(HTMLParser):
             self._current_colspan = 1
 
     def handle_data(self, data):
-        if self._cell is not None:
+        if not self._table_stopped and self._cell is not None:
             self._cell.append(data)
 
 
-def _read_html_from_buffer(buffer):
+def _read_html_from_buffer(buffer, nrows=None):
     html_text = _decode_text_buffer(buffer)
-    parser = _HTMLTableParser()
+    parser = _HTMLTableParser(max_rows=nrows)
     parser.feed(html_text)
 
     if parser.has_rowspan:
@@ -599,10 +724,19 @@ def _read_html_from_buffer(buffer):
             raw_text=html_text,
         )
 
-    best_table = max(parser.tables, key=len)
+    best_idx = max(
+        range(len(parser.tables)),
+        key=lambda i: (
+            parser.table_row_counts[i] if i < len(parser.table_row_counts) else len(parser.tables[i]),
+            len(parser.tables[i][0]) if parser.tables[i] else 0,
+        ),
+    )
+    best_table = parser.tables[best_idx]
     header = best_table[0]
     rows = best_table[1:]
-    width = max(len(row) for row in best_table)
+    if nrows is not None and len(rows) > nrows:
+        rows = rows[:nrows]
+    width = max(len(row) for row in [header] + rows) if rows else len(header)
     header += [f"column_{i}" for i in range(len(header), width)]
     # repeated <th> text would create duplicate DataFrame columns, and
     # df[name] on a duplicated column returns a DataFrame -- breaking every
@@ -622,6 +756,24 @@ MAX_TEXT_EXTRACT_CHARS = 50_000
 
 def _read_parquet_from_buffer(buffer, nrows=None):
     buffer.seek(0)
+    if nrows is not None and nrows > 0:
+        try:
+            import pyarrow.parquet as pq
+            import pyarrow as pa
+            pf = pq.ParquetFile(buffer)
+            batches = []
+            count = 0
+            for batch in pf.iter_batches(batch_size=min(nrows, 10000)):
+                batches.append(batch)
+                count += len(batch)
+                if count >= nrows:
+                    break
+            if batches:
+                tbl = pa.Table.from_batches(batches)
+                df = tbl.to_pandas().head(nrows)
+                return _sanitize_unhashable_cells(df)
+        except Exception:
+            buffer.seek(0)
     df = pd.read_parquet(buffer)
     if nrows is not None and len(df) > nrows:
         df = df.head(nrows)
@@ -687,17 +839,18 @@ def read_tabular(source, filename=None, max_rows=None):
         if hasattr(buffer, "seek"):
             buffer.seek(0)
 
+    df = None
     if suffix == ".csv" or suffix == "":
-        return _read_csv_from_buffer(buffer, nrows=max_rows)
+        df = _read_csv_from_buffer(buffer, nrows=max_rows)
 
-    if suffix == ".tsv":
-        return pd.read_csv(buffer, sep="\t", nrows=max_rows)
+    elif suffix == ".tsv":
+        df = pd.read_csv(buffer, sep="\t", nrows=max_rows)
 
-    if suffix in {".xlsx", ".xls"}:
+    elif suffix in {".xlsx", ".xls"}:
         if hasattr(buffer, "seek"):
             buffer.seek(0)
         try:
-            return pd.read_excel(buffer, nrows=max_rows)
+            df = pd.read_excel(buffer, nrows=max_rows)
         except ImportError as exc:
             if suffix == ".xls" and "xlrd" in str(exc).lower():
                 raise ValueError(
@@ -706,25 +859,24 @@ def read_tabular(source, filename=None, max_rows=None):
                 ) from exc
             raise
 
-    if suffix == ".json":
-        return _read_json_from_buffer(buffer, nrows=max_rows)
+    elif suffix == ".json":
+        df = _read_json_from_buffer(buffer, nrows=max_rows)
 
-    if suffix in {".jsonl", ".ndjson"}:
-        return _read_jsonl_from_buffer(buffer, nrows=max_rows)
+    elif suffix in {".jsonl", ".ndjson"}:
+        df = _read_jsonl_from_buffer(buffer, nrows=max_rows)
 
-    if suffix == ".parquet":
-        return _read_parquet_from_buffer(buffer, nrows=max_rows)
+    elif suffix == ".parquet":
+        df = _read_parquet_from_buffer(buffer, nrows=max_rows)
 
-    if suffix == ".xml":
-        return _read_xml_from_buffer(buffer, nrows=max_rows)
+    elif suffix == ".xml":
+        df = _read_xml_from_buffer(buffer, nrows=max_rows)
 
-    if suffix in {".html", ".htm"}:
-        df = _read_html_from_buffer(buffer)
+    elif suffix in {".html", ".htm"}:
+        df = _read_html_from_buffer(buffer, nrows=max_rows)
         if max_rows is not None and len(df) > max_rows:
             df = df.head(max_rows)
-        return df
 
-    if suffix in TEXT_EXTENSIONS:
+    elif suffix in TEXT_EXTENSIONS:
         buffer.seek(0)
         sample_bytes = buffer.read(65536)
         sample_text = ""
@@ -737,49 +889,57 @@ def read_tabular(source, filename=None, max_rows=None):
         if not sample_text:
             sample_text = sample_bytes.decode("utf-8", errors="replace")
 
-        df = _read_delimited_text(sample_text, nrows=max_rows)
-        if df is not None:
+        delimited_candidate = _read_delimited_text(sample_text, nrows=max_rows)
+        if delimited_candidate is not None:
             sample_lines = [line for line in sample_text.splitlines() if line.strip()][:20]
             try:
                 dialect = csv.Sniffer().sniff("\n".join(sample_lines), delimiters=",;\t|:")
                 for encoding in CSV_ENCODINGS:
                     try:
                         buffer.seek(0)
-                        return pd.read_csv(buffer, sep=dialect.delimiter, encoding=encoding, nrows=max_rows)
+                        df = pd.read_csv(buffer, sep=dialect.delimiter, encoding=encoding, nrows=max_rows)
+                        break
                     except UnicodeDecodeError:
                         continue
-                buffer.seek(0)
-                return pd.read_csv(buffer, sep=dialect.delimiter, nrows=max_rows)
+                if df is None:
+                    buffer.seek(0)
+                    df = pd.read_csv(buffer, sep=dialect.delimiter, nrows=max_rows)
             except Exception:
                 pass
 
-        buffer.seek(0)
-        bounded_bytes = buffer.read(MAX_TEXT_EXTRACT_CHARS * 4)
-        extracted = ""
-        for encoding in CSV_ENCODINGS:
-            try:
-                extracted = bounded_bytes.decode(encoding)
-                break
-            except UnicodeDecodeError:
-                continue
-        if not extracted:
-            extracted = bounded_bytes.decode("utf-8", errors="replace")
-        bounded_text = extracted[:MAX_TEXT_EXTRACT_CHARS]
+        if df is None:
+            buffer.seek(0)
+            bounded_bytes = buffer.read(MAX_TEXT_EXTRACT_CHARS * 4)
+            extracted = ""
+            for encoding in CSV_ENCODINGS:
+                try:
+                    extracted = bounded_bytes.decode(encoding)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            if not extracted:
+                extracted = bounded_bytes.decode("utf-8", errors="replace")
+            bounded_text = extracted[:MAX_TEXT_EXTRACT_CHARS]
 
+            raise AIConversionRequired(
+                "Plain text could not be parsed as a table; AI conversion required.",
+                raw_text=bounded_text,
+                filename=name,
+            )
+
+    elif suffix in DOCUMENT_EXTENSIONS:
+        return _read_pdf_from_buffer(buffer, filename=name)
+
+    else:
         raise AIConversionRequired(
-            "Plain text could not be parsed as a table; AI conversion required.",
-            raw_text=bounded_text,
+            f"Unsupported dataset format: {suffix or 'none'}",
+            raw_text="",
             filename=name,
         )
 
-    if suffix in DOCUMENT_EXTENSIONS:
-        return _read_pdf_from_buffer(buffer, filename=name)
-
-    raise AIConversionRequired(
-        f"Unsupported dataset format: {suffix or 'none'}",
-        raw_text="",
-        filename=name,
-    )
+    if df is not None:
+        return normalize_and_deduplicate_columns(df)
+    return df
 
 
 def read_dataset(dataset, max_rows=None):

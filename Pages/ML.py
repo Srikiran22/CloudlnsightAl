@@ -1,4 +1,5 @@
 import streamlit as st
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -158,15 +159,20 @@ if results_match_active(results, selected_file, df=df):
             opacity=0.75,
             title="Actual vs Predicted Values"
         )
-        min_val = min(min(pred_df["Actual"]), min(pred_df["Predicted"]))
-        max_val = max(max(pred_df["Actual"]), max(pred_df["Predicted"]))
-        fig_pred.add_trace(go.Scatter(
-            x=[min_val, max_val],
-            y=[min_val, max_val],
-            mode="lines",
-            name="Perfect Prediction Line",
-            line={"color": "red", "dash": "dash"}
-        ))
+        finite_actual = pred_df["Actual"].dropna()
+        finite_actual = finite_actual[np.isfinite(finite_actual)]
+        finite_pred = pred_df["Predicted"].dropna()
+        finite_pred = finite_pred[np.isfinite(finite_pred)]
+        if not finite_actual.empty and not finite_pred.empty:
+            min_val = min(float(finite_actual.min()), float(finite_pred.min()))
+            max_val = max(float(finite_actual.max()), float(finite_pred.max()))
+            fig_pred.add_trace(go.Scatter(
+                x=[min_val, max_val],
+                y=[min_val, max_val],
+                mode="lines",
+                name="Perfect Prediction Line",
+                line={"color": "red", "dash": "dash"}
+            ))
         st.plotly_chart(fig_pred, width="stretch")
 
     if results.get("feature_importances"):

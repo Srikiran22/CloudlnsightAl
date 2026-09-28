@@ -146,7 +146,7 @@ def results_match_active(results, selected_file, df=None):
     try:
         path = resolve_dataset_path(selected_file)
         if path.is_file():
-            return dataset_fingerprint(selected_file) == expected
+            return dataset_fingerprint(selected_file, force_refresh=True) == expected
     except (ValueError, OSError):
         pass
     if df is not None:

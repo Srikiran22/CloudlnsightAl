@@ -145,8 +145,12 @@ def _render_boxplots(df, max_charts=4):
         if series.empty:
             continue
         fig, ax = plt.subplots(figsize=(4, 2.2), dpi=100)
-        ax.boxplot(series, vert=False, widths=0.55,
-                   flierprops={"marker": "o", "markersize": 3, "markerfacecolor": "#E11D48"})
+        try:
+            ax.boxplot(series, orientation="horizontal", widths=0.55,
+                       flierprops={"marker": "o", "markersize": 3, "markerfacecolor": "#E11D48"})
+        except TypeError:
+            ax.boxplot(series, vert=False, widths=0.55,
+                       flierprops={"marker": "o", "markersize": 3, "markerfacecolor": "#E11D48"})
         ax.set_title(str(col)[:40], fontsize=9)
         ax.tick_params(labelsize=7, left=False, labelleft=False)
         ax.spines[["top", "right"]].set_visible(False)
@@ -414,7 +418,13 @@ def generate_pdf_report(
 
     # 6 -- strongest correlations
     if len(num_df.columns) >= 2:
-        corr_matrix = num_df.corr(numeric_only=True)
+        corr_num_df = num_df
+        capped_note = ""
+        if len(num_df.columns) > 50:
+            variances = num_df.var().sort_values(ascending=False)
+            corr_num_df = num_df[variances.head(50).index]
+            capped_note = " (Top 50 columns by variance)"
+        corr_matrix = corr_num_df.corr(numeric_only=True)
         pairs = []
         columns = list(corr_matrix.columns)
         for i in range(len(columns)):
@@ -425,14 +435,14 @@ def generate_pdf_report(
         pairs.sort(key=lambda item: abs(item[2]), reverse=True)
 
         if pairs:
-            story.append(Paragraph("6. Correlation Insights (|r| ≥ 0.30)", heading2_style))
+            story.append(Paragraph(f"6. Correlation Insights (|r| ≥ 0.30){capped_note}", heading2_style))
             corr_data = [["Feature A", "Feature B", "Pearson r", "Strength", "Direction"]]
             for name_a, name_b, r in pairs[:12]:
                 strength = "Strong" if abs(r) >= 0.7 else ("Moderate" if abs(r) >= 0.4 else "Weak")
                 direction = "Positive" if r > 0 else "Negative"
                 corr_data.append([
-                    Paragraph(escape(name_a), cell_style),
-                    Paragraph(escape(name_b), cell_style),
+                    Paragraph(escape(str(name_a)), cell_style),
+                    Paragraph(escape(str(name_b)), cell_style),
                     f"{r:+.3f}", strength, direction
                 ])
             story.append(_style_table(

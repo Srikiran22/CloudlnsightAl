@@ -1,4 +1,5 @@
 import streamlit as st
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -77,11 +78,12 @@ if filter_cols:
         with chunk:
             if pd.api.types.is_numeric_dtype(df[fcol]):
                 series = df[fcol].dropna()
-                if series.empty:
-                    st.caption(f"{fcol}: no numeric values to filter")
+                finite_series = series[np.isfinite(series)]
+                if finite_series.empty:
+                    st.caption(f"{fcol}: no finite numeric values to filter")
                     continue
-                min_v = float(series.min())
-                max_v = float(series.max())
+                min_v = float(finite_series.min())
+                max_v = float(finite_series.max())
                 if min_v < max_v:
                     selected_range = st.slider(f"{fcol}:", min_value=min_v, max_value=max_v, value=(min_v, max_v))
                     filtered_df = filtered_df[
