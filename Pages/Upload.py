@@ -8,14 +8,16 @@ from Utils.logsys import get_logger
 from Utils.paths import (
     AIConversionRequired,
     DATASETS_DIR,
-    MAX_UPLOAD_BYTES,
+    get_unique_filename,
+    get_valid_conversion,
+    record_conversion,
     read_dataset,
     read_tabular,
     SUPPORTED_DATASET_EXTENSIONS,
 )
 from Utils.AIConvert import convert_to_dataframe
 from Utils.batch import merge_frames
-from Utils.dataset_ui import render_sidebar
+from Utils.dataset_ui import render_sidebar, set_active_dataset
 
 logger = get_logger("Upload")
 
@@ -63,21 +65,21 @@ if upload_mode == "Local file":
             seen_names.add(name)
 
             try:
-                if getattr(uploaded, "size", 0) > MAX_UPLOAD_BYTES:
-                    raise ValueError(
-                        f"File is {uploaded.size / (1024 * 1024):.0f} MB; the limit is "
-                        f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB. Split or trim the file."
-                    )
                 single_df = read_tabular(uploaded, filename=name)
                 DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+                target_name = get_unique_filename(name, directory=DATASETS_DIR, extra_names=seen_names)
+                if target_name != name:
+                    st.info(f"Existing dataset `{name}` preserved — new upload saved as `{target_name}`.")
+                seen_names.add(target_name)
                 uploaded.seek(0)
-                with open(DATASETS_DIR / name, "wb") as fh:
+                with open(DATASETS_DIR / target_name, "wb") as fh:
                     fh.write(uploaded.getbuffer())
-                parsed.append((name, single_df))
+                parsed.append((target_name, single_df))
             except AIConversionRequired as needed:
-                converted_name = f"{Path(name).stem}_converted.csv"
-                if (DATASETS_DIR / converted_name).exists():
-                    parsed.append((converted_name, read_dataset(converted_name)))
+                valid_conv = get_valid_conversion(name, needed.raw_text)
+                if valid_conv:
+                    st.info(f"Reusing verified conversion `{valid_conv}` for `{name}`.")
+                    parsed.append((valid_conv, read_dataset(valid_conv)))
                 else:
                     pending.append((name, needed))
             except Exception as read_error:
@@ -142,9 +144,12 @@ if upload_mode == "Local file":
                                 model_name=chosen_model,
                                 extra_instructions=(hints or "").strip() or None,
                             )
-                            converted_name = f"{Path(fname).stem}_converted.csv"
+                            ext_tag = Path(fname).suffix.lstrip(".").lower() or "txt"
+                            target_stem = f"{Path(fname).stem}_{ext_tag}_converted.csv"
+                            converted_name = get_unique_filename(target_stem, directory=DATASETS_DIR)
                             DATASETS_DIR.mkdir(parents=True, exist_ok=True)
                             converted.to_csv(DATASETS_DIR / converted_name, index=False)
+                            record_conversion(converted_name, fname, needed.raw_text)
                             parsed.append((converted_name, converted))
                             st.success(
                                 f"Converted `{fname}` to {converted.shape[0]:,} rows × "
@@ -167,7 +172,7 @@ if upload_mode == "Local file":
             file_name, df = parsed[0]
         else:
             combined = merge_frames(parsed)
-            file_name = "combined_dataset.csv"
+            file_name = get_unique_filename("combined_dataset.csv", directory=DATASETS_DIR)
             DATASETS_DIR.mkdir(parents=True, exist_ok=True)
             combined.to_csv(DATASETS_DIR / file_name, index=False)
             df = combined
@@ -221,7 +226,8 @@ else:
                     try:
                         s3_client = get_s3_client(value_of("aws_access"), value_of("aws_secret"), region)
                         df, raw_bytes = download_s3_dataset(bucket, chosen_s3_file, s3_client)
-                        file_name = Path(chosen_s3_file).name
+                        s3_stem = chosen_s3_file.replace("/", "_").replace("\\", "_")
+                        file_name = get_unique_filename(s3_stem, directory=DATASETS_DIR)
 
                         DATASETS_DIR.mkdir(parents=True, exist_ok=True)
                         local_s3_path = DATASETS_DIR / file_name
@@ -243,8 +249,7 @@ else:
                         st.error(f"S3 download failed: {describe_s3_error(e)}")
 
 if df is not None and file_name is not None:
-    st.session_state["current_df"] = df
-    st.session_state["dataset_name"] = file_name
+    set_active_dataset(df, file_name)
 
 render_sidebar()
 

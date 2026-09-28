@@ -7,7 +7,7 @@ from Utils.Gemini import (
 from Utils.privacy import apply_exclusions, detect_sensitive_columns
 from Utils.secrets import ask, value_of, keep_box, release, drop
 from Utils.logsys import get_logger
-from Utils.dataset_ui import render_sidebar, select_working_dataset
+from Utils.dataset_ui import dataframe_fingerprint, dataset_fingerprint, render_sidebar, select_working_dataset
 
 logger = get_logger("AI")
 
@@ -16,6 +16,11 @@ st.markdown("Gemini-powered executive summaries and conversational Q&A over the 
 
 df, selected_file = select_working_dataset("Select Dataset for AI Analysis:")
 render_sidebar()
+
+try:
+    active_fp = dataset_fingerprint(selected_file)
+except Exception:
+    active_fp = dataframe_fingerprint(df)
 
 with st.sidebar:
     st.markdown('<div class="ci-side-label">Gemini settings</div>', unsafe_allow_html=True)
@@ -49,6 +54,10 @@ st.warning(
 
 # privacy screening: let the user exclude likely-sensitive columns from the
 # AI context entirely; everything below uses ai_df instead of df
+st.caption(
+    "Automated privacy screening: uses pattern heuristics to detect likely-sensitive columns "
+    "(emails, tokens, credit cards, phones, IBANs). This does not replace human data classification."
+)
 sensitive = detect_sensitive_columns(df)
 excluded_cols = []
 if sensitive:
@@ -69,6 +78,9 @@ if exclusions_applied:
 
 tab_insights, tab_chat = st.tabs(["Executive report", "Chat"])
 
+insights_key = f"insights_{selected_file}_{active_fp}"
+chat_key = f"chat_messages_{selected_file}_{active_fp}"
+
 with tab_insights:
     st.markdown("Generate a data health audit, pattern discovery, and business recommendations.")
 
@@ -81,7 +93,10 @@ with tab_insights:
                     dataset_name=selected_file,
                     model_name=chosen_model
                 )
+                st.session_state[insights_key] = insights_text
+                # also mirror to primary key with fingerprint tracking
                 st.session_state[f"insights_{selected_file}"] = insights_text
+                st.session_state[f"insights_fp_{selected_file}"] = active_fp
                 if release("gemini", keep_key="gemini_keep"):
                     st.toast("Gemini key cleared from memory.")
             except GeminiError as e:
@@ -90,7 +105,7 @@ with tab_insights:
                 logger.warning("insights generation failed: %s: %s", type(e).__name__, e)
                 st.error(f"Gemini error: {str(e)}")
 
-    saved_insights = st.session_state.get(f"insights_{selected_file}")
+    saved_insights = st.session_state.get(insights_key)
     if saved_insights:
         st.markdown(saved_insights)
         st.download_button(
@@ -101,9 +116,11 @@ with tab_insights:
         )
 
 with tab_chat:
-    st.markdown("Ask anything about your data in plain English.")
+    st.markdown(
+        "Ask questions about your dataset based on column structures, summary metrics, "
+        "and sample records."
+    )
 
-    chat_key = f"chat_messages_{selected_file}"
     if chat_key not in st.session_state:
         st.session_state[chat_key] = []
 

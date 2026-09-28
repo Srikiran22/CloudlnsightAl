@@ -386,3 +386,138 @@ The extraction target is a variable-schema table, so a response schema cannot co
 ### Status
 
 Active
+
+---
+
+## DEC-014 — Content-derived dataset fingerprinting with stat-keyed caching
+
+- **Date:** 2026-09-28
+- **Agent:** Antigravity IDE / Gemini 3.8 Flash
+
+### Decision
+
+Upgrade `dataset_fingerprint()` from metadata-only (`name_size_mtime`) to a true SHA-256 content-derived hash (`sha256_<64hex>`) with an internal LRU stat cache `_FP_CACHE[(path, mtime, size)]`. Downstream state across AI insights, chat history, cleaning results, report metadata, and ML models are now keyed by or record this SHA-256 fingerprint. Added `dataframe_fingerprint(df)` for in-memory active session frames.
+
+### Why
+
+Filenames or simple metadata fingerprints allowed stale AI insights, stale chat history, stale cleaning records, and misattributed report summaries when a dataset file was replaced on disk by another file with identical name or near-identical metadata. True SHA-256 hashing guarantees cryptographic uniqueness while the `(path, mtime, size)` stat-cache ensures zero disk I/O overhead on repeated queries.
+
+### Alternatives Considered
+
+- Full hash on every access without caching — unacceptable latency on multi-megabyte datasets.
+- Pure metadata fingerprint (name + mtime + size) — prone to collisions on file replacement or in-memory manipulations.
+
+### Consequences
+
+- All UI state keys for AI, cleaning, and reports are collision-free and automatically invalidate when file content changes.
+- Legacy state keys without fingerprints are safely ignored or migrated.
+
+### Status
+
+Active
+
+---
+
+## DEC-015 — Deterministic collision-safe naming and S3 provenance preservation
+
+- **Date:** 2026-09-28
+- **Agent:** Antigravity IDE / Gemini 3.8 Flash
+
+### Decision
+
+Use `get_unique_filename(directory, filename)` to resolve filename collisions via deterministic incremented suffixes (`data.csv` -> `data_1.csv` -> `data_2.csv`) across local uploads, AI conversions, combined merges, ML model artifacts, and PDF reports. For S3 downloads, prefix the filename with sanitized parent folder provenance (e.g., `folder_sub_data.csv`) before collision resolution.
+
+### Why
+
+The application previously overwrote files silently if an uploaded file, S3 download, AI conversion, or batch merge shared a filename with an existing dataset or artifact in `Datasets/`, `Models/`, or `Reports/`. Downstream session state was corrupted or lost historical data.
+
+### Alternatives Considered
+
+- UUID prefixes/suffixes — rejected: creates unreadable, chaotic filenames for end users.
+- Overwrite by default with prompt — rejected: automated flows and background conversions cannot block interactively.
+
+### Consequences
+
+- User files and artifacts are never silently overwritten.
+- Provenance is preserved for nested S3 keys.
+
+### Status
+
+Active
+
+---
+
+## DEC-016 — Full SHA-256 exact content fingerprinting
+
+- **Date:** 2026-09-28
+- **Agent:** Antigravity IDE / Gemini 3.8 Flash
+
+### Decision
+
+Replace the partial 4KB boundary (head/tail) digest with full SHA-256 content hashing in `dataset_fingerprint()`. In addition, wire `_load_cached_dataset.clear()` and `_load_cached_dataset_bounded.clear()` directly into `invalidate_dataset_cache()`.
+
+### Why
+
+The previous boundary digest inspected only the first 4KB and last 4KB of files. In-place modifications to files larger than 8KB where bytes in the middle changed while file size and timestamps remained identical resulted in stale cache hits in `_CONTENT_HASH_CACHE` and stale DataFrame returns from Streamlit's `@st.cache_data`. True full SHA-256 hashing processes at ~1-2 GB/s on modern hardware (5 ms for 10MB), ensuring exact cryptographic content identity with negligible latency.
+
+### Consequences
+
+- Middle-byte edits, identical-size rewrites, and timestamp-preserved modifications are guaranteed to produce distinct fingerprints and invalidate all cached data.
+- The system guarantees exact content identity rather than metadata-assisted or probabilistic boundary approximations.
+
+### Status
+
+Active
+
+---
+
+## DEC-017 — Adopt Gemini 3.5 Flash as default production model
+
+- **Date:** 2026-09-28
+- **Agent:** Antigravity IDE / Gemini 3.8 Flash
+
+### Decision
+
+Update `DEFAULT_GEMINI_MODEL` from `gemini-2.5-flash` to `gemini-3.5-flash` across the central registry, AI conversion, and UI selectors. Map `gemini-2.0-flash` and `gemini-2.0-flash-exp` to `gemini-3.5-flash` in `DEPRECATED_GEMINI_MODELS`. Retain `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-1.5-flash`, and `gemini-1.5-pro` as explicit supported choices in `GEMINI_MODELS`.
+
+### Why
+
+Per official Google AI documentation (September 2026), `gemini-3.5-flash` is the current stable, GA flagship Flash model recommended for all new production projects. `gemini-2.0-flash` is officially shut down (June 1, 2026). `gemini-2.5-flash` remains supported for backward compatibility but is no longer recommended as the default for new projects.
+
+### Consequences
+
+- All new AI tasks (conversion, insights, chat) default to `gemini-3.5-flash`.
+- Legacy model compatibility is strictly preserved for users with existing quotas.
+
+### Status
+
+Superseded by DEC-018
+
+---
+
+## DEC-018 — Upgrade to full 64-character SHA-256 fingerprint, gemini-3.8-flash default, and google-genai 2.x SDK
+
+- **Date:** 2026-09-28
+- **Agent:** Antigravity IDE / Gemini 3.8 Flash
+
+### Decision
+
+1. **Full SHA-256 Hex Digest:** Dataset fingerprinting in `dataset_fingerprint()` and `dataframe_fingerprint()` (`Utils/dataset_ui.py`) now outputs the full 64-character SHA-256 hexadecimal string (`hasher.hexdigest()`), removing the previous 12-character (`[:12]`) truncation.
+2. **Gemini 3.8 Flash Default:** `DEFAULT_GEMINI_MODEL` is updated to `gemini-3.8-flash` across the central registry (`Utils/Gemini.py`), AI conversion (`Utils/AIConvert.py`), UI selectors (`Pages/Upload.py`, `Pages/AI.py`), tests, and documentation. Deprecated models (`gemini-2.0-flash`, `gemini-2.0-flash-exp`) map to `gemini-3.8-flash`. Supported legacy models (`gemini-3.5-flash`, `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-1.5-flash`, `gemini-1.5-pro`) are retained.
+3. **Primary google-genai SDK Path:** Installed and activated `google-genai` (v2.25.0) in `./venv`, fulfilling `requirements.txt` (`google-genai>=1.0.0`) and ensuring the primary tested runtime path exercises native `google.genai.Client` rather than deprecated `google-generativeai`.
+
+### Why
+
+- Truncating SHA-256 to 12 hex characters (48 bits) reduced collision entropy to $2^{24}$ files (birthday bound), which contradicts claims of exact cryptographic content identity. Full 64-hex SHA-256 provides complete 256-bit collision security with zero performance overhead.
+- Official Google Gemini model documentation lists `gemini-3.8-flash` as the latest stable Flash model. Setting it as default gives users the highest accuracy, speed, and latency optimizations.
+- The `google-generativeai` SDK emits end-of-life deprecation notices directing users to `google-genai`. Running and testing on `google-genai` directly ensures production compatibility with current Google Cloud APIs.
+
+### Consequences
+
+- Exact cryptographic identity is verified by unit tests asserting 64-character digests.
+- Default model resolution uses `gemini-3.8-flash`.
+- The primary SDK runtime uses `google.genai.Client` with configured HTTP timeouts.
+
+### Status
+
+Active

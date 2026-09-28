@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import io
 import json
 from html.parser import HTMLParser
@@ -13,6 +14,7 @@ DATASETS_DIR = PROJECT_ROOT / "Datasets"
 REPORTS_DIR = PROJECT_ROOT / "Reports"
 MODELS_DIR = PROJECT_ROOT / "Models"
 REPORT_TEMPLATES_DIR = REPORTS_DIR / "templates"
+CONVERSIONS_MANIFEST = DATASETS_DIR / ".conversions.json"
 
 CSV_ENCODINGS = ("utf-8", "utf-8-sig", "cp1252", "latin1")
 
@@ -54,12 +56,78 @@ def safe_stem(value, fallback="model"):
     return cleaned or fallback
 
 
+def get_unique_filename(filename, directory=DATASETS_DIR, extra_names=None):
+    """Ensure a filename does not collide with existing files on disk or extra names in memory.
+
+    Generates deterministic names:
+      data.csv -> data_1.csv -> data_2.csv
+    """
+    target_dir = Path(directory)
+    extra = set(extra_names or [])
+    name = Path(filename).name
+    stem = Path(name).stem
+    suffix = Path(name).suffix
+
+    candidate = name
+    counter = 1
+    while (target_dir / candidate).exists() or candidate in extra:
+        candidate = f"{stem}_{counter}{suffix}"
+        counter += 1
+    return candidate
+
+
+def enforce_size_limit(size_in_bytes, label="File"):
+    """Centralized enforcement of the MAX_UPLOAD_BYTES resource limit."""
+    if size_in_bytes is not None and size_in_bytes > MAX_UPLOAD_BYTES:
+        raise ValueError(
+            f"{label} is {size_in_bytes / (1024 * 1024):.1f} MB; the limit is "
+            f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB. Split or trim the file."
+        )
+
+
+def record_conversion(converted_name, source_name, raw_text):
+    """Record provenance metadata for an AI-converted file in the manifest."""
+    ensure_project_directories()
+    manifest = {}
+    if CONVERSIONS_MANIFEST.exists():
+        try:
+            manifest = json.loads(CONVERSIONS_MANIFEST.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = {}
+    source_hash = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()[:16]
+    manifest[converted_name] = {
+        "source_name": source_name,
+        "source_hash": source_hash,
+        "source_length": len(raw_text),
+    }
+    CONVERSIONS_MANIFEST.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
+def get_valid_conversion(source_name, raw_text):
+    """Return existing converted filename if it matches this source content, else None."""
+    if not CONVERSIONS_MANIFEST.exists():
+        return None
+    try:
+        manifest = json.loads(CONVERSIONS_MANIFEST.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    source_hash = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()[:16]
+    for conv_name, meta in manifest.items():
+        if (
+            meta.get("source_name") == source_name
+            and meta.get("source_hash") == source_hash
+            and (DATASETS_DIR / conv_name).exists()
+        ):
+            return conv_name
+    return None
+
+
 def list_dataset_files():
     ensure_project_directories()
     return sorted(
         path.name
         for path in DATASETS_DIR.iterdir()
-        if path.is_file() and path.suffix.lower() in SUPPORTED_DATASET_EXTENSIONS
+        if path.is_file() and not path.name.startswith(".") and path.suffix.lower() in SUPPORTED_DATASET_EXTENSIONS
     )
 
 
@@ -85,12 +153,23 @@ def _decode_text_buffer(buffer):
     return buffer.read().decode("utf-8", errors="replace")
 
 
-def _read_csv_from_buffer(buffer):
+def _sanitize_unhashable_cells(df):
+    """Serialize list/dict cells into deterministic JSON strings so downstream
+    hashing, grouping, duplicated, and unique operations work without TypeError."""
+    for column in df.columns:
+        if df[column].map(lambda value: isinstance(value, (list, dict))).any():
+            df[column] = df[column].map(
+                lambda value: json.dumps(value, sort_keys=True) if isinstance(value, (list, dict)) else value
+            )
+    return df
+
+
+def _read_csv_from_buffer(buffer, nrows=None):
     last_error = None
     for encoding in CSV_ENCODINGS:
         try:
             buffer.seek(0)
-            return pd.read_csv(buffer, encoding=encoding)
+            return pd.read_csv(buffer, encoding=encoding, nrows=nrows)
         except UnicodeDecodeError as error:
             last_error = error
     if last_error:
@@ -98,7 +177,7 @@ def _read_csv_from_buffer(buffer):
     raise ValueError("Unable to decode CSV file.")
 
 
-def _read_delimited_text(text):
+def _read_delimited_text(text, nrows=None):
     """Native text-table policy.
 
     A .txt/.log/.md/.rst/.sql file parses natively ONLY when csv.Sniffer
@@ -120,7 +199,7 @@ def _read_delimited_text(text):
         return None
 
     try:
-        df = pd.read_csv(io.StringIO(text), sep=delimiter, engine="python")
+        df = pd.read_csv(io.StringIO(text), sep=delimiter, engine="python", nrows=nrows)
     except Exception:
         return None
     if df.shape[1] < 2:
@@ -133,46 +212,69 @@ def _read_delimited_text(text):
     return df
 
 
-def _read_json_from_buffer(buffer):
+def _read_json_from_buffer(buffer, nrows=None):
+    buffer.seek(0)
+    try:
+        text = _decode_text_buffer(buffer)
+        data = json.loads(text)
+        if isinstance(data, dict):
+            list_keys = [k for k, v in data.items() if isinstance(v, list)]
+            if len(list_keys) > 1:
+                raise ValueError(
+                    f"Ambiguous JSON structure: multiple top-level record lists found ({', '.join(sorted(list_keys))}). "
+                    "Extract the target list before ingestion."
+                )
+            if len(list_keys) == 1:
+                data = data[list_keys[0]]
+        if isinstance(data, list):
+            norm_df = pd.json_normalize(data)
+            if nrows is not None and len(norm_df) > nrows:
+                norm_df = norm_df.head(nrows)
+            return _sanitize_unhashable_cells(norm_df)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        pass
+
     buffer.seek(0)
     try:
         df = pd.read_json(buffer)
-        has_nested = any(
-            df[column].map(lambda value: isinstance(value, (dict, list))).any()
-            for column in df.columns
-        )
-        if not has_nested:
-            return df
-    except ValueError:
-        pass
+        if nrows is not None and len(df) > nrows:
+            df = df.head(nrows)
+        return _sanitize_unhashable_cells(df)
+    except Exception as exc:
+        raise ValueError(f"Failed to parse JSON dataset: {exc}") from exc
+
+
+def _read_jsonl_from_buffer(buffer, nrows=None):
     buffer.seek(0)
-    data = json.loads(_decode_text_buffer(buffer))
-    if isinstance(data, dict):
-        for value in data.values():
-            if isinstance(value, list):
-                data = value
-                break
-    if not isinstance(data, list):
-        raise ValueError("JSON file does not contain a record list.")
-    return pd.json_normalize(data)
+    df = pd.read_json(buffer, lines=True, nrows=nrows)
+    return _sanitize_unhashable_cells(df)
 
 
-def _read_jsonl_from_buffer(buffer):
-    buffer.seek(0)
-    return pd.read_json(buffer, lines=True)
-
-
-def _flatten_xml_element(element, parent_key=""):
+def _flatten_xml_element(element, parent_key="", index=None):
     record = {}
+    tag_suffix = f"_{index}" if index is not None else ""
+    current_key = f"{parent_key}{element.tag}{tag_suffix}".strip("_")
+
     for attribute, value in element.attrib.items():
-        record[f"{parent_key}{element.tag}@{attribute}".strip("_")] = value
+        record[f"{current_key}@{attribute}"] = value
 
     text = (element.text or "").strip()
     children = list(element)
     if text and not children:
-        record[f"{parent_key}{element.tag}".strip("_")] = text
+        record[current_key] = text
+
+    tag_counts = {}
     for child in children:
-        record.update(_flatten_xml_element(child, parent_key=f"{parent_key}{element.tag}_"))
+        tag_counts[child.tag] = tag_counts.get(child.tag, 0) + 1
+
+    tag_seen = {}
+    for child in children:
+        tag = child.tag
+        child_index = None
+        if tag_counts[tag] > 1:
+            tag_seen[tag] = tag_seen.get(tag, 0) + 1
+            child_index = tag_seen[tag]
+        record.update(_flatten_xml_element(child, parent_key=f"{current_key}_", index=child_index))
     return record
 
 
@@ -194,7 +296,7 @@ def _reject_dtd(payload):
         )
 
 
-def _read_xml_from_buffer(buffer):
+def _read_xml_from_buffer(buffer, nrows=None):
     buffer.seek(0)
     payload = buffer.read()
     _reject_dtd(payload)
@@ -212,7 +314,7 @@ def _read_xml_from_buffer(buffer):
             # drop the leading "<roottag>_" from each key
             prefix = f"{element.tag}_"
             flat = {
-                (key[len(prefix):] if key.startswith(prefix) else key): value
+                key.removeprefix(prefix): value
                 for key, value in flat.items()
             }
             records.append(flat)
@@ -220,7 +322,10 @@ def _read_xml_from_buffer(buffer):
         raise ValueError("XML nesting is too deep to process.") from error
     if not records:
         records.append(_flatten_xml_element(root))
-    return pd.json_normalize(records)
+    df = pd.json_normalize(records)
+    if nrows is not None and len(df) > nrows:
+        df = df.head(nrows)
+    return _sanitize_unhashable_cells(df)
 
 
 class _HTMLTableParser(HTMLParser):
@@ -292,6 +397,10 @@ def _read_parquet_from_buffer(buffer):
     return pd.read_parquet(buffer)
 
 
+MAX_PDF_PAGES = 30
+MAX_PDF_EXTRACT_CHARS = 50_000
+
+
 def _read_pdf_from_buffer(buffer, filename=""):
     try:
         from pypdf import PdfReader
@@ -302,7 +411,15 @@ def _read_pdf_from_buffer(buffer, filename=""):
 
     buffer.seek(0)
     reader = PdfReader(buffer)
-    pages_text = [(page.extract_text() or "") for page in reader.pages]
+    pages_text = []
+    total_chars = 0
+    for idx, page in enumerate(reader.pages):
+        if idx >= MAX_PDF_PAGES or total_chars >= MAX_PDF_EXTRACT_CHARS:
+            break
+        text = page.extract_text() or ""
+        pages_text.append(text)
+        total_chars += len(text)
+
     full_text = "\n\n".join(pages_text).strip()
     if not full_text:
         raise ValueError("No extractable text found in the PDF (it may be scanned images).")
@@ -315,17 +432,22 @@ def _read_pdf_from_buffer(buffer, filename=""):
     )
 
 
-def read_tabular(source, filename=None):
+def read_tabular(source, filename=None, max_rows=None):
     """Read any supported dataset from a path, file-like object, or bytes.
 
     Formats without a native tabular structure raise AIConversionRequired carrying
     the extracted raw text so callers can offer Gemini-powered conversion.
     """
     if isinstance(source, (str, Path)) and filename is None:
-        return read_dataset(source)
+        return read_dataset(source, max_rows=max_rows)
 
     name = Path(filename or getattr(source, "name", "dataset.csv")).name
     suffix = Path(name).suffix.lower()
+
+    if hasattr(source, "size"):
+        enforce_size_limit(source.size, label=f"File '{name}'")
+    elif isinstance(source, (bytes, bytearray)):
+        enforce_size_limit(len(source), label=f"File '{name}'")
 
     if isinstance(source, (bytes, bytearray)):
         buffer = io.BytesIO(source)
@@ -335,34 +457,49 @@ def read_tabular(source, filename=None):
             buffer.seek(0)
 
     if suffix == ".csv" or suffix == "":
-        return _read_csv_from_buffer(buffer)
+        return _read_csv_from_buffer(buffer, nrows=max_rows)
 
     if suffix == ".tsv":
-        return pd.read_csv(buffer, sep="\t")
+        return pd.read_csv(buffer, sep="\t", nrows=max_rows)
 
     if suffix in {".xlsx", ".xls"}:
         if hasattr(buffer, "seek"):
             buffer.seek(0)
-        return pd.read_excel(buffer)
+        try:
+            return pd.read_excel(buffer, nrows=max_rows)
+        except ImportError as exc:
+            if suffix == ".xls" and "xlrd" in str(exc).lower():
+                raise ValueError(
+                    "Legacy .xls Excel format requires the 'xlrd' package (pip install xlrd>=2.0.1). "
+                    "Alternatively, save or convert the file to modern .xlsx or .csv."
+                ) from exc
+            raise
 
     if suffix == ".json":
-        return _read_json_from_buffer(buffer)
+        return _read_json_from_buffer(buffer, nrows=max_rows)
 
     if suffix in {".jsonl", ".ndjson"}:
-        return _read_jsonl_from_buffer(buffer)
+        return _read_jsonl_from_buffer(buffer, nrows=max_rows)
 
     if suffix == ".parquet":
-        return _read_parquet_from_buffer(buffer)
+        buffer.seek(0)
+        df = pd.read_parquet(buffer)
+        if max_rows is not None and len(df) > max_rows:
+            df = df.head(max_rows)
+        return df
 
     if suffix == ".xml":
-        return _read_xml_from_buffer(buffer)
+        return _read_xml_from_buffer(buffer, nrows=max_rows)
 
     if suffix in {".html", ".htm"}:
-        return _read_html_from_buffer(buffer)
+        df = _read_html_from_buffer(buffer)
+        if max_rows is not None and len(df) > max_rows:
+            df = df.head(max_rows)
+        return df
 
     if suffix in TEXT_EXTENSIONS:
         text = _decode_text_buffer(buffer)
-        df = _read_delimited_text(text)
+        df = _read_delimited_text(text, nrows=max_rows)
         if df is None:
             raise AIConversionRequired(
                 "Plain text could not be parsed as a table; AI conversion required.",
@@ -381,7 +518,8 @@ def read_tabular(source, filename=None):
     )
 
 
-def read_dataset(dataset):
+def read_dataset(dataset, max_rows=None):
     path = resolve_dataset_path(dataset)
+    enforce_size_limit(path.stat().st_size, label=f"Dataset '{path.name}'")
     with path.open("rb") as handle:
-        return read_tabular(handle, filename=path.name)
+        return read_tabular(handle, filename=path.name, max_rows=max_rows)

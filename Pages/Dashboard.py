@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
@@ -46,7 +45,7 @@ with g1:
             }
         }
     ))
-    fig_gauge.update_layout(height=220, margin=dict(l=20, r=20, t=30, b=20))
+    fig_gauge.update_layout(height=220, margin={"l": 20, "r": 20, "t": 30, "b": 20})
     st.plotly_chart(fig_gauge, width="stretch")
 
 with g2:
@@ -92,12 +91,14 @@ if filter_cols:
                 else:
                     st.caption(f"{fcol}: constant value {min_v}")
             else:
-                unique_vals = df[fcol].dropna().astype(str).unique().tolist()
-                if len(unique_vals) <= 50:
+                cardinality = int(df[fcol].nunique(dropna=True))
+                if cardinality <= 50:
+                    unique_vals = sorted(df[fcol].dropna().astype(str).unique().tolist())
                     chosen_vals = st.multiselect(f"{fcol}:", unique_vals, default=unique_vals)
                     if chosen_vals:
                         filtered_df = filtered_df[filtered_df[fcol].astype(str).isin(chosen_vals) | filtered_df[fcol].isna()]
                 else:
+                    st.caption(f"{fcol}: {cardinality:,} unique values (high cardinality).")
                     search = st.text_input(f"{fcol} contains:", key=f"dash_search_{fcol}")
                     if search:
                         filtered_df = filtered_df[

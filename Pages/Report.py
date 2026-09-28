@@ -4,7 +4,10 @@ import json
 import datetime
 
 from Utils.PDF import generate_pdf_report
-from Utils.paths import REPORTS_DIR, REPORT_TEMPLATES_DIR, list_dataset_files, read_dataset, safe_stem
+from Utils.paths import (
+    REPORTS_DIR, REPORT_TEMPLATES_DIR, get_unique_filename,
+    list_dataset_files, safe_stem,
+)
 from Utils.dataset_ui import (
     dataset_fingerprint, load_dataset_cached, render_sidebar, results_match_active,
     select_working_dataset,
@@ -50,10 +53,16 @@ with c1:
 with c2:
     author = st.text_input("Prepared By:", value=default_author)
 
-ai_saved = st.session_state.get(f"insights_{selected_file}")
+curr_fp = dataset_fingerprint(selected_file)
+ai_saved = st.session_state.get(f"insights_{selected_file}_{curr_fp}") or (
+    st.session_state.get(f"insights_{selected_file}")
+    if st.session_state.get(f"insights_fp_{selected_file}") == curr_fp
+    else None
+)
+template_ai_pref = bool((applied_template or {}).get("include_ai", True))
 include_ai = False
 if ai_saved:
-    include_ai = st.checkbox("Include Gemini AI Executive Insights section in PDF", value=True)
+    include_ai = st.checkbox("Include Gemini AI Executive Insights section in PDF", value=template_ai_pref)
 
 include_charts = st.checkbox(
     "Include charts: histograms, box plots & correlation heatmap (requires matplotlib)",
@@ -62,6 +71,7 @@ include_charts = st.checkbox(
 )
 
 template_name = st.text_input("Save current settings as template (name):", value="")
+overwrite_template = st.checkbox("Overwrite existing template with same name", value=False)
 if template_name and st.button("Save Template"):
     try:
         # sanitized so a crafted name cannot write outside templates/
@@ -70,14 +80,20 @@ if template_name and st.button("Save Template"):
             raise ValueError(
                 "Template name must contain letters, numbers, spaces, '-' or '_'."
             )
+        template_file = REPORT_TEMPLATES_DIR / f"{safe_template}.json"
+        if template_file.exists() and not overwrite_template:
+            raise ValueError(
+                f"Template `{safe_template}` already exists. Check 'Overwrite existing template' to replace it."
+            )
         REPORT_TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
         config = {
             "title": rep_title,
             "author": author,
             "include_charts": include_charts,
+            "include_ai": include_ai,
             "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
         }
-        (REPORT_TEMPLATES_DIR / f"{safe_template}.json").write_text(
+        template_file.write_text(
             json.dumps(config, indent=2), encoding="utf-8"
         )
         st.success(f"Template `{safe_template}` saved.")
@@ -87,7 +103,7 @@ if template_name and st.button("Save Template"):
 st.markdown("---")
 
 
-def _build_report(dataset_name, dataframe, title, prepared_by, with_charts, ai_insights=None):
+def _build_report(dataset_name, dataframe, title, prepared_by, with_charts, ai_insights=None, source_rows=None, analyzed_rows=None):
     pdf_bytes = generate_pdf_report(
         df=dataframe,
         dataset_name=dataset_name,
@@ -95,10 +111,13 @@ def _build_report(dataset_name, dataframe, title, prepared_by, with_charts, ai_i
         author_name=prepared_by,
         include_ai_insights=ai_insights,
         include_charts=with_charts,
+        source_rows=source_rows,
+        analyzed_rows=analyzed_rows,
     )
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     base_name, _ = os.path.splitext(dataset_name)
-    pdf_filename = f"Report_{base_name}_{timestamp}.pdf"
+    target_name = f"Report_{base_name}_{timestamp}.pdf"
+    pdf_filename = get_unique_filename(target_name, directory=REPORTS_DIR)
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     with open(REPORTS_DIR / pdf_filename, "wb") as f:
         f.write(pdf_bytes)
@@ -152,8 +171,18 @@ if st.button("Generate reports for all datasets"):
 
     for index, file_name in enumerate(all_files):
         try:
-            batch_df = load_dataset_cached(file_name, max_rows=int(max_batch))
-            filename_out, _ = _build_report(file_name, batch_df, rep_title, author, include_charts)
+            full_df = load_dataset_cached(file_name)
+            total_source_rows = len(full_df)
+            batch_df = full_df.head(int(max_batch)) if total_source_rows > int(max_batch) else full_df
+            filename_out, _ = _build_report(
+                file_name,
+                batch_df,
+                rep_title,
+                author,
+                include_charts,
+                source_rows=total_source_rows,
+                analyzed_rows=len(batch_df),
+            )
             generated.append(filename_out)
         except Exception as e:
             failures.append(f"{file_name}: {str(e)}")

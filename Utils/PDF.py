@@ -6,8 +6,7 @@ import numpy as np
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    KeepTogether, Image
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
 )
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from xml.sax.saxutils import escape
@@ -194,6 +193,8 @@ def generate_pdf_report(
     author_name="CloudInsight AI",
     include_ai_insights=None,
     include_charts=True,
+    source_rows=None,
+    analyzed_rows=None,
 ):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -269,19 +270,25 @@ def generate_pdf_report(
     quality = quality_metrics(df)
     dup_count = quality["duplicate_rows"]
     missing_count = quality["missing_cells"]
-    completeness = quality["completeness"]
-    uniqueness = quality["uniqueness"]
     quality_index = quality["index"]
     memory_mb = df.memory_usage(deep=True).sum() / (1024 ** 2)
 
     # 1 -- summary
     story.append(Paragraph("1. High-Level Dataset Summary", heading2_style))
-    summary_data = [
-        ["Total Records (Rows)", f"{rows:,}", "Total Features (Cols)", f"{cols}"],
-        ["Duplicate Rows", f"{dup_count:,}", "Total Missing Cells", f"{missing_count:,}"],
-        ["Numeric Columns", f"{len(num_df.columns)}", "Categorical Columns", f"{len(cat_df.columns)}"],
-        ["Memory Footprint", f"{memory_mb:.2f} MB", "Data Quality Index", f"{quality_index:.1f} / 100"],
-    ]
+    if source_rows is not None and analyzed_rows is not None and source_rows != analyzed_rows:
+        summary_data = [
+            ["Source Records (Total)", f"{source_rows:,}", "Records Analyzed (Sample)", f"{analyzed_rows:,}"],
+            ["Total Features (Cols)", f"{cols}", "Data Quality Index", f"{quality_index:.1f} / 100"],
+            ["Duplicate Rows (Sample)", f"{dup_count:,}", "Missing Cells (Sample)", f"{missing_count:,}"],
+            ["Numeric Columns", f"{len(num_df.columns)}", "Categorical Columns", f"{len(cat_df.columns)}"],
+        ]
+    else:
+        summary_data = [
+            ["Total Records (Rows)", f"{rows:,}", "Total Features (Cols)", f"{cols}"],
+            ["Duplicate Rows", f"{dup_count:,}", "Total Missing Cells", f"{missing_count:,}"],
+            ["Numeric Columns", f"{len(num_df.columns)}", "Categorical Columns", f"{len(cat_df.columns)}"],
+            ["Memory Footprint", f"{memory_mb:.2f} MB", "Data Quality Index", f"{quality_index:.1f} / 100"],
+        ]
     summary_table = Table(summary_data, colWidths=[150, 120, 150, 120])
     summary_table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F3F4F6")),

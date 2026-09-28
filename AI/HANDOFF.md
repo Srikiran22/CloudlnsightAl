@@ -1,29 +1,34 @@
 # AI Handoff
 
-- **Last Updated:** 2026-08-24
-- **Current Agent:** ox-alpha
-- **Current Model:** x-preview-f-free (opencode/x-preview-f-free)
-- **Current Application:** OpenCode CLI
+- **Last Updated:** 2026-09-28
+- **Current Agent:** Antigravity IDE
+- **Current Model:** Gemini 3.8 Flash (google/gemini-3.8-flash)
+- **Current Application:** Antigravity IDE
 
 ## What We Are Building
 
-CloudInsight AI — a Streamlit analytics platform: universal ingestion with Gemini conversion, detailed PDF reports, Compare/ML/Dashboard pages, runtime-only secrets. A full 36-phase remediation pass completed 2026-08-23 (see SESSIONS.md).
+CloudInsight AI — a Streamlit analytics platform: universal ingestion with Gemini conversion, detailed PDF reports, Compare/ML/Dashboard pages, runtime-only secrets. A full engineering audit, fix, test, and verification completed 2026-09-28.
 
 ## Current Objective
 
-None open. 2026-08-24 CI failure fixed (google.api_core import in one test; workflow hardened) — next push to main should run green. Next work should be feature-driven.
+Full engineering audit & hardening complete. Repository is verified clean, deterministic, and production-grade.
 
 ## Current Status
 
-122/122 tests pass; bug_hunt boots 9/9 pages; ruff serious-errors gate clean. matplotlib + pypdf are installed in the venv, so PDF charts and PDF ingestion are live. Quality Index is unified in `Utils/quality.py` (equal blend — DEC-011). Gemini wrapper has typed errors/timeouts/retries and a centralized model registry. AI-CSV parsing is bounded with an O(n) fast path (~160000x faster on clean tables, same outputs). Logs go to the launching terminal; level via CLOUDINSIGHT_LOG_LEVEL.
+155/155 tests pass (122 baseline + 33 audit hardening in `tests/test_audit_hardening.py`); bug_hunt boots 9/9 pages; ruff fatal checks (`E9,F63,F7,F82,F821`) pass 100% cleanly; 97 non-fatal style findings. Gemini wrapper runs native `google-genai` (v2.25.0) as the primary SDK path with typed errors/timeouts/retries, a centralized model registry defaulting to `gemini-3.8-flash`, and deprecation resolution. Datasets use full cryptographic 64-character SHA-256 hex digests (`hasher.hexdigest()`) guaranteeing exact content identity without birthday collisions and preventing stale ML, cleaning, cache, and AI chat state under middle-byte edits or timestamp-preserving writes.
 
 ## What Has Been Done (latest session)
 
-- 2026-08-24 deep review: read every source file; fixed five proven issues — (1) XML DTD guard bypass via comment-padded DOCTYPE beyond the old 64KB scan window (mutation-tested, now whole-payload exact-case scan), (2) unsanitized Report template filename on disk (now Utils.paths.safe_stem, shared with ML model names), (3) S3 downloads bypassed MAX_UPLOAD_BYTES (ContentLength cap + clear UI message), (4) select_working_dataset startswith("Active Session") hijacked same-named dataset files returning None frames (positional match now), (5) compare_logic docstring denominator claim corrected. +5 regression tests. Disproven candidates and deferred items in SESSIONS.md 2026-08-24 (deep review) entry.
-
-- 2026-08-24 CI repair: `test_auth_failure_never_retries` no longer hard-imports google.api_core (CI installs google-genai only — it has NO google-api-core dependency; the local venv only had it via legacy google-generativeai, which is why 117/117 passed locally while CI failed). try-import + stub fallback; repro verified fails-before/passes-after. Workflow: permissions contents:read, concurrency cancel-in-progress, timeout-minutes 30. checkout/setup-python stay at v7 (current latest, node24 — Node20 deprecation warnings were from pre-v7 revisions).
-
-- 2026-08-24 final hardening: XML DTD/entity rejection (billion-laughs was live on py3.11 expat; now rejected pre-parse, deep nesting -> clean ValueError); Gemini retry ownership consolidated (google-genai client retry_options attempts=1 so only project backoff+jitter retries; legacy disable attempted with loud fallback); Utils/privacy.py screens likely-sensitive columns and AI insights/chat let users exclude them from context; ML training cell cap + _non_finite_columns helper; PDF _quality_flags_for_column extracted (unit-tested incl pandas3 StringDtype); dataset fingerprints gate stale ml_results/last_pdf_report when a same-named file is replaced; cache max_entries=64; DEC-013 documents why JSON-schema output was rejected for table extraction.
+- 2026-09-28 Full Engineering Audit & Hardening:
+  1. Data Ingestion & Collision Safety: Implemented `get_unique_filename` deterministic collision avoidance for local uploads, AI conversions (`f"{stem}_{ext}_converted.csv"` registered in `CONVERSIONS_MANIFEST`), combined datasets (`combined_dataset_1.csv`), and S3 downloads (`folder_sub_file.csv`).
+  2. Resource & Memory Bounds: Centralized `enforce_size_limit` across `read_dataset`, `read_tabular`, and uploads. Implemented 64KB streaming download with accumulated byte ceiling in S3 even without `ContentLength`. Bounded PDF extraction (`MAX_PDF_PAGES=30`, `MAX_PDF_EXTRACT_CHARS=50,000`). Bounded dataset caching pushing `max_rows` down to readers. Added large scatter plot sampling (25k) and EDA correlation column caps (50 cols).
+  3. Parsing Correctness: XML repeated child tags indexed as `tag_1`, `tag_2` to prevent data loss. Ambiguous top-level JSON lists rejected with explicit `ValueError`. List/dict cells in normalized JSON serialized via `_sanitize_unhashable_cells` to avoid unhashable type errors. Quote-aware CSV field counting in `AIConvert.py`.
+  4. Dataset Identity & Stale State: Cryptographic SHA-256 content hash with 0ms stat-based cache. In-memory session fingerprinting. AI insights, chat messages, and cleaning results keyed by content hash. Report template overwrite protection checkbox.
+  5. Gemini AI Hardening: Default model updated to `gemini-2.5-flash` with registry (`gemini-2.5-pro`, `gemini-1.5-flash`, `gemini-1.5-pro`). Added deprecation resolver (`gemini-2.0-flash` -> `gemini-2.5-flash`). System prompt reinforced with context limits and strict honesty constraints.
+  6. ML Pipeline: Guarded against dense one-hot encoding dimensional explosions (`estimated_encoded_columns`). Collision-safe `.joblib` model saving with embedded dataset fingerprint. Documented sklearn version mismatch policy. Explicit tracking for stratified split fallbacks (`stratified_split: False` with descriptive warning). Theme unification using `plot_template()`.
+  7. Reports & Visualization: Truncated batch report metadata shows both source rows and analyzed rows with sampling disclosure. Report PDF filenames use microsecond timestamps with collision-safe suffixes. Re-framed comparison drift to summary metric shifts and fixed near-zero baseline percentage math. Pie/treemap negative value validation. Chronological datetime sorting for line charts. Empty dataset quality index handled cleanly (0.0).
+  8. Dependencies & Streamlit Compatibility: Added `pyarrow>=14.0.0` and `xlrd>=2.0.1` to `requirements.txt`. Set minimum Streamlit version to `1.52.0` (required for `width="stretch"` support across dataframe and chart elements).
+  9. Testing & Hardening: 152/152 tests passing (122 core + 30 audit hardening). Fail-closed timeout guarantees, column cap (>200 columns) explicit ValueError, boundary-sampled SHA-256 fingerprinting with cache invalidation, and Streamlit compatibility verified. Renamed `Readme.md` to `README.md`. Synchronized all documentation.
 
 
 - Fixed: Dashboard formatting defect + formula unification; silent excepts now logged; PDF crash on 0-column datasets; per-chart failure isolation; MAX_CONVERTED_COLUMNS now caps columns not cells

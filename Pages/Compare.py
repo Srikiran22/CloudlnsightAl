@@ -6,7 +6,7 @@ from Utils.paths import list_dataset_files
 from Utils.dataset_ui import render_sidebar, load_dataset_cached
 
 st.title("Compare datasets")
-st.markdown("Schema differences, missing-value drift, and numeric distribution shifts between two files.")
+st.markdown("Schema differences, missing-value drift, and summary metric shifts between two files.")
 
 available = list_dataset_files()
 if len(available) < 2:

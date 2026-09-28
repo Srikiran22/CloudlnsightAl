@@ -21,7 +21,7 @@ from Utils.Charts import create_scatter_plot
 from Utils.compare_logic import column_drift_rows, schema_diff
 from Utils.Gemini import (
     get_dataset_summary_context, GeminiError, chat_with_gemini_dataset,
-    MAX_MESSAGE_CHARS, MAX_CHAT_HISTORY,
+    MAX_MESSAGE_CHARS,
 )
 from Utils.ML import (
     detect_problem_type, train_and_evaluate_model,
@@ -587,11 +587,11 @@ class CompareLogicTests(unittest.TestCase):
 
 
 class AIConvertSafetyTests(unittest.TestCase):
-    def test_wide_table_is_capped_by_columns_not_cells(self):
+    def test_wide_table_exceeding_column_cap_fails_clearly(self):
         many_cols = ", ".join(f"c{i}" for i in range(MAX_CONVERTED_COLUMNS + 10))
         one_row = ",".join(str(i) for i in range(MAX_CONVERTED_COLUMNS + 10))
-        df = parse_ai_csv(f"{many_cols}\n{one_row}")
-        self.assertEqual(df.shape[1], MAX_CONVERTED_COLUMNS)
+        with self.assertRaisesRegex(ValueError, "exceeds the maximum supported limit"):
+            parse_ai_csv(f"{many_cols}\n{one_row}")
 
     def test_oversized_response_rejected_before_parsing(self):
         from Utils.AIConvert import MAX_PARSE_CHARS, MAX_PARSE_LINES
@@ -670,7 +670,7 @@ class GeminiErrorClassificationTests(unittest.TestCase):
     def test_rate_limit_and_server_errors_are_retryable(self):
         from Utils.Gemini import _classify
         for status in (429, 500, 503):
-            kind, retryable = _classify(self._error_with_status(status))
+            _, retryable = _classify(self._error_with_status(status))
             self.assertTrue(retryable, f"status {status} should be retryable")
 
     def test_timeout_style_errors_map_to_network(self):
@@ -690,7 +690,6 @@ class GeminiErrorClassificationTests(unittest.TestCase):
     def test_error_messages_do_not_contain_the_api_key(self):
         # real behavioral check: an SDK failure whose message embeds the key
         # must not propagate the key through GeminiError OR the warning logs.
-        import logging as _logging
         fake_key = "AIzaFAKE-SECRET-KEY-do-not-leak-0123456789"
         leak_marker = "boom-marker-present-in-real-error"
 
@@ -767,7 +766,7 @@ class GeminiTimeoutWiringTests(unittest.TestCase):
         )
 
     def test_new_sdk_fallback_is_loud_not_silent(self):
-        from Utils.Gemini import _new_sdk_client
+        from Utils.Gemini import GeminiError, _new_sdk_client
 
         class OldClient:
             def __init__(self, **kwargs):
@@ -776,20 +775,21 @@ class GeminiTimeoutWiringTests(unittest.TestCase):
                 self.models = types.SimpleNamespace()
 
         with self._fake_new_sdk(OldClient):
-            with self.assertLogs("cloudinsight.Gemini", level="WARNING") as captured:
+            with self.assertRaises(GeminiError) as ctx:
                 _new_sdk_client("key")
-        self.assertIn("WITHOUT an explicit timeout", "\n".join(captured.output))
+        self.assertIn("timeout configuration", str(ctx.exception))
+        self.assertEqual(ctx.exception.kind, "sdk")
+        self.assertFalse(ctx.exception.retryable)
 
     def test_legacy_fallback_is_loud_not_silent(self):
-        from Utils.Gemini import _legacy_call
+        from Utils.Gemini import GeminiError, _legacy_call
         model = Mock()
-        model.generate_content.side_effect = [
-            TypeError("bad kwarg"), types.SimpleNamespace(text="ok"),
-        ]
-        with self.assertLogs("cloudinsight.Gemini", level="WARNING") as captured:
+        model.generate_content.side_effect = TypeError("request_options not supported")
+        with self.assertRaises(GeminiError) as ctx:
             _legacy_call(model, "p")
-        self.assertIn("WITHOUT an explicit timeout", "\n".join(captured.output))
-        self.assertEqual(model.generate_content.call_count, 2)
+        self.assertIn("timeout configuration", str(ctx.exception))
+        self.assertEqual(ctx.exception.kind, "sdk")
+        self.assertFalse(ctx.exception.retryable)
 
     def test_retry_still_works_after_timeout_change(self):
         import requests.exceptions
@@ -976,7 +976,6 @@ class PrivacyScreeningTests(unittest.TestCase):
 class DatasetIdentityTests(unittest.TestCase):
     def test_fingerprint_changes_when_file_content_changes(self):
         import os
-        import time as _time
         import uuid
 
         from Utils.dataset_ui import dataset_fingerprint

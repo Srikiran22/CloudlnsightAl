@@ -9,8 +9,36 @@ from Utils.logsys import get_logger
 logger = get_logger("Gemini")
 
 # Central model registry -- the only place model choices should be listed.
-DEFAULT_GEMINI_MODEL = "gemini-1.5-flash"
-GEMINI_MODELS = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"]
+DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_MODELS = [
+    "gemini-3.8-flash",
+    "gemini-3.5-flash",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
+]
+DEPRECATED_GEMINI_MODELS = {
+    "gemini-2.0-flash": "gemini-3.8-flash",
+    "gemini-2.0-flash-exp": "gemini-3.8-flash",
+    "gemini-1.0-pro": "gemini-1.5-pro",
+    "gemini-pro": "gemini-1.5-pro",
+}
+
+
+def resolve_gemini_model(model_name: str) -> str:
+    """Map deprecated models to supported equivalents with a warning."""
+    if model_name in DEPRECATED_GEMINI_MODELS:
+        replacement = DEPRECATED_GEMINI_MODELS[model_name]
+        logger.warning(
+            "Gemini model '%s' is deprecated; mapping to '%s'",
+            model_name,
+            replacement,
+        )
+        return replacement
+    if model_name not in GEMINI_MODELS:
+        logger.info("Using non-standard Gemini model '%s'", model_name)
+    return model_name
 
 MAX_CONTEXT_COLUMNS = 50
 MAX_NUMERIC_SUMMARY_COLUMNS = 20
@@ -119,8 +147,8 @@ def _new_sdk_client(api_key):
     MILLISECONDS and its own retry policy as HttpRetryOptions.attempts
     (1 = no retries; verified against google-genai 2.x). Retrying is owned
     exclusively by _generate_content -- SDK defaults would multiply with it.
-    If an installed version predates these options we fall back loudly,
-    never silently untimed or silently self-retrying.
+    If an installed version predates these options we fail closed rather than
+    proceeding without a bounded timeout.
     """
     from google import genai
 
@@ -133,12 +161,16 @@ def _new_sdk_client(api_key):
             },
         )
     except TypeError as error:
-        logger.warning(
+        logger.error(
             "installed google-genai does not support http_options (%s); "
-            "proceeding WITHOUT an explicit timeout and WITHOUT disabling "
-            "SDK-internal retries", _redact(error, api_key),
+            "failing closed to prevent unbounded requests",
+            _redact(error, api_key),
         )
-        return genai.Client(api_key=api_key)
+        raise GeminiError(
+            "Installed google-genai SDK does not support timeout configuration. Please upgrade google-genai.",
+            kind="sdk",
+            retryable=False,
+        ) from error
 
 
 def _legacy_call(model, prompt):
@@ -165,11 +197,16 @@ def _legacy_call(model, prompt):
                 )
             except TypeError:
                 pass
-        logger.warning(
+        logger.error(
             "installed google-generativeai ignores request_options (%s); "
-            "proceeding WITHOUT an explicit timeout", message,
+            "failing closed to prevent unbounded requests",
+            message,
         )
-        return model.generate_content(prompt)
+        raise GeminiError(
+            "Installed google-generativeai SDK does not support request timeout configuration. Please upgrade google-generativeai or google-genai.",
+            kind="sdk",
+            retryable=False,
+        ) from error
 
 
 def _generate_once(api_key, model_name, prompt):
@@ -192,6 +229,7 @@ def _generate_once(api_key, model_name, prompt):
 
 def _generate_content(api_key, model_name, prompt):
     configure_gemini(api_key)
+    model_name = resolve_gemini_model(model_name)
 
     last_error = None
     for attempt in range(1, RETRYABLE_ATTEMPTS + 1):
@@ -311,12 +349,16 @@ def chat_with_gemini_dataset(
 
     system_prompt = f"""
 You are CloudInsight AI Assistant, an elite AI data analyst.
-You have direct knowledge of the currently active dataset:
+You have access to the currently active dataset summary and sample context:
 <dataset_context>
 {context}
 </dataset_context>
 
-Answer user questions accurately. When relevant:
+Answer user questions accurately based strictly on the available dataset summary, statistics, and sample rows provided in <dataset_context>.
+Important constraints:
+- You do NOT have full-dataset or row-level query execution access beyond the summary and sample rows above.
+- If asked for exact calculations or row-level facts not present in the summary or sample, clearly state that your answer is based on the available summary and sample context, or provide Python/Pandas code for the user to run on the full data.
+- Never claim to have queried or analyzed the entire raw dataset directly when answering questions that require full row scanning.
 - Provide explanations of trends and distributions.
 - Provide clear Python / Pandas code snippets if the user wants code.
 - Suggest charts or ML models that would be effective for their goal.

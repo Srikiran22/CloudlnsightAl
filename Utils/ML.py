@@ -23,7 +23,7 @@ from sklearn.ensemble import (
 from sklearn.tree import DecisionTreeClassifier
 
 from Utils.logsys import get_logger
-from Utils.paths import MODELS_DIR, safe_stem
+from Utils.paths import MODELS_DIR, safe_stem, get_unique_filename
 
 
 logger = get_logger("ML")
@@ -44,7 +44,8 @@ def save_trained_model(res, model_name, directory=None):
     target_dir = Path(directory) if directory is not None else MODELS_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
     safe_name = safe_stem(model_name)
-    path = target_dir / f"{safe_name}.joblib"
+    unique_filename = get_unique_filename(f"{safe_name}.joblib", directory=target_dir)
+    path = target_dir / unique_filename
 
     bundle = {
         "bundle_version": MODEL_BUNDLE_VERSION,
@@ -56,6 +57,7 @@ def save_trained_model(res, model_name, directory=None):
         "target_col": res.get("target_col"),
         "feature_cols": res.get("feature_cols", []),
         "dataset_name": res.get("dataset_name"),
+        "dataset_fingerprint": res.get("dataset_fingerprint"),
         "metrics": {
             key: res[key]
             for key in ("accuracy", "precision", "recall", "f1_score", "r2_score", "rmse", "mae")
@@ -224,10 +226,23 @@ def train_and_evaluate_model(
             f"{', '.join(bad_features)}. Clean or clip these columns before training."
         )
 
-    if len(clean_df) * len(feature_cols) > ML_MAX_TRAIN_CELLS:
+    numeric_features = [col for col in feature_cols if pd.api.types.is_numeric_dtype(X[col])]
+    categorical_features = [col for col in feature_cols if col not in numeric_features]
+
+    # Guard against memory explosion from dense one-hot encoding.
+    # Each numeric feature yields 1 column.
+    # Each categorical feature yields nunique() columns via OneHotEncoder.
+    estimated_encoded_columns = len(numeric_features) + sum(
+        max(int(X[col].nunique(dropna=True)), 1) for col in categorical_features
+    )
+    if len(clean_df) * estimated_encoded_columns > ML_MAX_TRAIN_CELLS:
+        high_card = [col for col in categorical_features if X[col].nunique(dropna=True) > 50]
+        hint = f" (high-cardinality features: {', '.join(high_card)})" if high_card else ""
         raise ValueError(
-            f"Training on {len(clean_df):,} rows × {len(feature_cols)} features exceeds the "
-            f"{ML_MAX_TRAIN_CELLS:,}-cell safety limit. Sample the dataset or reduce features."
+            f"Training on {len(clean_df):,} rows with estimated {estimated_encoded_columns:,} "
+            f"encoded features ({len(clean_df) * estimated_encoded_columns:,} cells) exceeds the "
+            f"{ML_MAX_TRAIN_CELLS:,}-cell safety limit{hint}. One-hot encoding would risk memory "
+            "exhaustion. Sample the dataset, reduce features, or drop high-cardinality categories."
         )
 
     if problem_type == "Regression":
@@ -240,22 +255,36 @@ def train_and_evaluate_model(
 
     split_kwargs = {"test_size": test_size, "random_state": random_state}
     y_for_split = y
+    stratified_requested = False
+    stratified_succeeded = False
+    stratified_warning = None
+
     if problem_type == "Classification":
         class_counts = y_for_split.value_counts()
         test_rows = ceil(len(clean_df) * test_size)
         train_rows = len(clean_df) - test_rows
         if class_counts.min() >= 2 and class_counts.size <= test_rows and class_counts.size <= train_rows:
             split_kwargs["stratify"] = y_for_split
+            stratified_requested = True
+        else:
+            stratified_warning = (
+                f"Stratification skipped: min class count={class_counts.min()} (needs >= 2), "
+                f"classes={class_counts.size}, test_rows={test_rows}, train_rows={train_rows}."
+            )
 
     try:
         X_train, X_test, y_train, y_test = train_test_split(X, y_for_split, **split_kwargs)
-    except ValueError:
-        # rare edge cases (e.g. a class appearing only once after coercion)
+        if stratified_requested:
+            stratified_succeeded = True
+    except ValueError as split_err:
+        logger.warning(
+            "Stratified split failed (%s); falling back to unstratified split",
+            split_err,
+        )
         split_kwargs.pop("stratify", None)
+        stratified_succeeded = False
+        stratified_warning = f"Stratification failed ({split_err}); used random unstratified split."
         X_train, X_test, y_train, y_test = train_test_split(X, y_for_split, **split_kwargs)
-
-    numeric_features = [col for col in feature_cols if pd.api.types.is_numeric_dtype(X[col])]
-    categorical_features = [col for col in feature_cols if col not in numeric_features]
 
     num_tf = Pipeline(steps=[
         ("imputer", SimpleImputer(strategy="median")),
@@ -325,7 +354,9 @@ def train_and_evaluate_model(
             "y_test": y_test.tolist(),
             "y_pred": y_pred.tolist(),
             "train_size": len(X_train),
-            "test_size": len(X_test)
+            "test_size": len(X_test),
+            "stratified_split": stratified_succeeded,
+            "stratified_warning": stratified_warning,
         }
 
     else:

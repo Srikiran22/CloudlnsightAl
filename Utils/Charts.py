@@ -91,6 +91,11 @@ def create_scatter_plot(df, x_col, y_col, hue_col=None, size_col=None,
 
 def create_bar_count_plot(df, x_col, y_col=None, agg_func="Count", hue_col=None,
                           orientation="v"):
+    # Defend against unhashable elements (e.g. lists/dicts in cells)
+    if x_col in df.columns and df[x_col].apply(lambda v: isinstance(v, (list, dict, set))).any():
+        df = df.copy()
+        df[x_col] = df[x_col].astype(str)
+
     if y_col and agg_func != "Count":
         grouped = df.groupby(x_col, dropna=False)[y_col].agg(agg_func.lower()).reset_index()
         fig = px.bar(
@@ -120,7 +125,25 @@ def create_bar_count_plot(df, x_col, y_col=None, agg_func="Count", hue_col=None,
 
 
 def create_line_chart(df, x_col, y_col, hue_col=None, markers=True):
-    sorted_df = df.sort_values(by=x_col) if x_col in df.columns else df
+    if x_col in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[x_col]):
+            sorted_df = df.sort_values(by=x_col)
+        else:
+            # Check if date-like strings should be chronologically ordered
+            try:
+                converted_dt = pd.to_datetime(df[x_col], errors="coerce")
+                non_null_count = df[x_col].dropna().shape[0]
+                if non_null_count > 0 and (converted_dt.notna().sum() / non_null_count) >= 0.8:
+                    temp_df = df.copy()
+                    temp_df["_sort_key_dt"] = converted_dt
+                    sorted_df = temp_df.sort_values(by="_sort_key_dt").drop(columns=["_sort_key_dt"])
+                else:
+                    sorted_df = df.sort_values(by=x_col)
+            except Exception:
+                sorted_df = df.sort_values(by=x_col)
+    else:
+        sorted_df = df
+
     fig = px.line(
         sorted_df,
         x=x_col,
@@ -138,9 +161,25 @@ def create_line_chart(df, x_col, y_col, hue_col=None, markers=True):
 
 
 def create_pie_treemap_plot(df, names_col, values_col=None, plot_type="Pie"):
+    # Defend against unhashable elements in names_col
+    if names_col in df.columns and df[names_col].apply(lambda v: isinstance(v, (list, dict, set))).any():
+        df = df.copy()
+        df[names_col] = df[names_col].astype(str)
+
     if values_col:
+        numeric_vals = pd.to_numeric(df[values_col], errors="coerce").dropna()
+        if (numeric_vals < 0).any():
+            raise ValueError(
+                f"Column '{values_col}' contains negative values. Pie and Treemap charts "
+                "require non-negative values to represent proportional parts of a whole."
+            )
         grouped = df.groupby(names_col, dropna=False)[values_col].sum().reset_index()
         value_name = values_col
+        if (grouped[value_name] < 0).any():
+            raise ValueError(
+                f"Aggregated values for '{values_col}' contain negative sums, "
+                "which cannot be represented in a part-to-whole chart."
+            )
     else:
         grouped = df[names_col].value_counts(dropna=False).reset_index()
         grouped.columns = [names_col, "count"]
@@ -182,6 +221,15 @@ def create_correlation_heatmap(df, colorscale="RdBu_r"):
     if num_df.shape[1] < 2:
         return None
 
+    # Cap correlation matrix to top 30 numeric columns with highest variance to prevent massive matrix hangs
+    MAX_HEATMAP_COLS = 30
+    title_suffix = ""
+    if num_df.shape[1] > MAX_HEATMAP_COLS:
+        variances = num_df.var().sort_values(ascending=False)
+        top_cols = variances.head(MAX_HEATMAP_COLS).index.tolist()
+        num_df = num_df[top_cols]
+        title_suffix = f" (top {MAX_HEATMAP_COLS} numeric columns by variance)"
+
     corr = num_df.corr().round(3)
     fig = go.Figure(
         data=go.Heatmap(
@@ -197,7 +245,7 @@ def create_correlation_heatmap(df, colorscale="RdBu_r"):
         )
     )
     fig.update_layout(
-        title="Interactive Correlation Matrix Heatmap",
+        title=f"Interactive Correlation Matrix Heatmap{title_suffix}",
         template=plot_template(),
         xaxis_showgrid=False,
         yaxis_showgrid=False,

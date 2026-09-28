@@ -1,9 +1,13 @@
+import csv
 import io
 import re
 
 import pandas as pd
 
-from Utils.Gemini import _generate_content
+from Utils.Gemini import DEFAULT_GEMINI_MODEL, _generate_content
+from Utils.logsys import get_logger
+
+logger = get_logger("AIConvert")
 
 MAX_SAMPLE_CHARS = 12000
 MAX_CONVERTED_COLUMNS = 200
@@ -59,19 +63,33 @@ def _normalize(df):
 
 
 def _cap_columns(df):
-    # hard cap on accepted width; anything wider is truncated, not rejected,
-    # because wide-but-valid tables are more useful than an error here
     if df.shape[1] > MAX_CONVERTED_COLUMNS:
-        return df.iloc[:, :MAX_CONVERTED_COLUMNS]
+        raise ValueError(
+            f"Extracted table contains {df.shape[1]} columns, which exceeds the maximum supported limit of {MAX_CONVERTED_COLUMNS} columns."
+        )
     return df
 
 
+def _field_count_quote_aware(line):
+    """Count CSV fields in a line, respecting quoted commas."""
+    if not line or not line.strip():
+        return 0
+    try:
+        row = next(csv.reader([line]))
+        return len(row)
+    except Exception:
+        return line.count(",") + 1
+
+
 def _uniform_runs(lines, indexes):
-    # split line indexes into maximal runs sharing the same field count
+    # split line indexes into maximal runs sharing the same quote-aware field count
     runs = []
     current = []
     for idx in indexes:
-        if not current or lines[idx].count(",") == lines[current[-1]].count(","):
+        cnt = _field_count_quote_aware(lines[idx])
+        if cnt < 2:
+            continue
+        if not current or _field_count_quote_aware(lines[current[-1]]) == cnt:
             current.append(idx)
         else:
             runs.append(current)
@@ -166,7 +184,7 @@ def parse_ai_csv(text):
         raise ValueError(
             f"AI response exceeds the {MAX_PARSE_LINES:,}-line parsing limit."
         )
-    comma_indexes = [i for i, line in enumerate(lines) if "," in line]
+    comma_indexes = [i for i, line in enumerate(lines) if _field_count_quote_aware(line) >= 2]
     if not comma_indexes:
         raise ValueError("AI response did not contain CSV data.")
 
@@ -209,7 +227,7 @@ def parse_ai_csv(text):
     return winner[2]
 
 
-def convert_to_dataframe(api_key, raw_text, filename, model_name="gemini-1.5-flash",
+def convert_to_dataframe(api_key, raw_text, filename, model_name=DEFAULT_GEMINI_MODEL,
                          extra_instructions=None):
     if not api_key:
         raise ValueError("Google Gemini API Key is required for AI conversion.")

@@ -101,8 +101,12 @@ with tab_rel:
             if size_by and (df[size_by].dropna() < 0).any():
                 st.warning(f"`{size_by}` contains negative values and cannot be used for bubble sizes.")
                 size_by = None
+            scatter_df = df
+            if len(df) > 25_000:
+                st.info(f"Plotting a representative sample of 25,000 rows (from {len(df):,} total) to maintain browser responsiveness.")
+                scatter_df = df.sample(n=25_000, random_state=42)
             fig = create_scatter_plot(
-                df,
+                scatter_df,
                 x_col=x_axis,
                 y_col=y_axis,
                 hue_col=color_by,
@@ -159,8 +163,11 @@ with tab_cat:
             val_col = None if val_choice == "Count (Frequency)" else val_choice
 
         plot_kind_pie = "Donut" if cat_type == "Donut Chart" else ("Treemap" if cat_type == "Treemap" else "Pie")
-        fig = create_pie_treemap_plot(df, names_col=cat_name, values_col=val_col, plot_type=plot_kind_pie)
-        st.plotly_chart(fig, width="stretch")
+        try:
+            fig = create_pie_treemap_plot(df, names_col=cat_name, values_col=val_col, plot_type=plot_kind_pie)
+            st.plotly_chart(fig, width="stretch")
+        except ValueError as err:
+            st.error(str(err))
 
 with tab_corr:
     st.subheader("Correlation heatmap")

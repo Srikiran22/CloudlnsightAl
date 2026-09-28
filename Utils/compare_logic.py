@@ -32,13 +32,14 @@ def _numeric_mean(series):
 
 
 def column_drift_rows(df_a, df_b):
-    """Per-column drift records for every column the datasets share.
+    """Per-column summary metric shift records for every column the datasets share.
 
-    Mean shift is relative: (mean_b - mean_a) / |mean_a| * 100; near-zero
-    |mean_a| (<= 1e-12) falls back to a unit denominator so the drift reads
-    as the absolute delta. Categorical-only columns simply get no mean
-    fields. A column is flagged when dtype changes, missingness moves by
-    >= 10 points, or the mean shifts by >= 10 percent.
+    Mean shift is relative: (mean_b - mean_a) / |mean_a| * 100 for non-zero baselines.
+    For near-zero |mean_a| (<= 1e-12), relative percentage is undefined (N/A) and
+    the shift is reported as an absolute delta to avoid mathematically misleading
+    percentages. Categorical-only columns simply get no mean fields.
+    A column is flagged when dtype changes, missingness moves by >= 10 points, or
+    the mean shifts by >= 10 percent (or notable absolute delta for near-zero baselines).
     """
     common, _, _ = schema_diff(df_a, df_b)
     rows = []
@@ -49,9 +50,14 @@ def column_drift_rows(df_a, df_b):
         mean_a, mean_b = _numeric_mean(sa), _numeric_mean(sb)
 
         mean_drift = None
+        is_near_zero_baseline = False
+        delta_mean = None
         if mean_a is not None and mean_b is not None:
-            denominator = abs(mean_a) if abs(mean_a) > 1e-12 else 1.0
-            mean_drift = (mean_b - mean_a) / denominator * 100
+            delta_mean = mean_b - mean_a
+            if abs(mean_a) > 1e-12:
+                mean_drift = delta_mean / abs(mean_a) * 100
+            else:
+                is_near_zero_baseline = True
 
         flags = []
         if not dtype_match:
@@ -60,6 +66,8 @@ def column_drift_rows(df_a, df_b):
             flags.append(f"missingness Δ{miss_b - miss_a:+.1f}%")
         if mean_drift is not None and abs(mean_drift) >= MEAN_DRIFT_PCT:
             flags.append(f"mean shift {mean_drift:+.1f}%")
+        elif is_near_zero_baseline and delta_mean is not None and abs(delta_mean) >= 1e-6:
+            flags.append(f"mean shift Δ{delta_mean:+.3f} (baseline ≈ 0)")
 
         rows.append({
             "Column": col,
@@ -68,6 +76,7 @@ def column_drift_rows(df_a, df_b):
             "Missing % B": round(miss_b, 1),
             "Mean A": round(mean_a, 3) if mean_a is not None else None,
             "Mean B": round(mean_b, 3) if mean_b is not None else None,
+            "Mean Shift %": round(mean_drift, 1) if mean_drift is not None else ("N/A (baseline ≈ 0)" if is_near_zero_baseline else None),
             "Unique A": int(sa.nunique(dropna=True)),
             "Unique B": int(sb.nunique(dropna=True)),
             "Flags": "; ".join(flags) if flags else "OK",

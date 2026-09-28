@@ -1,12 +1,114 @@
-venv/
-.venv/
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+
+# C-extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+ENV/
+env.bak/
+venv.bak/
+
+# Installer, testing, and linter caches
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Environment variables, credentials, and secrets
 .env
+.env.*
+*.env
+!.env.example
 .streamlit/secrets.toml
+*.pem
+*.key
+*.pfx
+*.pkcs12
+
+# Local application data, generated reports, and model artifacts
 Datasets/
 Reports/
 Models/
+*.joblib
+*.pickle
+*.pkl
+
+# Streamlit local runtime state
+.streamlit/cache/
+
+# IDE, editor, and OS metadata
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Logs and temporary files
 *.log
+logs/
+*.tmp
+*.temp
+tmp/
+
+# Antigravity / AI assistant / indexing caches
+.agent/
+.agents/
+.gemini/
+.antigravity/
+.seer/
+.serena/
+.rememex/
+.codegraph/
+
+# Local agent session history & task scratch (local only)
+AI/SESSIONS.md
+AI/MODEL.md
+AI/TASK.md
+AI/PLAN.md
+AI/history/

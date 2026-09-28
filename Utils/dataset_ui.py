@@ -1,4 +1,5 @@
 import hashlib
+import pandas as pd
 import streamlit as st
 from html import escape
 
@@ -17,6 +18,10 @@ _BRAND_HTML = """
 def set_active_dataset(df, name):
     st.session_state["current_df"] = df
     st.session_state["dataset_name"] = name
+    try:
+        st.session_state["session_fingerprint"] = dataset_fingerprint(name) if name else None
+    except Exception:
+        st.session_state["session_fingerprint"] = None
 
 
 def init_session_state():
@@ -31,17 +36,78 @@ def init_session_state():
         st.session_state["dataset_name"] = None
 
 
-def dataset_fingerprint(dataset):
-    """Cheap stable identity for a dataset FILE: name+size+mtime hash.
+_CONTENT_HASH_CACHE = {}
 
-    Filenames alone cannot tell a rewritten file apart from the original;
-    this 12-hex fingerprint can. It reads no file bytes, so it costs one
-    stat call and is safe to compute on every rerun.
+
+def invalidate_dataset_cache(dataset=None):
+    """Clear cached content fingerprints.
+
+    If dataset is provided, clears entries for that specific dataset path.
+    If None, clears the entire fingerprint cache. Also clears Streamlit data cache.
+    """
+    if dataset is None:
+        _CONTENT_HASH_CACHE.clear()
+        try:
+            _load_cached_dataset.clear()
+            _load_cached_dataset_bounded.clear()
+        except Exception:
+            pass
+    else:
+        try:
+            target_path_str = str(resolve_dataset_path(dataset))
+            for key in list(_CONTENT_HASH_CACHE.keys()):
+                if key[0] == target_path_str:
+                    _CONTENT_HASH_CACHE.pop(key, None)
+            try:
+                _load_cached_dataset.clear()
+                _load_cached_dataset_bounded.clear()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+
+def dataset_fingerprint(dataset, force_refresh=False):
+    """Cryptographic content-derived fingerprint for a dataset file.
+
+    Computes a full SHA-256 hash over the actual file content to guarantee
+    exact content identity, so modified or replaced files diverge
+    immediately regardless of matching size, timestamps, or boundary bytes.
     """
     path = resolve_dataset_path(dataset)
-    stat = path.stat()
-    raw = f"{path.name}|{stat.st_size}|{stat.st_mtime_ns}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+    path_str = str(path)
+
+    hasher = hashlib.sha256()
+    with path.open("rb") as f:
+        while chunk := f.read(64 * 1024):
+            hasher.update(chunk)
+
+    fp = hasher.hexdigest()
+
+    for key in list(_CONTENT_HASH_CACHE.keys()):
+        if key[0] == path_str:
+            _CONTENT_HASH_CACHE.pop(key, None)
+
+    if len(_CONTENT_HASH_CACHE) >= 128:
+        _CONTENT_HASH_CACHE.pop(next(iter(_CONTENT_HASH_CACHE)), None)
+
+    _CONTENT_HASH_CACHE[(path_str, fp)] = fp
+    return fp
+
+
+def dataframe_fingerprint(df):
+    """Content fingerprint for an in-memory DataFrame using full SHA-256."""
+    if df is None:
+        return ""
+    meta = f"{df.shape}|{list(df.columns)}|{list(df.dtypes.astype(str))}"
+    hasher = hashlib.sha256(meta.encode("utf-8"))
+    try:
+        sample = df.head(50)
+        h = pd.util.hash_pandas_object(sample).sum()
+        hasher.update(str(h).encode("utf-8"))
+    except Exception:
+        pass
+    return hasher.hexdigest()
 
 
 def results_match_active(results, selected_file):
@@ -63,20 +129,21 @@ def results_match_active(results, selected_file):
 
 
 @st.cache_data(show_spinner="Loading dataset...", max_entries=64)
-def _load_cached_dataset(path_str, mtime_ns):
-    # mtime_ns is only here so the cache busts when the file changes on disk.
-    # max_rows is deliberately NOT part of the key: the full frame is cached
-    # once per file version and row limits are applied by callers afterwards.
-    # max_entries bounds memory across many files/edits in one long session.
+def _load_cached_dataset(path_str, fingerprint):
     return read_dataset(path_str)
+
+
+@st.cache_data(show_spinner="Loading dataset subset...", max_entries=64)
+def _load_cached_dataset_bounded(path_str, fingerprint, max_rows):
+    return read_dataset(path_str, max_rows=max_rows)
 
 
 def load_dataset_cached(dataset, max_rows=None):
     path = resolve_dataset_path(dataset)
-    df = _load_cached_dataset(str(path), path.stat().st_mtime_ns)
-    if max_rows is not None and len(df) > max_rows:
-        df = df.head(max_rows)
-    return df
+    fp = dataset_fingerprint(dataset)
+    if max_rows is None:
+        return _load_cached_dataset(str(path), fp)
+    return _load_cached_dataset_bounded(str(path), fp, max_rows)
 
 
 def render_sidebar():
@@ -122,6 +189,17 @@ def select_working_dataset(selectbox_label, max_rows=None):
     # positional comparison: a stored FILE may itself be named like the
     # session label, so startswith() would misroute it and yield no dataframe
     if df_session is not None and selected_option == options[0]:
+        if name_session and name_session in files:
+            try:
+                disk_fp = dataset_fingerprint(name_session)
+                session_fp = st.session_state.get("session_fingerprint")
+                if session_fp and disk_fp != session_fp:
+                    st.info(
+                        f"Notice: `{name_session}` on disk was modified since it was loaded into this session. "
+                        "Pick the file from the dropdown to reload fresh data from disk."
+                    )
+            except Exception:
+                pass
         return df_session, name_session or "Session Dataset"
 
     try:

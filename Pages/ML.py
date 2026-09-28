@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
+from Utils.theme import plot_template
 from Utils.paths import MODELS_DIR
 from Utils.ML import (
     detect_problem_type, train_and_evaluate_model,
@@ -100,6 +101,8 @@ if results_match_active(results, selected_file):
     st.subheader("Evaluation metrics")
 
     if results["problem_type"] == "Classification":
+        if results.get("stratified_warning"):
+            st.info(results["stratified_warning"])
         m1, m2, m3, m4 = st.columns(4)
         with m1:
             st.metric("Accuracy", f"{results['accuracy'] * 100:.2f}%")
@@ -115,12 +118,12 @@ if results_match_active(results, selected_file):
         classes = results["classes"]
         fig_cm = px.imshow(
             cm,
-            labels=dict(x="Predicted Class", y="Actual Class", color="Count"),
+            labels={"x": "Predicted Class", "y": "Actual Class", "color": "Count"},
             x=[str(c) for c in classes],
             y=[str(c) for c in classes],
             text_auto=True,
             color_continuous_scale="Blues",
-            template="plotly_white"
+            template=plot_template()
         )
         fig_cm.update_layout(title="Confusion Matrix Heatmap")
         st.plotly_chart(fig_cm, width="stretch")
@@ -146,7 +149,7 @@ if results_match_active(results, selected_file):
             pred_df,
             x="Actual",
             y="Predicted",
-            template="plotly_white",
+            template=plot_template(),
             opacity=0.75,
             title="Actual vs Predicted Values"
         )
@@ -157,7 +160,7 @@ if results_match_active(results, selected_file):
             y=[min_val, max_val],
             mode="lines",
             name="Perfect Prediction Line",
-            line=dict(color="red", dash="dash")
+            line={"color": "red", "dash": "dash"}
         ))
         st.plotly_chart(fig_pred, width="stretch")
 
@@ -175,7 +178,7 @@ if results_match_active(results, selected_file):
             orientation="h",
             color="Importance / Relative Weight",
             color_continuous_scale="Viridis",
-            template="plotly_white",
+            template=plot_template(),
             title="Top Influential Features in Model"
         )
         st.plotly_chart(fig_fi, width="stretch")

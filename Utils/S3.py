@@ -6,8 +6,6 @@ import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from pathlib import Path
 
-import pandas as pd
-
 from Utils.logsys import get_logger
 from Utils.paths import (
     AIConversionRequired, MAX_UPLOAD_BYTES, read_tabular,
@@ -92,7 +90,25 @@ def download_s3_dataset(bucket_name, file_key, client):
             f"ingest limit is {MAX_UPLOAD_BYTES // (1024 * 1024)} MB. Download "
             "it manually and trim the file first."
         )
-    body = obj["Body"].read()
+
+    # Stream with a hard byte limit -- remains bounded even if ContentLength is missing
+    stream = obj["Body"]
+    chunks = []
+    bytes_read = 0
+    chunk_size = 64 * 1024
+
+    while True:
+        chunk = stream.read(chunk_size)
+        if not chunk:
+            break
+        bytes_read += len(chunk)
+        if bytes_read > MAX_UPLOAD_BYTES:
+            raise ValueError(
+                f"S3 download exceeded the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit while streaming."
+            )
+        chunks.append(chunk)
+
+    body = b"".join(chunks)
     try:
         df = read_tabular(body, filename=Path(file_key).name)
     except AIConversionRequired:

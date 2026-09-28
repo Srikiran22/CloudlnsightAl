@@ -3,10 +3,16 @@ from pathlib import Path
 
 from Utils.Preprocessing import remove_duplicates, fill_missing_values, drop_missing_values
 from Utils.paths import (
-    AIConversionRequired, DATASETS_DIR, list_dataset_files, read_dataset,
+    AIConversionRequired, DATASETS_DIR, get_unique_filename, list_dataset_files, read_dataset,
     read_tabular, SUPPORTED_DATASET_EXTENSIONS,
 )
-from Utils.dataset_ui import render_sidebar
+from Utils.dataset_ui import (
+    dataframe_fingerprint,
+    dataset_fingerprint,
+    invalidate_dataset_cache,
+    render_sidebar,
+    set_active_dataset,
+)
 
 st.title("Data cleaning")
 st.markdown("Remove duplicate rows and resolve missing values, then save the result as a new dataset.")
@@ -101,14 +107,18 @@ if df is not None:
         base_name = Path(selected_filename or "dataset.csv").stem
         while base_name.lower().startswith("cleaned_"):
             base_name = base_name[len("cleaned_"):]
-        cleaned_name = f"cleaned_{base_name}.csv"
+        cleaned_target = f"cleaned_{base_name}.csv"
+        cleaned_name = get_unique_filename(cleaned_target, directory=dataset_folder)
         cleaned_path = dataset_folder / cleaned_name
         dataset_folder.mkdir(parents=True, exist_ok=True)
         cleaned_df.to_csv(cleaned_path, index=False)
-        st.session_state["current_df"] = cleaned_df
-        st.session_state["dataset_name"] = cleaned_name
+        invalidate_dataset_cache(cleaned_name)
+        set_active_dataset(cleaned_df, cleaned_name)
+
+        src_fp = dataset_fingerprint(selected_filename) if (selected_filename and selected_filename in available_files) else dataframe_fingerprint(df)
         st.session_state["last_clean_result"] = {
             "source": selected_filename,
+            "source_fingerprint": src_fp,
             "name": cleaned_name,
             "df": cleaned_df,
             "orig_rows": df.shape[0],
@@ -116,7 +126,12 @@ if df is not None:
         st.success(f"Cleaned dataset saved as `{cleaned_name}`.")
 
     result = st.session_state.get("last_clean_result")
-    if result and result.get("source") == selected_filename:
+    current_fp = dataset_fingerprint(selected_filename) if (selected_filename and selected_filename in available_files) else dataframe_fingerprint(df)
+    if (
+        result
+        and result.get("source") == selected_filename
+        and (not result.get("source_fingerprint") or result.get("source_fingerprint") == current_fp)
+    ):
         cleaned_df = result["df"]
         cleaned_name = result["name"]
 

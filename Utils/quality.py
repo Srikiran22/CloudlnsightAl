@@ -18,11 +18,23 @@ def quality_metrics(df):
     Returns a dict of the underlying counts plus percentage scores.
     """
     rows, cols = df.shape
-    total_cells = max(rows * cols, 1)
+    if rows == 0 or cols == 0:
+        return {
+            "rows": rows,
+            "cols": cols,
+            "missing_cells": 0,
+            "duplicate_rows": 0,
+            "completeness": 0.0,
+            "uniqueness": 0.0,
+            "index": 0.0,
+            "is_empty": True,
+        }
+
+    total_cells = rows * cols
     missing_cells = int(pd.isnull(df).sum().sum())
     duplicate_rows = int(df.duplicated().sum())
     completeness = ((total_cells - missing_cells) / total_cells) * 100
-    uniqueness = ((rows - duplicate_rows) / max(rows, 1)) * 100
+    uniqueness = ((rows - duplicate_rows) / rows) * 100
     return {
         "rows": rows,
         "cols": cols,
@@ -31,6 +43,7 @@ def quality_metrics(df):
         "completeness": completeness,
         "uniqueness": uniqueness,
         "index": (completeness + uniqueness) / 2,
+        "is_empty": False,
     }
 
 

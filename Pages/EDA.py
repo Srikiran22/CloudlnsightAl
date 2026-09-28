@@ -61,6 +61,10 @@ st.subheader("Correlation matrix")
 numeric_df = df.select_dtypes(include="number")
 
 if numeric_df.shape[1] >= 2:
+    if numeric_df.shape[1] > 50:
+        st.info("Showing correlation for top 50 numeric columns by variance to ensure responsive display.")
+        variances = numeric_df.var().sort_values(ascending=False)
+        numeric_df = numeric_df[variances.head(50).index]
     correlation = numeric_df.corr()
     try:
         st.dataframe(correlation.style.background_gradient(cmap="coolwarm", axis=None).format(precision=3), width="stretch")

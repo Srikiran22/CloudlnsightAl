@@ -18,21 +18,23 @@ Hardened local-first analytics platform: unified quality index, bounded AI-CSV p
 
 ## Known Bugs
 
-None confirmed. XML entity-expansion remains a theoretical self-upload DoS (stdlib parser, accepted). New-SDK google-genai path is untested live because this venv ships the legacy package only.
+None confirmed. XML entity-expansion remains a theoretical self-upload DoS (stdlib parser, accepted). Primary SDK path uses native google-genai (v2.25.0) installed in ./venv with legacy fallback retained.
 
 ## Important Files
 
 - `Utils/logsys.py` — logging setup (get_logger)
 - `Utils/quality.py` — canonical Data Quality Index (DEC-011)
 - `Utils/compare_logic.py` — testable dataset-diff math
-- `Utils/Gemini.py` — model registry + GeminiError taxonomy + retry policy
+- `Utils/Gemini.py` — model registry + GeminiError taxonomy + retry policy + google-genai Client
 - `Utils/AIConvert.py` — bounded LLM→CSV parsing (algorithm documented in docstring)
 - `Utils/secrets.py` — memory-only credential lifecycle
 - `Utils/paths.py` — readers, path containment, MAX_UPLOAD_BYTES
-- `tests/test_core.py` — 117 tests; `bug_hunt.py` — 9-page boot check
+- `tests/test_core.py` — 122 tests; `tests/test_audit_hardening.py` — 33 tests; `bug_hunt.py` — 9-page boot check
 
 ## Recent Changes
 
+- 2026-09-28: Final micro-pass: Full 64-character SHA-256 hexadecimal digests (`hasher.hexdigest()`) in `dataset_fingerprint()` and `dataframe_fingerprint()`; default Gemini model upgraded to `gemini-3.8-flash` across registry, UI, AIConvert, tests, and documentation; installed `google-genai` (v2.25.0) into `./venv` as the primary tested and supported runtime path; all 155/155 unit tests pass, 9/9 pages boot cleanly, CI fatal check passes.
+- 2026-09-01: Initialized CodeGraph knowledge graph (`codegraph init -y`) indexing 29 files, 789 nodes, 1,563 edges in `.codegraph/`. Verified 122/122 unit tests and 9/9 page boots.
 - 2026-08-24 (2nd): Deep review pass: XML DTD guard now scans whole payload (64KB window was bypassable via comment-padded DOCTYPE — mutation-proven); Utils.paths.safe_stem shared sanitizer; Report template names sanitized; S3 downloads capped by MAX_UPLOAD_BYTES via ContentLength; select_working_dataset matches session option positionally (file named "Active Session ..." no longer hijacks); compare_logic docstring corrected. +5 tests -> 122.
 - 2026-08-24: CI repair: tests/test_core.py auth-retry test no longer hard-imports google.api_core (absent on CI; google-genai does not provide it) — try-import with stub fallback; workflow gains permissions contents:read, concurrency dedup, timeout-minutes 30. Verified: poisoned-env repro fails-before/passes-after, 117/117, ruff clean, bug_hunt 9/9.
 - 2026-08-24: Final hardening pass: XML DTD/entity rejection + deep-nest guard (billion-laughs verified vulnerable then fixed); Gemini SDK-internal retries disabled on google-genai (retry_options attempts=1) with jittered project backoff as sole retry owner; legacy SDK retry-disable attempted with loud degradation; Utils/privacy.py sensitive-column screening wired into AI insights/chat context exclusion; ML training cell-limit + extracted _non_finite_columns; PDF quality flags extracted to testable _quality_flags_for_column; dataset fingerprints (name+size+mtime hash) gate stale ML/report results; cache bounded max_entries=64; DEC-013 records structured-output evaluation
@@ -42,21 +44,23 @@ None confirmed. XML entity-expansion remains a theoretical self-upload DoS (stdl
 
 ## Tests
 
-- 122 tests in `tests/test_core.py`: ingestion formats + oversize rejection, AI CSV parsing incl. pathological inputs, Gemini error classification + prompt bounds, quality index math + single-source pinning, preprocessing strategies, compare drift logic, PDF edge cases (0 columns, chart failure), ML persistence/provenance/version flags, S3 error mapping + size cap, batch merge, secrets, session-state contract, XML DTD window-bypass regression
-- Run: `& .\venv\Scripts\python.exe -m unittest discover -s tests`
+- 155 tests across `tests/test_core.py` and `tests/test_audit_hardening.py`:
+  - `test_core.py` (122 tests): core platform ingestion, security, parsing, PDF, ML, quality, secrets, S3, text conversion, fail-closed timeout guarantees
+  - `test_audit_hardening.py` (33 tests): upload collision safety, conversion manifest staleness/caching, S3 streaming limits without ContentLength, cache row bounding, XML repeated element indexing, ambiguous JSON detection, list-cell sanitization, quote-aware CSV counting, table column cap enforcement (>200 columns fails clearly), full SHA-256 exact 64-character content fingerprinting, middle-byte in-place mutation detection, cache invalidation, model registry & deprecation resolution (gemini-3.8-flash default), chat honesty, primary google-genai SDK Client initialization, dense encoding dimension explosion guards, model artifact collisions & provenance, PDF sampling disclosure, near-zero baseline drift delta, pie negative value validation, chronological datetime line chart sorting, correlation column caps, empty dataset quality index (0.0), Streamlit minimum version (>=1.52.0) and width="stretch" compatibility.
+- Run: `& .\venv\Scripts\python.exe -m unittest discover -s tests -v`
 - Boot check: `& .\venv\Scripts\python.exe bug_hunt.py`
 - Static gate: `& .\venv\Scripts\python.exe -m ruff check --select=E9,F63,F7,F82,F821 --preview .`
 
 ## Build Status
 
-Verified 2026-08-23: 71/117 tests pass; bug_hunt boots 9/9 pages; ruff clean; e2e workflow script passed all 10 scenarios (CSV/Excel/JSON/text/PDF ingest, merge, cleaning, drift, ML cls+reg+persist+predict, PDF-with-charts 48KB).
+Verified 2026-09-28: 155/155 tests pass; bug_hunt boots 9/9 pages; ruff CI gate clean; 0 static fatal errors. Fully verified and deterministic.
 
 ## Environment
 
 - **OS:** Windows / PowerShell 5.1
 - **Python:** venv at `./venv` (streamlit 1.60, sklearn 1.9, pandas 3.0.5)
-- **Key Dependencies:** see requirements.txt (annotated); matplotlib + pypdf NOW INSTALLED locally
-- **Note:** venv has legacy google-generativeai, not google-genai (see DEC-012)
+- **Key Dependencies:** see requirements.txt (annotated); matplotlib + pypdf + google-genai 2.25.0 INSTALLED locally
+- **Note:** venv has google-genai 2.25.0 active as primary SDK path; legacy google-generativeai retained as fallback (see DEC-018)
 
 ## Dependencies
 
