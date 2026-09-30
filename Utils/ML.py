@@ -1,4 +1,5 @@
 import datetime
+import re
 
 import numpy as np
 import pandas as pd
@@ -417,27 +418,58 @@ def train_and_evaluate_model(
     try:
         estimator = pipe.named_steps.get("classifier") or pipe.named_steps.get("regressor")
         feat_names = []
-        if numeric_features:
-            feat_names.extend(numeric_features)
-        if categorical_features:
-            cat_encoder = pipe.named_steps["preprocessor"].named_transformers_["cat"].named_steps["encoder"]
-            if hasattr(cat_encoder, "get_feature_names_out"):
-                feat_names.extend(cat_encoder.get_feature_names_out(categorical_features).tolist())
-            else:
-                feat_names.extend(cat_encoder.get_feature_names(categorical_features).tolist())
+        preprocessor = pipe.named_steps.get("preprocessor")
+        if preprocessor is not None and hasattr(preprocessor, "get_feature_names_out"):
+            try:
+                raw_names = preprocessor.get_feature_names_out().tolist()
+                transformer_prefixes = tuple(
+                    f"{name}__" for name, _, _ in getattr(preprocessor, "transformers", [])
+                )
+                if not transformer_prefixes:
+                    transformer_prefixes = ("num__", "cat__")
+                clean_names = []
+                for name in raw_names:
+                    for pfx in transformer_prefixes:
+                        if name.startswith(pfx):
+                            clean_names.append(name[len(pfx):])
+                            break
+                    else:
+                        m = re.match(r"^[a-zA-Z0-9]+__", name)
+                        clean_names.append(name[len(m.group(0)):] if m else name)
+                feat_names = clean_names
+            except Exception:
+                feat_names = []
+
+        if not feat_names:
+            if numeric_features:
+                feat_names.extend(numeric_features)
+            if categorical_features:
+                cat_encoder = pipe.named_steps["preprocessor"].named_transformers_["cat"].named_steps["encoder"]
+                if hasattr(cat_encoder, "get_feature_names_out"):
+                    feat_names.extend(cat_encoder.get_feature_names_out(categorical_features).tolist())
+                else:
+                    feat_names.extend(cat_encoder.get_feature_names(categorical_features).tolist())
 
         if hasattr(estimator, "feature_importances_"):
             importances = estimator.feature_importances_
-            res["feature_importances"] = dict(sorted(
-                zip(feat_names, importances), key=lambda x: x[1], reverse=True
-            )[:15])
+            if len(feat_names) == len(importances):
+                res["feature_importances"] = dict(sorted(
+                    zip(feat_names, importances), key=lambda x: x[1], reverse=True
+                )[:15])
+            else:
+                logger.warning("feature importance length mismatch: %d names vs %d importances", len(feat_names), len(importances))
+                res["feature_importances"] = {}
         elif hasattr(estimator, "coef_"):
             coef = np.abs(estimator.coef_)
             if coef.ndim > 1:
                 coef = np.mean(coef, axis=0)
-            res["feature_importances"] = dict(sorted(
-                zip(feat_names, coef), key=lambda x: x[1], reverse=True
-            )[:15])
+            if len(feat_names) == len(coef):
+                res["feature_importances"] = dict(sorted(
+                    zip(feat_names, coef), key=lambda x: x[1], reverse=True
+                )[:15])
+            else:
+                logger.warning("feature coef length mismatch: %d names vs %d coefs", len(feat_names), len(coef))
+                res["feature_importances"] = {}
     except Exception as error:
         # importances are supplementary; never fail training over them, but
         # leave a trace instead of swallowing the reason

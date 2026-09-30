@@ -43,8 +43,7 @@ with st.sidebar:
 api_key = value_of("gemini")
 
 if not api_key:
-    st.info("Enter your **Google Gemini API key** in the sidebar to activate AI insights and chat.")
-    st.stop()
+    st.info("Enter your **Google Gemini API key** in the sidebar to generate new AI insights or send chat messages.")
 
 st.caption(f"Analyzing: `{selected_file}` ({df.shape[0]:,} rows × {df.shape[1]} cols)")
 st.warning(
@@ -95,32 +94,35 @@ with tab_insights:
     st.markdown("Generate a data health audit, pattern discovery, and business recommendations.")
 
     if st.button("Generate insights report", type="primary"):
-        with st.spinner("Gemini is analyzing your dataset structure, metrics, and distributions..."):
-            try:
-                insights_text = generate_executive_insights(
-                    api_key=api_key,
-                    df=ai_df,
-                    dataset_name=selected_file,
-                    model_name=chosen_model
-                )
-                st.session_state[insights_key] = insights_text
-                st.session_state["latest_ai_insights"] = {
-                    "dataset_name": selected_file,
-                    "dataset_fingerprint": active_fp,
-                    "model_name": chosen_model,
-                    "excluded_cols": sorted(list(excluded_cols)),
-                    "ctx_hash": ctx_hash,
-                    "text": insights_text,
-                }
-                st.session_state[f"insights_{selected_file}_{active_fp}"] = insights_text
-            except GeminiError as e:
-                st.error(f"Gemini error — {e}")
-            except Exception as e:
-                logger.warning("insights generation failed: %s: %s", type(e).__name__, e)
-                st.error(f"Gemini error: {str(e)}")
-            finally:
-                if release("gemini", keep_key="gemini_keep"):
-                    st.toast("Gemini key cleared from memory.")
+        if not api_key:
+            st.error("Google Gemini API key is required to generate new insights. Enter your key in the sidebar.")
+        else:
+            with st.spinner("Gemini is analyzing your dataset structure, metrics, and distributions..."):
+                try:
+                    insights_text = generate_executive_insights(
+                        api_key=api_key,
+                        df=ai_df,
+                        dataset_name=selected_file,
+                        model_name=chosen_model
+                    )
+                    st.session_state[insights_key] = insights_text
+                    st.session_state["latest_ai_insights"] = {
+                        "dataset_name": selected_file,
+                        "dataset_fingerprint": active_fp,
+                        "model_name": chosen_model,
+                        "excluded_cols": sorted(list(excluded_cols)),
+                        "ctx_hash": ctx_hash,
+                        "text": insights_text,
+                    }
+                    st.session_state[f"insights_{selected_file}_{active_fp}"] = insights_text
+                except GeminiError as e:
+                    st.error(f"Gemini error — {e}")
+                except Exception as e:
+                    logger.warning("insights generation failed: %s: %s", type(e).__name__, e)
+                    st.error(f"Gemini error: {str(e)}")
+                finally:
+                    if release("gemini", keep_key="gemini_keep"):
+                        st.toast("Gemini key cleared from memory.")
 
     saved_insights = st.session_state.get(insights_key)
     if saved_insights:
@@ -146,29 +148,32 @@ with tab_chat:
             st.markdown(msg["content"])
 
     if user_prompt := st.chat_input("Ask a question about your dataset..."):
-        st.session_state[chat_key].append({"role": "user", "content": user_prompt})
-        del st.session_state[chat_key][:-MAX_CHAT_HISTORY]
-        with st.chat_message("user"):
-            st.markdown(user_prompt)
+        if not api_key:
+            st.error("Google Gemini API key is required to chat. Enter your key in the sidebar.")
+        else:
+            st.session_state[chat_key].append({"role": "user", "content": user_prompt})
+            del st.session_state[chat_key][:-MAX_CHAT_HISTORY]
+            with st.chat_message("user"):
+                st.markdown(user_prompt)
 
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                try:
-                    reply = chat_with_gemini_dataset(
-                        api_key=api_key,
-                        df=ai_df,
-                        dataset_name=selected_file,
-                        messages=st.session_state[chat_key],
-                        model_name=chosen_model
-                    )
-                    st.markdown(reply)
-                    st.session_state[chat_key].append({"role": "assistant", "content": reply})
-                    del st.session_state[chat_key][:-MAX_CHAT_HISTORY]
-                except GeminiError as e:
-                    st.error(f"Gemini error — {e}")
-                except Exception as e:
-                    logger.warning("chat failed: %s: %s", type(e).__name__, e)
-                    st.error(f"Error: {str(e)}")
-                finally:
-                    if release("gemini", keep_key="gemini_keep"):
-                        st.toast("Gemini key cleared from memory.")
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking..."):
+                    try:
+                        reply = chat_with_gemini_dataset(
+                            api_key=api_key,
+                            df=ai_df,
+                            dataset_name=selected_file,
+                            messages=st.session_state[chat_key],
+                            model_name=chosen_model
+                        )
+                        st.markdown(reply)
+                        st.session_state[chat_key].append({"role": "assistant", "content": reply})
+                        del st.session_state[chat_key][:-MAX_CHAT_HISTORY]
+                    except GeminiError as e:
+                        st.error(f"Gemini error — {e}")
+                    except Exception as e:
+                        logger.warning("chat failed: %s: %s", type(e).__name__, e)
+                        st.error(f"Error: {str(e)}")
+                    finally:
+                        if release("gemini", keep_key="gemini_keep"):
+                            st.toast("Gemini key cleared from memory.")

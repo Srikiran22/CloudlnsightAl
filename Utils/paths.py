@@ -2,6 +2,7 @@ import csv
 import hashlib
 import io
 import json
+import os
 from html.parser import HTMLParser
 from pathlib import Path
 from xml.etree import ElementTree
@@ -23,6 +24,10 @@ CSV_ENCODINGS = ("utf-8", "utf-8-sig", "cp1252", "latin1")
 # uploads beyond this are refused before parsing (matches Streamlit's own
 # 200 MB default ceiling); raise it if your machine has memory to spare
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+MAX_INGESTION_ROWS = 1_000_000
+MAX_UPLOAD_FILES = 20
+MAX_AGGREGATE_UPLOAD_BYTES = 250 * 1024 * 1024
+MAX_COMBINED_ROWS = 1_000_000
 
 TABULAR_EXTENSIONS = {
     ".csv", ".tsv", ".xlsx", ".xls", ".json", ".jsonl", ".ndjson",
@@ -45,6 +50,7 @@ class AIConversionRequired(ValueError):
 def ensure_project_directories():
     DATASETS_DIR.mkdir(parents=True, exist_ok=True)
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def safe_stem(value, fallback="model"):
@@ -120,7 +126,9 @@ def record_conversion(
     manifest = {}
     if manifest_file.exists():
         try:
-            manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+            loaded = json.loads(manifest_file.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                manifest = loaded
         except Exception:
             manifest = {}
     prov_hash = compute_conversion_provenance(raw_text, model_name=model_name, extra_instructions=extra_instructions)
@@ -151,7 +159,18 @@ def record_conversion(
         "version": CONVERSION_MANIFEST_VERSION,
         "source_length": len(raw_text),
     }
-    manifest_file.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    manifest_file.parent.mkdir(parents=True, exist_ok=True)
+    tmp_manifest = manifest_file.with_name(f"{manifest_file.name}.tmp.{os.getpid()}")
+    try:
+        tmp_manifest.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        os.replace(tmp_manifest, manifest_file)
+    except Exception:
+        if tmp_manifest.exists():
+            try:
+                tmp_manifest.unlink()
+            except OSError:
+                pass
+        raise
 
 
 def get_valid_conversion(
@@ -169,6 +188,8 @@ def get_valid_conversion(
         return None
     try:
         manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict):
+            return None
     except Exception:
         return None
 
@@ -177,6 +198,8 @@ def get_valid_conversion(
     req_model = (model_name or "").strip().lower() if model_name is not None else None
 
     for conv_name, meta in manifest.items():
+        if not isinstance(meta, dict):
+            continue
         if meta.get("version") != CONVERSION_MANIFEST_VERSION:
             continue
         if meta.get("source_name") != norm_source and meta.get("source_name") != source_name:
@@ -224,7 +247,7 @@ def get_dataset_row_count(dataset):
                 header = next(reader, None)
                 if header is None:
                     return 0
-                return sum(1 for _ in reader)
+                return sum(1 for row in reader if row and any(cell.strip() for cell in row))
         except Exception:
             pass
 
@@ -365,13 +388,14 @@ def _sanitize_formula_val(val):
 
 
 def sanitize_for_csv_export(df):
-    """Prepend single quote to string cells starting with formula triggers
+    """Prepend single quote to string cells and column headers starting with formula triggers
     (=, +, -, @, \\t, \\r) unless the value is a valid numeric literal.
     Neutralizes CSV formula injection (DDE) when downloaded CSV is opened in Excel/Calc.
     """
     if df is None:
         return None
     df_out = df.copy()
+    df_out.columns = [_sanitize_formula_val(str(col)) for col in df_out.columns]
     for col in df_out.columns:
         if df_out[col].dtype == object or pd.api.types.is_string_dtype(df_out[col]):
             df_out[col] = df_out[col].map(_sanitize_formula_val)
@@ -466,14 +490,34 @@ def _read_json_from_buffer(buffer, nrows=None):
 
         data = json.loads(text)
         if isinstance(data, dict):
-            list_keys = [k for k, v in data.items() if isinstance(v, list)]
-            if len(list_keys) > 1:
+            # Check for columnar table: all values are lists of equal length > 0 and contain scalars
+            if (
+                len(data) > 0
+                and all(isinstance(v, list) for v in data.values())
+                and len({len(v) for v in data.values()}) == 1
+                and all(not any(isinstance(x, dict) for x in v) for v in data.values())
+            ):
+                df = pd.DataFrame(data)
+                if nrows is not None and len(df) > nrows:
+                    df = df.head(nrows)
+                return _sanitize_unhashable_cells(df)
+
+            # Check for record lists wrapped inside a dict
+            record_list_keys = [
+                k for k, v in data.items()
+                if isinstance(v, list) and (len(v) == 0 or any(isinstance(x, dict) for x in v))
+            ]
+            if len(record_list_keys) > 1:
                 raise ValueError(
-                    f"Ambiguous JSON structure: multiple top-level record lists found ({', '.join(sorted(list_keys))}). "
+                    f"Ambiguous JSON structure: multiple top-level record lists found ({', '.join(sorted(record_list_keys))}). "
                     "Extract the target list before ingestion."
                 )
-            if len(list_keys) == 1:
-                data = data[list_keys[0]]
+            if len(record_list_keys) == 1:
+                data = data[record_list_keys[0]]
+            else:
+                # Single record object: normalize as a 1-row table
+                data = [data]
+
         if isinstance(data, list):
             if nrows is not None and len(data) > nrows:
                 data = data[:nrows]
@@ -756,25 +800,45 @@ MAX_TEXT_EXTRACT_CHARS = 50_000
 
 def _read_parquet_from_buffer(buffer, nrows=None):
     buffer.seek(0)
-    if nrows is not None and nrows > 0:
-        try:
-            import pyarrow.parquet as pq
-            import pyarrow as pa
-            pf = pq.ParquetFile(buffer)
-            batches = []
-            count = 0
-            for batch in pf.iter_batches(batch_size=min(nrows, 10000)):
-                batches.append(batch)
-                count += len(batch)
-                if count >= nrows:
-                    break
-            if batches:
-                tbl = pa.Table.from_batches(batches)
-                df = tbl.to_pandas().head(nrows)
-                return _sanitize_unhashable_cells(df)
-        except Exception:
-            buffer.seek(0)
+    effective_limit = nrows if (nrows is not None and nrows > 0) else MAX_INGESTION_ROWS
+    try:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        pf = pq.ParquetFile(buffer)
+        total_rows = pf.metadata.num_rows
+        if nrows is None and total_rows > MAX_INGESTION_ROWS:
+            raise ValueError(
+                f"Parquet dataset contains {total_rows:,} rows, which exceeds the maximum supported limit "
+                f"of {MAX_INGESTION_ROWS:,} rows. Filter or split the file before ingestion."
+            )
+        if total_rows == 0 or (nrows is not None and nrows == 0):
+            tbl = pf.schema_arrow.empty_table()
+            df = tbl.to_pandas()
+            return _sanitize_unhashable_cells(df)
+        target_rows = min(total_rows, effective_limit)
+        batches = []
+        count = 0
+        batch_size = max(1, min(target_rows, 10000))
+        for batch in pf.iter_batches(batch_size=batch_size):
+            batches.append(batch)
+            count += len(batch)
+            if count >= target_rows:
+                break
+        if batches:
+            tbl = pa.Table.from_batches(batches)
+            df = tbl.to_pandas().head(target_rows)
+            return _sanitize_unhashable_cells(df)
+    except ValueError:
+        raise
+    except Exception:
+        buffer.seek(0)
+
     df = pd.read_parquet(buffer)
+    if nrows is None and len(df) > MAX_INGESTION_ROWS:
+        raise ValueError(
+            f"Parquet dataset contains {len(df):,} rows, which exceeds the maximum supported limit "
+            f"of {MAX_INGESTION_ROWS:,} rows. Filter or split the file before ingestion."
+        )
     if nrows is not None and len(df) > nrows:
         df = df.head(nrows)
     return _sanitize_unhashable_cells(df)

@@ -1,4 +1,5 @@
 import streamlit as st
+import hashlib
 from pathlib import Path
 
 from Utils.secrets import ask, value_of, keep_box, release
@@ -14,10 +15,14 @@ from Utils.paths import (
     read_dataset,
     read_tabular,
     SUPPORTED_DATASET_EXTENSIONS,
+    MAX_UPLOAD_FILES,
+    MAX_AGGREGATE_UPLOAD_BYTES,
+    MAX_COMBINED_ROWS,
 )
 from Utils.AIConvert import convert_to_dataframe
 from Utils.batch import merge_frames
 from Utils.dataset_ui import render_sidebar, set_active_dataset, invalidate_dataset_cache
+from Utils.privacy import detect_sensitive_text
 
 logger = get_logger("Upload")
 
@@ -37,6 +42,28 @@ ACCEPTED_TYPES = sorted(ext.lstrip(".") for ext in SUPPORTED_DATASET_EXTENSIONS)
 
 df = None
 file_name = None
+fresh_ingest = False
+
+def _compute_upload_signature(files):
+    sigs = []
+    for f in files:
+        f.seek(0)
+        hasher = hashlib.sha256()
+        total_size = 0
+        while True:
+            chunk = f.read(64 * 1024)
+            if not chunk:
+                break
+            if isinstance(chunk, str):
+                chunk = chunk.encode("utf-8", errors="replace")
+            hasher.update(chunk)
+            total_size += len(chunk)
+        f.seek(0)
+        size = getattr(f, "size", total_size)
+        content_hash = hasher.hexdigest()
+        sigs.append((getattr(f, "name", "file"), size, content_hash))
+    return tuple(sigs)
+
 
 if upload_mode == "Local file":
     uploaded_files = st.file_uploader(
@@ -50,37 +77,98 @@ if upload_mode == "Local file":
     failures = []  # (name, reason)
 
     if uploaded_files:
-        seen_names = set()
-        for uploaded in uploaded_files:
-            raw_name = Path(uploaded.name).name
-            target_name = get_unique_filename(raw_name, directory=DATASETS_DIR, extra_names=seen_names)
-            seen_names.add(target_name)
-            if target_name != raw_name:
-                st.info(f"Existing dataset `{raw_name}` preserved — upload saved as `{target_name}`.")
-
-            try:
-                single_df = read_tabular(uploaded, filename=target_name)
-                DATASETS_DIR.mkdir(parents=True, exist_ok=True)
-                uploaded.seek(0)
-                with open(DATASETS_DIR / target_name, "wb") as fh:
-                    fh.write(uploaded.getbuffer())
-                invalidate_dataset_cache(target_name)
-                parsed.append((target_name, single_df))
-            except AIConversionRequired as needed:
-                active_model = st.session_state.get("ai_convert_model")
-                valid_conv = (
-                    get_valid_conversion(raw_name, needed.raw_text, model_name=active_model, extra_instructions="")
-                    if active_model
-                    else None
+        if len(uploaded_files) > MAX_UPLOAD_FILES:
+            st.error(
+                f"Too many files selected ({len(uploaded_files)}). Maximum allowed is "
+                f"{MAX_UPLOAD_FILES} files. Please reduce your selection."
+            )
+        else:
+            total_bytes = sum(getattr(f, "size", 0) for f in uploaded_files)
+            if total_bytes > MAX_AGGREGATE_UPLOAD_BYTES:
+                st.error(
+                    f"Total upload size ({total_bytes / (1024 * 1024):.1f} MB) exceeds aggregate limit of "
+                    f"{MAX_AGGREGATE_UPLOAD_BYTES // (1024 * 1024)} MB. Please split your files."
                 )
-                if valid_conv:
-                    st.info(f"Reusing verified conversion `{valid_conv}` for `{target_name}`.")
-                    parsed.append((valid_conv, read_dataset(valid_conv)))
+            else:
+                current_sig = _compute_upload_signature(uploaded_files)
+                last_sig = st.session_state.get("last_upload_signature")
+                if current_sig == last_sig and "last_upload_state" in st.session_state:
+                    saved_state = st.session_state["last_upload_state"]
+                    parsed = saved_state["parsed"]
+                    pending = saved_state["pending"]
+                    failures = saved_state["failures"]
+                    file_name = saved_state["file_name"]
+                    df = saved_state["df"]
+                    if saved_state.get("merge_error"):
+                        st.error(saved_state["merge_error"])
                 else:
-                    pending.append((target_name, needed))
-            except Exception as read_error:
-                logger.warning("ingest failed for %s: %s: %s", target_name, type(read_error).__name__, read_error)
-                failures.append((target_name, str(read_error)))
+                    seen_names = set()
+                    merge_error = None
+                    for uploaded in uploaded_files:
+                        raw_name = Path(uploaded.name).name
+                        target_name = get_unique_filename(raw_name, directory=DATASETS_DIR, extra_names=seen_names)
+                        seen_names.add(target_name)
+                        if target_name != raw_name:
+                            st.info(f"Existing dataset `{raw_name}` preserved — upload saved as `{target_name}`.")
+
+                        try:
+                            single_df = read_tabular(uploaded, filename=target_name)
+                            DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+                            uploaded.seek(0)
+                            with open(DATASETS_DIR / target_name, "wb") as fh:
+                                fh.write(uploaded.getbuffer())
+                            invalidate_dataset_cache(target_name)
+                            parsed.append((target_name, single_df))
+                        except AIConversionRequired as needed:
+                            active_model = st.session_state.get("ai_convert_model")
+                            valid_conv = (
+                                get_valid_conversion(raw_name, needed.raw_text, model_name=active_model, extra_instructions="")
+                                if active_model
+                                else None
+                            )
+                            if valid_conv:
+                                st.info(f"Reusing verified conversion `{valid_conv}` for `{target_name}`.")
+                                parsed.append((valid_conv, read_dataset(valid_conv)))
+                            else:
+                                pending.append((target_name, needed))
+                        except Exception as read_error:
+                            logger.warning("ingest failed for %s: %s: %s", target_name, type(read_error).__name__, read_error)
+                            failures.append((target_name, str(read_error)))
+
+                    if parsed:
+                        if len(parsed) == 1:
+                            file_name, df = parsed[0]
+                            fresh_ingest = True
+                        else:
+                            total_rows = sum(len(f[1]) for f in parsed)
+                            if total_rows > MAX_COMBINED_ROWS:
+                                merge_error = (
+                                    f"Combined row count ({total_rows:,}) exceeds the maximum supported limit of "
+                                    f"{MAX_COMBINED_ROWS:,} rows. Merge was aborted."
+                                )
+                                st.error(merge_error)
+                                file_name, df = None, None
+                            else:
+                                combined = merge_frames(parsed)
+                                file_name = get_unique_filename("combined_dataset.csv", directory=DATASETS_DIR)
+                                DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+                                combined.to_csv(DATASETS_DIR / file_name, index=False)
+                                invalidate_dataset_cache(file_name)
+                                df = combined
+                                fresh_ingest = True
+
+                    st.session_state["last_upload_signature"] = current_sig
+                    st.session_state["last_upload_state"] = {
+                        "parsed": parsed,
+                        "pending": pending,
+                        "failures": failures,
+                        "file_name": file_name,
+                        "df": df,
+                        "merge_error": merge_error,
+                    }
+    else:
+        st.session_state.pop("last_upload_signature", None)
+        st.session_state.pop("last_upload_state", None)
 
     if failures:
         for fname, reason in failures:
@@ -116,6 +204,12 @@ if upload_mode == "Local file":
         )
 
         for fname, needed in pending:
+            findings = detect_sensitive_text(needed.raw_text)
+            if findings:
+                st.warning(
+                    f"Possible sensitive content detected in `{fname}`: {', '.join(findings)}. "
+                    "Review before converting with Gemini."
+                )
             with st.expander(f"Preview extracted content — {fname}"):
                 preview_text = needed.raw_text[:1500]
                 st.text(preview_text + ("..." if len(needed.raw_text) > 1500 else ""))
@@ -131,6 +225,7 @@ if upload_mode == "Local file":
             else:
                 with st.spinner("Gemini is structuring your files..."):
                     still_pending = []
+                    newly_converted = []
                     try:
                         for fname, needed in pending:
                             try:
@@ -142,7 +237,9 @@ if upload_mode == "Local file":
                                 )
                                 if valid_conv:
                                     st.info(f"Reusing verified conversion `{valid_conv}` for `{fname}`.")
-                                    parsed.append((valid_conv, read_dataset(valid_conv)))
+                                    conv_df = read_dataset(valid_conv)
+                                    parsed.append((valid_conv, conv_df))
+                                    newly_converted.append((valid_conv, conv_df))
                                     continue
                                 converted = convert_to_dataframe(
                                     api_key=value_of("gemini"),
@@ -165,6 +262,7 @@ if upload_mode == "Local file":
                                     extra_instructions=(hints or "").strip() or None,
                                 )
                                 parsed.append((converted_name, converted))
+                                newly_converted.append((converted_name, converted))
                                 st.success(
                                     f"Converted `{fname}` to {converted.shape[0]:,} rows × "
                                     f"{converted.shape[1]} cols, saved as `{converted_name}`."
@@ -182,16 +280,36 @@ if upload_mode == "Local file":
                             st.toast("Gemini key cleared from memory.")
                     pending = still_pending
 
-    if parsed:
-        if len(parsed) == 1:
-            file_name, df = parsed[0]
-        else:
-            combined = merge_frames(parsed)
-            file_name = get_unique_filename("combined_dataset.csv", directory=DATASETS_DIR)
-            DATASETS_DIR.mkdir(parents=True, exist_ok=True)
-            combined.to_csv(DATASETS_DIR / file_name, index=False)
-            invalidate_dataset_cache(file_name)
-            df = combined
+                    if newly_converted:
+                        merge_error = None
+                        if len(parsed) == 1:
+                            file_name, df = parsed[0]
+                            fresh_ingest = True
+                        else:
+                            total_rows = sum(len(f[1]) for f in parsed)
+                            if total_rows > MAX_COMBINED_ROWS:
+                                merge_error = (
+                                    f"Combined row count ({total_rows:,}) exceeds the maximum supported limit of "
+                                    f"{MAX_COMBINED_ROWS:,} rows. Merge was aborted."
+                                )
+                                st.error(merge_error)
+                                file_name, df = None, None
+                            else:
+                                combined = merge_frames(parsed)
+                                file_name = get_unique_filename("combined_dataset.csv", directory=DATASETS_DIR)
+                                DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+                                combined.to_csv(DATASETS_DIR / file_name, index=False)
+                                invalidate_dataset_cache(file_name)
+                                df = combined
+                                fresh_ingest = True
+
+                        if "last_upload_state" in st.session_state:
+                            st.session_state["last_upload_state"]["parsed"] = parsed
+                            st.session_state["last_upload_state"]["pending"] = pending
+                            st.session_state["last_upload_state"]["failures"] = failures
+                            st.session_state["last_upload_state"]["file_name"] = file_name
+                            st.session_state["last_upload_state"]["df"] = df
+                            st.session_state["last_upload_state"]["merge_error"] = merge_error
 
 else:
     st.subheader("Connect to Amazon S3")
@@ -262,6 +380,7 @@ else:
                                 "(the converted copy is saved automatically)."
                             )
                         else:
+                            fresh_ingest = True
                             st.success(f"Downloaded `{file_name}` from Amazon S3.")
                     except ValueError as ve:
                         st.error(str(ve))
@@ -272,7 +391,7 @@ else:
                         if release("aws_access", "aws_secret", keep_key="aws_keep"):
                             st.toast("AWS credentials cleared from memory.")
 
-if df is not None and file_name is not None:
+if df is not None and file_name is not None and (fresh_ingest or not st.session_state.get("dataset_name")):
     set_active_dataset(df, file_name)
 
 render_sidebar()

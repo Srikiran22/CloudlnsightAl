@@ -58,29 +58,64 @@ def create_box_violin_plot(df, y_col, x_col=None, hue_col=None, plot_type="Box",
 
 def create_scatter_plot(df, x_col, y_col, hue_col=None, size_col=None,
                         add_trendline=False):
-    # OLS only makes sense when both axes are numeric
+    # OLS only makes sense when both axes are numeric and finite
     can_fit_trendline = (
         pd.api.types.is_numeric_dtype(df[x_col])
         and pd.api.types.is_numeric_dtype(df[y_col])
     )
-    trendline = "ols" if add_trendline and can_fit_trendline else None
+    plot_df = df
+    if add_trendline and can_fit_trendline:
+        try:
+            import statsmodels.api as _sm
+            has_statsmodels = True
+        except ImportError:
+            has_statsmodels = False
+
+        if has_statsmodels:
+            import numpy as np
+            x_num = pd.to_numeric(df[x_col], errors="coerce")
+            y_num = pd.to_numeric(df[y_col], errors="coerce")
+            finite_mask = np.isfinite(x_num) & np.isfinite(y_num)
+            if finite_mask.sum() >= 2:
+                plot_df = df[finite_mask]
+                trendline = "ols"
+            else:
+                trendline = None
+        else:
+            trendline = None
+    else:
+        trendline = None
 
     if size_col:
-        size_values = pd.to_numeric(df[size_col], errors="coerce").dropna()
-        if size_values.empty or (size_values < 0).any():
+        import numpy as np
+        size_values = pd.to_numeric(plot_df[size_col], errors="coerce")
+        if size_values.empty or not np.isfinite(size_values).any() or (size_values.dropna() < 0).any():
             size_col = None
 
-    fig = px.scatter(
-        df,
-        x=x_col,
-        y=y_col,
-        color=hue_col,
-        size=size_col,
-        trendline=trendline,
-        opacity=0.8,
-        template=plot_template(),
-        hover_data=df.columns[:5].tolist()
-    )
+    try:
+        fig = px.scatter(
+            plot_df,
+            x=x_col,
+            y=y_col,
+            color=hue_col,
+            size=size_col,
+            trendline=trendline,
+            opacity=0.8,
+            template=plot_template(),
+            hover_data=plot_df.columns[:5].tolist()
+        )
+    except Exception:
+        fig = px.scatter(
+            df,
+            x=x_col,
+            y=y_col,
+            color=hue_col,
+            size=size_col,
+            trendline=None,
+            opacity=0.8,
+            template=plot_template(),
+            hover_data=df.columns[:5].tolist()
+        )
     fig.update_layout(
         title=f"Relationship: <b>{x_col}</b> vs <b>{y_col}</b>",
         xaxis_title=x_col,
@@ -97,17 +132,19 @@ def create_bar_count_plot(df, x_col, y_col=None, agg_func="Count", hue_col=None,
         df[x_col] = df[x_col].astype(str)
 
     if y_col and agg_func != "Count":
-        grouped = df.groupby(x_col, dropna=False)[y_col].agg(agg_func.lower()).reset_index()
+        group_cols = [x_col] if (not hue_col or hue_col == x_col) else [x_col, hue_col]
+        val_col = f"{y_col}_{agg_func.lower()}" if y_col in group_cols else y_col
+        grouped = df.groupby(group_cols, dropna=False).agg(**{val_col: (y_col, agg_func.lower())}).reset_index()
         fig = px.bar(
             grouped,
-            x=x_col if orientation == "v" else y_col,
-            y=y_col if orientation == "v" else x_col,
+            x=x_col if orientation == "v" else val_col,
+            y=val_col if orientation == "v" else x_col,
             color=hue_col,
             color_discrete_sequence=[px.colors.qualitative.Plotly[0]] if not hue_col else None,
             orientation=orientation,
             template=plot_template()
         )
-        fig.update_layout(title=f"<b>{agg_func} of {y_col}</b> by {x_col}")
+        fig.update_layout(title=f"<b>{agg_func} of {y_col}</b> by {x_col}" + (f" and {hue_col}" if hue_col and hue_col != x_col else ""))
     else:
         fig = px.histogram(
             df,
@@ -175,8 +212,8 @@ def create_pie_treemap_plot(df, names_col, values_col=None, plot_type="Pie"):
                 f"Column '{values_col}' contains negative values. Pie and Treemap charts "
                 "require non-negative values to represent proportional parts of a whole."
             )
-        grouped = df.groupby(names_col, dropna=False)[values_col].sum().reset_index()
-        value_name = values_col
+        value_name = f"{values_col}_sum" if names_col == values_col else values_col
+        grouped = df.groupby(names_col, dropna=False).agg(**{value_name: (values_col, "sum")}).reset_index()
         if (grouped[value_name] < 0).any():
             raise ValueError(
                 f"Aggregated values for '{values_col}' contain negative sums, "

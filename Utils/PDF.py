@@ -180,7 +180,11 @@ def _quality_flags_for_column(series):
     if pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series):
         if n_unique / max(len(series.dropna()), 1) > 0.95 and n_unique > 20:
             flags.append("Possible ID/high-cardinality")
-    if pd.api.types.is_numeric_dtype(series) and not series.dropna().empty:
+    if (
+        pd.api.types.is_numeric_dtype(series)
+        and not pd.api.types.is_bool_dtype(series)
+        and not series.dropna().empty
+    ):
         q1, q3 = series.dropna().quantile([0.25, 0.75])
         iqr = q3 - q1
         if iqr > 0:
