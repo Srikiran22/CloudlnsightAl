@@ -346,11 +346,13 @@ def get_dataset_row_count(dataset):
         return None
 
 
-def list_dataset_files():
-    ensure_project_directories()
-    datasets_root = DATASETS_DIR.resolve()
+def list_dataset_files(directory=DATASETS_DIR):
+    target_dir = Path(directory)
+    if target_dir == DATASETS_DIR:
+        ensure_project_directories()
+    datasets_root = target_dir.resolve()
     valid_files = []
-    for path in DATASETS_DIR.iterdir():
+    for path in target_dir.iterdir():
         if path.is_file() and not path.name.startswith(".") and path.suffix.lower() in SUPPORTED_DATASET_EXTENSIONS:
             try:
                 if path.resolve().parent == datasets_root:
