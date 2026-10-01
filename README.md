@@ -4,7 +4,7 @@ CloudInsight AI is a local-first data analytics application built with Streamlit
 
 It brings common data-analysis tasks into one workspace: ingest a dataset, clean it, compare it with another dataset, explore it, train a machine-learning model, and export an executive PDF report. Google Gemini and Amazon S3 are optional integrations.
 
-## What it does
+## Key Features
 
 ### Data ingestion
 
@@ -187,6 +187,48 @@ The S3 client uses chunked streaming with an accumulated byte ceiling to enforce
 | AI insights | Gemini analysis and dataset chat |
 | PDF report | Report generation, templates, and batch mode |
 
+## Repository structure
+
+```text
+CloudInsightAI/
+├── .github/workflows/     # CI workflow configurations (tests, linting)
+├── .streamlit/            # Streamlit theme and runtime configuration
+├── Pages/                 # Multi-page application views
+│   ├── AI.py              # AI insights and conversational dataset Q&A
+│   ├── Cleaning.py        # Deduplication, missing-value handling, and export
+│   ├── Compare.py         # Schema drift and column-level comparison
+│   ├── Dashboard.py       # Quality Index gauge and distribution indicators
+│   ├── EDA.py             # Exploratory analysis, correlations, and outliers
+│   ├── ML.py              # Model training, evaluation, saving, and prediction
+│   ├── Report.py          # PDF report generation and template management
+│   ├── Upload.py          # File ingestion (local files and Amazon S3)
+│   └── Visualization.py   # Interactive plotting (Plotly)
+├── Utils/                 # Domain logic, security guards, and utilities
+│   ├── AIConvert.py       # Unstructured data extraction via Gemini
+│   ├── Charts.py          # Visualization figure builders
+│   ├── Gemini.py          # Google Gemini client and resilience handling
+│   ├── ML.py              # Scikit-learn pipelines and model persistence
+│   ├── PDF.py             # ReportLab PDF generation
+│   ├── Preprocessing.py   # Cleaning and missing-value imputation
+│   ├── S3.py              # Amazon S3 client and streaming ingestion
+│   ├── batch.py           # Multi-file merging and schema alignment
+│   ├── compare_logic.py   # Dataset comparison and drift metrics
+│   ├── dataset_ui.py      # Session state and dataset caching helpers
+│   ├── logsys.py          # Centralized application logging
+│   ├── paths.py           # Safe path handling, format parsing, and limits
+│   ├── privacy.py         # Sensitive column screening and PII detection
+│   ├── quality.py         # Data quality index and health scoring
+│   ├── secrets.py         # Ephemeral in-memory credential management
+│   └── theme.py           # UI styling and CSS tokens
+├── tests/                 # Unit, security, and regression test suites
+├── App.py                 # Application entry point and navigation
+├── bug_hunt.py            # Headless page execution sanity check
+├── CONTRIBUTING.md        # Contribution guidelines and development checks
+├── README.md              # Project documentation and setup guide
+├── requirements.txt       # Base application dependencies
+└── requirements-lock.txt  # Pinned dependency lockfile
+```
+
 ## Development
 
 Run tests:
@@ -208,7 +250,7 @@ pip install ruff==0.16.4
 ruff check --select=E9,F63,F7,F82,F821 --preview .
 ```
 
-GitHub Actions runs these checks across Python 3.10, 3.11, and 3.12.
+GitHub Actions runs these checks across Python 3.12 and 3.13.
 
 ## Security and privacy
 
@@ -216,13 +258,13 @@ The application is designed for local, single-user use.
 
 Key safeguards include:
 
-- No built-in authentication
-- Dataset path containment (traversal attempts rejected)
+- Strict dataset path containment preventing directory traversal
 - Full 64-character SHA-256 cryptographic dataset content identity
-- XML DTD/entity rejection to prevent entity expansion attacks
+- XML DTD and external entity rejection preventing XXE attacks
+- Decompression bomb and size guards across ZIP, Excel, and Parquet parsers
 - 200 MB upload ceiling and parser size limits
 - Bounded AI response parsing with column caps (>200 columns rejected)
-- Runtime-only credential handling (no disk storage or intentional logging of API keys)
+- Ephemeral in-memory credential handling (no disk storage or intentional logging of API keys)
 - Sensitive-column screening before Gemini analysis
 - Provenance metadata and dataset fingerprinting for saved ML models
 

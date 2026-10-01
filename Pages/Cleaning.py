@@ -31,7 +31,7 @@ selected_filename = None
 
 if source_option == "Select from Datasets Folder":
     if not available_files:
-        st.info("No datasets found in `Datasets/`. Ingest one on the Upload page first.")
+        st.info("No datasets found in `Datasets/`. Ingest one on the Ingest data page first.")
     else:
         selected_filename = st.selectbox("Select Dataset to Clean:", available_files)
         try:

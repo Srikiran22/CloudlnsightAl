@@ -47,7 +47,7 @@ def render_home():
             """
             #### Getting started
 
-            Load a dataset on the **Upload** page — everything else keys off
+            Load a dataset on the **Ingest data** page — everything else keys off
             the active dataset shown in the sidebar.
 
             A Gemini API key is only needed for AI conversion, insights,

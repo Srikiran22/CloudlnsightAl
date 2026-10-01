@@ -1,6 +1,6 @@
 # Contributing
 
-CloudInsight AI is primarily a portfolio project. Changes should keep the application simple, local-first, and consistent with the existing page/utility structure.
+Contributions to CloudInsight AI are welcome. Changes should keep the application lightweight, local-first, and consistent with the existing modular structure.
 
 ## Development setup
 

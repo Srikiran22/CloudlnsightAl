@@ -1,3 +1,4 @@
+import hashlib
 import streamlit as st
 
 from Utils.Gemini import (
@@ -57,7 +58,6 @@ st.caption(
     "Automated privacy screening: uses pattern heuristics to detect likely-sensitive columns "
     "(emails, tokens, credit cards, phones, IBANs). This does not replace human data classification."
 )
-import hashlib
 
 sensitive = detect_sensitive_columns(df)
 excluded_cols = []

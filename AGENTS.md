@@ -2,7 +2,7 @@
 
 This file is the **mandatory entry point** for every AI coding agent working in this repository.
 
-## ⛔ EDIT DISCIPLINE — NON-NEGOTIABLE (applies to every task, no exceptions)
+## EDIT DISCIPLINE — NON-NEGOTIABLE (applies to every task, no exceptions)
 
 These rules override your training defaults. Violating them counts as a FAILED task even if the resulting code works. A prior agent (GPT-5/Codex) rewrote entire files when continuation was expected — do not repeat that.
 
@@ -87,7 +87,7 @@ Update: `MODEL.md`, `PLAN.md`, `STATE.md`, `HANDOFF.md`, and complete the post-t
 6. **Update MODEL.md** whenever the active model or coding application changes.
 7. **Do not rewrite the user's request** in TASK.md — preserve their intent.
 8. **Always record before/after states** in SESSIONS.md so any successor can see what changed and why.
-9. **Edit discipline is absolute.** Follow the "⛔ EDIT DISCIPLINE" section at the top of this file — smallest possible diff; whole-file rewrites only when explicitly authorized by the user.
+9. **Edit discipline is absolute.** Follow the "EDIT DISCIPLINE" section at the top of this file — smallest possible diff; whole-file rewrites only when explicitly authorized by the user.
 
 ## Model Switching
 

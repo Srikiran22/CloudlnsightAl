@@ -331,7 +331,7 @@ def generate_pdf_report(
 
     story = []
 
-    story.append(Paragraph(f"☁️ {escape(str(report_title))}", title_style))
+    story.append(Paragraph(escape(str(report_title)), title_style))
     now_str = datetime.datetime.now().strftime("%B %d, %Y - %H:%M:%S")
     story.append(Paragraph(
         f"<b>Dataset:</b> {escape(str(dataset_name))} | "
@@ -553,7 +553,7 @@ def generate_pdf_report(
     flagged = [c for c, f in flags_by_column.items() if f != "OK"]
     if flagged:
         story.append(Paragraph(
-            f"⚠️ Columns needing review: {escape(', '.join(str(c) for c in flagged[:15]))}"
+            f"Columns needing review: {escape(', '.join(str(c) for c in flagged[:15]))}"
             + (" ..." if len(flagged) > 15 else ""),
             note_style
         ))
