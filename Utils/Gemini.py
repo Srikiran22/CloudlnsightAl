@@ -9,6 +9,9 @@ from Utils.logsys import get_logger
 logger = get_logger("Gemini")
 
 # Central model registry -- the only place model choices should be listed.
+# Verified against Google AI Developer API documentation (https://ai.google.dev/gemini-api/docs/models/gemini):
+# Supported models include the Gemini 3 series (gemini-3.8-flash, gemini-3.5-flash)
+# and Gemini 2.5 series (gemini-2.5-flash, gemini-2.5-pro). Legacy 2.0/1.5 models map forward.
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 GEMINI_MODELS = [
     "gemini-3.8-flash",
@@ -107,7 +110,14 @@ def _classify(error):
     name = type(error).__name__
     full_name = f"{type(error).__module__}.{name}"
 
-    if status in (401, 403) or "Unauthenticated" in full_name or "PermissionDenied" in full_name:
+    err_str = str(error).upper()
+    if (
+        status in (401, 403)
+        or "Unauthenticated" in full_name
+        or "PermissionDenied" in full_name
+        or "API_KEY_INVALID" in err_str
+        or "API KEY NOT VALID" in err_str
+    ):
         return "auth", False
     if status == 404 or "NotFound" in full_name:
         return "model_not_found", False

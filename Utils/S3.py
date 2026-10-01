@@ -3,6 +3,7 @@
 # credentials never appear anywhere in this module.
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 from pathlib import Path
 
@@ -18,14 +19,24 @@ logger = get_logger("S3")
 # defensive stop so a runaway bucket listing cannot hang the page forever
 MAX_S3_OBJECTS_SCAN = 20000
 
+# Bounded client network timeouts to prevent hanging spinners on unresponsive endpoints
+S3_CLIENT_CONFIG = Config(
+    connect_timeout=10,
+    read_timeout=30,
+    retries={"max_attempts": 2},
+)
 
-def get_s3_client(aws_access_key, aws_secret_key, region_name="us-east-1"):
-    return boto3.client(
-        "s3",
-        aws_access_key_id=aws_access_key,
-        aws_secret_access_key=aws_secret_key,
-        region_name=region_name
-    )
+
+def get_s3_client(aws_access_key, aws_secret_key, region_name="us-east-1", aws_session_token=None):
+    kwargs = {
+        "aws_access_key_id": aws_access_key,
+        "aws_secret_access_key": aws_secret_key,
+        "region_name": region_name,
+        "config": S3_CLIENT_CONFIG,
+    }
+    if aws_session_token:
+        kwargs["aws_session_token"] = aws_session_token
+    return boto3.client("s3", **kwargs)
 
 
 def describe_s3_error(error):

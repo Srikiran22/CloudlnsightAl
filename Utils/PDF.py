@@ -41,7 +41,66 @@ def _fmt(value, decimals=2):
         return str(value)
 
 
+_UNICODE_FONTS_RESOLVED = False
+_PDF_FONT_REGULAR = "Helvetica"
+_PDF_FONT_BOLD = "Helvetica-Bold"
+
+
+def _resolve_pdf_fonts():
+    """Register broad Unicode/TrueType fonts with ReportLab if available.
+    Prefers CJK-capable system fonts (SimSun, YaHei, Malgun, Noto CJK, Arial Unicode MS),
+    then falls back to matplotlib's bundled DejaVuSans, and finally Helvetica."""
+    global _UNICODE_FONTS_RESOLVED, _PDF_FONT_REGULAR, _PDF_FONT_BOLD
+    if _UNICODE_FONTS_RESOLVED:
+        return _PDF_FONT_REGULAR, _PDF_FONT_BOLD
+
+    from pathlib import Path
+    import matplotlib.font_manager as fm
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    # 1. Try to find a font supporting CJK + Latin
+    cjk_families = [
+        "Microsoft YaHei", "SimSun", "SimHei", "Malgun Gothic",
+        "MS Gothic", "Arial Unicode MS", "Noto Sans CJK SC", "Noto Sans CJK",
+    ]
+    for fam in cjk_families:
+        try:
+            fpath = fm.findfont(fam, fallback_to_default=False)
+            if fpath and Path(fpath).exists():
+                pdfmetrics.registerFont(TTFont("AppUnicodeFont", fpath))
+                _PDF_FONT_REGULAR = "AppUnicodeFont"
+                _PDF_FONT_BOLD = "AppUnicodeFont"
+                _UNICODE_FONTS_RESOLVED = True
+                logger.info("Registered CJK Unicode font '%s' (%s) for PDF export", fam, fpath)
+                return _PDF_FONT_REGULAR, _PDF_FONT_BOLD
+        except Exception:
+            continue
+
+    # 2. Try matplotlib's bundled DejaVuSans (guaranteed present across platforms with matplotlib)
+    try:
+        import matplotlib
+        data_dir = Path(matplotlib.get_data_path()) / "fonts" / "ttf"
+        reg_ttf = data_dir / "DejaVuSans.ttf"
+        bold_ttf = data_dir / "DejaVuSans-Bold.ttf"
+        if reg_ttf.exists() and bold_ttf.exists():
+            pdfmetrics.registerFont(TTFont("AppDejaVu", str(reg_ttf)))
+            pdfmetrics.registerFont(TTFont("AppDejaVu-Bold", str(bold_ttf)))
+            _PDF_FONT_REGULAR = "AppDejaVu"
+            _PDF_FONT_BOLD = "AppDejaVu-Bold"
+            _UNICODE_FONTS_RESOLVED = True
+            logger.info("Registered bundled DejaVuSans TrueType fonts for PDF export")
+            return _PDF_FONT_REGULAR, _PDF_FONT_BOLD
+    except Exception as exc:
+        logger.debug("DejaVu font registration failed: %s", exc)
+
+    # 3. Graceful fallback
+    _UNICODE_FONTS_RESOLVED = True
+    return _PDF_FONT_REGULAR, _PDF_FONT_BOLD
+
+
 def _style_table(data, header_color, col_widths=None):
+    font_reg, font_bold = _resolve_pdf_fonts()
     table = Table(
         data,
         colWidths=col_widths,
@@ -50,7 +109,8 @@ def _style_table(data, header_color, col_widths=None):
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(header_color)),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME", (0, 0), (-1, 0), font_bold),
+        ("FONTNAME", (0, 1), (-1, -1), font_reg),
         ("FONTSIZE", (0, 0), (-1, -1), 7.5),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E5E7EB")),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F9FAFB")]),
@@ -216,44 +276,52 @@ def generate_pdf_report(
         author=str(author_name),
     )
 
+    font_reg, font_bold = _resolve_pdf_fonts()
     styles = getSampleStyleSheet()
 
     title_style = ParagraphStyle(
         "ReportTitle", parent=styles["Heading1"],
+        fontName=font_bold,
         fontSize=22, leading=26,
         textColor=colors.HexColor("#1E3A8A"), spaceAfter=6
     )
     subtitle_style = ParagraphStyle(
         "ReportSubtitle", parent=styles["Normal"],
+        fontName=font_reg,
         fontSize=10, textColor=colors.HexColor("#6B7280"), spaceAfter=14
     )
     heading2_style = ParagraphStyle(
         "SectionHeading", parent=styles["Heading2"],
+        fontName=font_bold,
         fontSize=13, leading=17,
         textColor=colors.HexColor("#1E40AF"), spaceBefore=14, spaceAfter=6
     )
     body_style = ParagraphStyle(
         "Body", parent=styles["Normal"],
+        fontName=font_reg,
         fontSize=9, leading=13, textColor=colors.HexColor("#1F2937")
     )
     ai_heading_style = ParagraphStyle(
         "AIHeading", parent=styles["Heading3"],
+        fontName=font_bold,
         fontSize=11, leading=15,
         textColor=colors.HexColor("#1E3A8A"), spaceBefore=10, spaceAfter=4
     )
     cell_style = ParagraphStyle(
         "Cell", parent=styles["Normal"],
+        fontName=font_reg,
         fontSize=7.5, leading=9.5, textColor=colors.HexColor("#1F2937")
     )
     note_style = ParagraphStyle(
         "Note", parent=styles["Normal"],
+        fontName=font_reg,
         fontSize=8, leading=11, textColor=colors.HexColor("#6B7280"),
         spaceBefore=4
     )
 
     def footer(canvas, doc_ref):
         canvas.saveState()
-        canvas.setFont("Helvetica", 8)
+        canvas.setFont(font_reg, 8)
         canvas.setFillColor(colors.HexColor("#9CA3AF"))
         canvas.drawString(36, 24, f"{dataset_name} | {report_title}"[:110])
         canvas.drawRightString(576, 24, f"Page {doc_ref.page}")
@@ -339,12 +407,14 @@ def generate_pdf_report(
 
     # 3 -- extended numeric stats
     if not num_df.empty:
-        story.append(Paragraph("3. Numerical Descriptive Statistics (Extended)", heading2_style))
+        display_num_cols = list(num_df.columns[:100])
+        num_capped_note = f" (First 100 of {len(num_df.columns)} Columns)" if len(num_df.columns) > 100 else ""
+        story.append(Paragraph(f"3. Numerical Descriptive Statistics{num_capped_note}", heading2_style))
         stats_table_data = [[
             "Feature", "Count", "Mean", "Std Dev", "Min",
             "Q1 (25%)", "Median", "Q3 (75%)", "Max", "Skew", "Kurtosis"
         ]]
-        for col in num_df.columns:
+        for col in display_num_cols:
             s = df[col].dropna()
             if s.empty:
                 continue
@@ -363,7 +433,7 @@ def generate_pdf_report(
             ])
         story.append(_style_table(
             stats_table_data, SECTION_COLORS["teal"],
-            col_widths=[95, 42, 52, 52, 50, 48, 50, 48, 50, 26.5, 26.5]
+            col_widths=[90, 40, 48, 48, 46, 46, 46, 46, 46, 36, 48]
         ))
         story.append(Spacer(1, 12))
 
@@ -395,9 +465,11 @@ def generate_pdf_report(
 
     # 5 -- categoricals
     if not cat_df.empty:
-        story.append(Paragraph("5. Categorical Column Analysis", heading2_style))
+        display_cat_cols = list(cat_df.columns[:100])
+        cat_capped_note = f" (First 100 of {len(cat_df.columns)} Columns)" if len(cat_df.columns) > 100 else ""
+        story.append(Paragraph(f"5. Categorical Column Analysis{cat_capped_note}", heading2_style))
         cat_data = [["Column", "Unique", "Top Value", "Top Frequency", "Top Share", "Missing"]]
-        for col in cat_df.columns:
+        for col in display_cat_cols:
             s = df[col].dropna()
             unique_n = int(s.nunique())
             if s.empty:
@@ -456,10 +528,12 @@ def generate_pdf_report(
             story.append(Spacer(1, 12))
 
     # 7 -- quality flags per column
-    story.append(Paragraph("7. Data Quality Assessment", heading2_style))
+    display_quality_cols = list(df.columns[:100])
+    qual_capped_note = f" (First 100 of {len(df.columns)} Columns)" if len(df.columns) > 100 else ""
+    story.append(Paragraph(f"7. Data Quality Assessment{qual_capped_note}", heading2_style))
     quality_data = [["Column", "Completeness %", "Uniqueness %", "Flags"]]
     flags_by_column = {}
-    for col in df.columns:
+    for col in display_quality_cols:
         s = df[col]
         flags = _quality_flags_for_column(s)
         col_missing_pct = s.isnull().mean() * 100
@@ -497,11 +571,18 @@ def generate_pdf_report(
         story.append(Paragraph("8. Sample Records (First 8 Rows)", heading2_style))
         sample_cols = list(df.columns[:8])
         sample_data = [[escape(str(c)) for c in sample_cols]]
+        # Mask sensitive columns if any to prevent accidental credential/PII leakage in PDF reports
+        from Utils.privacy import detect_sensitive_columns
+        sensitive_cols = set(detect_sensitive_columns(df[sample_cols]).keys())
         for _, row in df[sample_cols].head(8).iterrows():
-            sample_data.append([
-                Paragraph(escape(str(v)[:28] if pd.notna(v) else "-"), cell_style)
-                for v in row
-            ])
+            row_cells = []
+            for c in sample_cols:
+                v = row[c]
+                if c in sensitive_cols and pd.notna(v):
+                    row_cells.append(Paragraph("●●●●●●", cell_style))
+                else:
+                    row_cells.append(Paragraph(escape(str(v)[:28] if pd.notna(v) else "-"), cell_style))
+            sample_data.append(row_cells)
         sample_width = USABLE_WIDTH / len(sample_cols)
         story.append(_style_table(sample_data, SECTION_COLORS["slate"], col_widths=[sample_width] * len(sample_cols)))
         if cols > len(sample_cols):

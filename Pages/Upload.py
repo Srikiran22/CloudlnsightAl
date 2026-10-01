@@ -9,6 +9,7 @@ from Utils.logsys import get_logger
 from Utils.paths import (
     AIConversionRequired,
     DATASETS_DIR,
+    atomic_write,
     get_unique_filename,
     get_valid_conversion,
     record_conversion,
@@ -115,11 +116,11 @@ if upload_mode == "Local file":
                             single_df = read_tabular(uploaded, filename=target_name)
                             DATASETS_DIR.mkdir(parents=True, exist_ok=True)
                             uploaded.seek(0)
-                            with open(DATASETS_DIR / target_name, "wb") as fh:
-                                fh.write(uploaded.getbuffer())
+                            atomic_write(DATASETS_DIR / target_name, uploaded.getbuffer(), mode="wb")
                             invalidate_dataset_cache(target_name)
                             parsed.append((target_name, single_df))
                         except AIConversionRequired as needed:
+                            needed.__traceback__ = None
                             active_model = st.session_state.get("ai_convert_model")
                             valid_conv = (
                                 get_valid_conversion(raw_name, needed.raw_text, model_name=active_model, extra_instructions="")
@@ -152,7 +153,7 @@ if upload_mode == "Local file":
                                 combined = merge_frames(parsed)
                                 file_name = get_unique_filename("combined_dataset.csv", directory=DATASETS_DIR)
                                 DATASETS_DIR.mkdir(parents=True, exist_ok=True)
-                                combined.to_csv(DATASETS_DIR / file_name, index=False)
+                                atomic_write(DATASETS_DIR / file_name, combined.to_csv(index=False), mode="w", encoding="utf-8")
                                 invalidate_dataset_cache(file_name)
                                 df = combined
                                 fresh_ingest = True
@@ -252,7 +253,7 @@ if upload_mode == "Local file":
                                 target_stem = f"{Path(fname).stem}_{ext_tag}_converted.csv"
                                 converted_name = get_unique_filename(target_stem, directory=DATASETS_DIR)
                                 DATASETS_DIR.mkdir(parents=True, exist_ok=True)
-                                converted.to_csv(DATASETS_DIR / converted_name, index=False)
+                                atomic_write(DATASETS_DIR / converted_name, converted.to_csv(index=False), mode="w", encoding="utf-8")
                                 invalidate_dataset_cache(converted_name)
                                 record_conversion(
                                     converted_name,
@@ -371,7 +372,7 @@ else:
 
                         DATASETS_DIR.mkdir(parents=True, exist_ok=True)
                         local_s3_path = DATASETS_DIR / file_name
-                        local_s3_path.write_bytes(raw_bytes)
+                        atomic_write(local_s3_path, raw_bytes, mode="wb")
                         invalidate_dataset_cache(file_name)
                         if df is None:
                             st.warning(

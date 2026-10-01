@@ -3,7 +3,7 @@ from pathlib import Path
 
 from Utils.Preprocessing import remove_duplicates, fill_missing_values, drop_missing_values
 from Utils.paths import (
-    AIConversionRequired, DATASETS_DIR, get_unique_filename, list_dataset_files, read_dataset,
+    AIConversionRequired, DATASETS_DIR, atomic_write, get_unique_filename, list_dataset_files, read_dataset,
     read_tabular, sanitize_for_csv_export, SUPPORTED_DATASET_EXTENSIONS,
 )
 from Utils.dataset_ui import (
@@ -111,7 +111,7 @@ if df is not None:
         cleaned_name = get_unique_filename(cleaned_target, directory=dataset_folder)
         cleaned_path = dataset_folder / cleaned_name
         dataset_folder.mkdir(parents=True, exist_ok=True)
-        cleaned_df.to_csv(cleaned_path, index=False)
+        atomic_write(cleaned_path, cleaned_df.to_csv(index=False), mode="w", encoding="utf-8")
         invalidate_dataset_cache(cleaned_name)
         set_active_dataset(cleaned_df, cleaned_name)
 

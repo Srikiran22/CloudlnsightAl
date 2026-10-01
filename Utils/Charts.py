@@ -127,14 +127,23 @@ def create_scatter_plot(df, x_col, y_col, hue_col=None, size_col=None,
 def create_bar_count_plot(df, x_col, y_col=None, agg_func="Count", hue_col=None,
                           orientation="v"):
     # Defend against unhashable elements (e.g. lists/dicts in cells)
-    if x_col in df.columns and df[x_col].apply(lambda v: isinstance(v, (list, dict, set))).any():
-        df = df.copy()
-        df[x_col] = df[x_col].astype(str)
+    plot_df = df
+    if x_col in df.columns:
+        if df[x_col].apply(lambda v: isinstance(v, (list, dict, set))).any():
+            plot_df = df.copy()
+            plot_df[x_col] = plot_df[x_col].astype(str)
+        # Cap high-cardinality x_col to top 30 categories plus "Other"
+        x_counts = plot_df[x_col].value_counts(dropna=False)
+        if len(x_counts) > 30:
+            top_cats = set(x_counts.head(30).index)
+            if plot_df is df:
+                plot_df = df.copy()
+            plot_df[x_col] = plot_df[x_col].apply(lambda v: v if v in top_cats else "Other")
 
     if y_col and agg_func != "Count":
         group_cols = [x_col] if (not hue_col or hue_col == x_col) else [x_col, hue_col]
         val_col = f"{y_col}_{agg_func.lower()}" if y_col in group_cols else y_col
-        grouped = df.groupby(group_cols, dropna=False).agg(**{val_col: (y_col, agg_func.lower())}).reset_index()
+        grouped = plot_df.groupby(group_cols, dropna=False).agg(**{val_col: (y_col, agg_func.lower())}).reset_index()
         fig = px.bar(
             grouped,
             x=x_col if orientation == "v" else val_col,
@@ -147,7 +156,7 @@ def create_bar_count_plot(df, x_col, y_col=None, agg_func="Count", hue_col=None,
         fig.update_layout(title=f"<b>{agg_func} of {y_col}</b> by {x_col}" + (f" and {hue_col}" if hue_col and hue_col != x_col else ""))
     else:
         fig = px.histogram(
-            df,
+            plot_df,
             x=x_col if orientation == "v" else None,
             y=x_col if orientation == "h" else None,
             color=hue_col,
@@ -225,7 +234,13 @@ def create_pie_treemap_plot(df, names_col, values_col=None, plot_type="Pie"):
         value_name = "count"
 
     if len(grouped) > 30:
-        grouped = grouped.nlargest(30, value_name)
+        top30 = grouped.nlargest(30, value_name)
+        remainder_sum = grouped.loc[~grouped.index.isin(top30.index), value_name].sum()
+        if remainder_sum > 0:
+            other_row = pd.DataFrame([{names_col: "Other", value_name: remainder_sum}])
+            grouped = pd.concat([top30, other_row], ignore_index=True)
+        else:
+            grouped = top30
 
     if plot_type == "Treemap":
         fig = px.treemap(

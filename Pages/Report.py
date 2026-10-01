@@ -5,7 +5,7 @@ import datetime
 
 from Utils.PDF import generate_pdf_report
 from Utils.paths import (
-    REPORTS_DIR, REPORT_TEMPLATES_DIR, get_dataset_row_count, get_unique_filename,
+    REPORTS_DIR, REPORT_TEMPLATES_DIR, atomic_write, get_dataset_row_count, get_unique_filename,
     list_dataset_files, resolve_dataset_path, safe_stem,
 )
 from Utils.dataset_ui import (
@@ -133,8 +133,7 @@ def _build_report(dataset_name, dataframe, title, prepared_by, with_charts, ai_i
     target_name = f"Report_{base_name}_{timestamp}.pdf"
     pdf_filename = get_unique_filename(target_name, directory=REPORTS_DIR)
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(REPORTS_DIR / pdf_filename, "wb") as f:
-        f.write(pdf_bytes)
+    atomic_write(REPORTS_DIR / pdf_filename, pdf_bytes, mode="wb")
     return pdf_filename, pdf_bytes
 
 

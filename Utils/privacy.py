@@ -10,10 +10,11 @@ import pandas as pd
 
 SAMPLE_ROWS = 100
 
-_NAME_HINTS = (
-    "password", "passwd", "pwd", "secret", "token", "api_key", "apikey",
-    "ssn", "social_security", "credit_card", "card_number", "cvv", "iban",
-    "phone", "mobile", "email", "tel", "cell",
+_EXACT_OR_TOKEN_HINTS = {"tel", "cell", "pwd", "ssn", "cvv"}
+_SUBSTRING_HINTS = (
+    "password", "passwd", "secret", "token", "api_key", "apikey",
+    "social_security", "credit_card", "card_number", "iban",
+    "phone", "mobile", "email",
 )
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -52,7 +53,11 @@ def _scan_numeric_phone_values(series):
         if len(numeric_vals) == 0:
             return None
         if (numeric_vals.astype("int64") == numeric_vals).all():
-            str_vals = numeric_vals.astype("int64").abs().astype(str)
+            int_vals = numeric_vals.astype("int64")
+            # Filter out 10-digit Unix epoch timestamps (seconds between 2001 and 2038)
+            if ((int_vals >= 1_000_000_000) & (int_vals <= 2_150_000_000)).all():
+                return None
+            str_vals = int_vals.abs().astype(str)
             if ((str_vals.str.len() >= 10) & (str_vals.str.len() <= 15)).mean() >= 0.8:
                 return "phone-number-like numeric values"
     except Exception:
@@ -77,8 +82,14 @@ def _scan_values(series):
         digits = re.sub(r"\D", "", match.group(0))
         if len(digits) in range(13, 20) and _luhn_ok(digits):
             return "credit-card-like values"
-    if any(len(re.sub(r"\D", "", m.group(0))) >= 9 for m in _PHONE_RE.finditer(joined)):
-        return "phone-number-like values"
+    for m in _PHONE_RE.finditer(joined):
+        digits = re.sub(r"\D", "", m.group(0))
+        if len(digits) >= 9:
+            if len(digits) == 10 and digits.isdigit():
+                val = int(digits)
+                if 1_000_000_000 <= val <= 2_150_000_000:
+                    continue
+            return "phone-number-like values"
     return None
 
 
@@ -92,8 +103,14 @@ def detect_sensitive_columns(df):
     """
     flags = {}
     for column in df.columns:
-        lowered = str(column).lower()
-        hint = next((h for h in _NAME_HINTS if h in lowered), None)
+        col_str = str(column)
+        lowered = col_str.lower()
+        tokens = set(re.split(r"[^a-z0-9]+", lowered))
+        camel_tokens = {m.lower() for m in re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)|[0-9]+", col_str)}
+        all_tokens = (tokens | camel_tokens) - {""}
+        hint = next((h for h in _EXACT_OR_TOKEN_HINTS if h in all_tokens), None)
+        if not hint:
+            hint = next((h for h in _SUBSTRING_HINTS if h in lowered), None)
         if hint:
             flags[column] = f"column name suggests '{hint}'"
             continue

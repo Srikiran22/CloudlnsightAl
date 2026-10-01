@@ -3,10 +3,13 @@ import hashlib
 import io
 import json
 import os
+import time
+import uuid
 from html.parser import HTMLParser
 from pathlib import Path
 from xml.etree import ElementTree
 import xml.parsers.expat
+import zipfile
 
 import numpy as np
 import pandas as pd
@@ -19,12 +22,13 @@ MODELS_DIR = PROJECT_ROOT / "Models"
 REPORT_TEMPLATES_DIR = REPORTS_DIR / "templates"
 CONVERSIONS_MANIFEST = DATASETS_DIR / ".conversions.json"
 
-CSV_ENCODINGS = ("utf-8", "utf-8-sig", "cp1252", "latin1")
+CSV_ENCODINGS = ("utf-8-sig", "utf-8", "cp1252", "latin1")
 
 # uploads beyond this are refused before parsing (matches Streamlit's own
 # 200 MB default ceiling); raise it if your machine has memory to spare
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 MAX_INGESTION_ROWS = 1_000_000
+MAX_INGESTION_COLUMNS = 200
 MAX_UPLOAD_FILES = 20
 MAX_AGGREGATE_UPLOAD_BYTES = 250 * 1024 * 1024
 MAX_COMBINED_ROWS = 1_000_000
@@ -91,6 +95,63 @@ def enforce_size_limit(size_in_bytes, label="File"):
             f"{label} is {size_in_bytes / (1024 * 1024):.1f} MB; the limit is "
             f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB. Split or trim the file."
         )
+
+
+def _check_zip_bomb(buffer, max_uncompressed_bytes=MAX_UPLOAD_BYTES, max_ratio=100.0):
+    """Inspect zip archive members (e.g. XLSX) for dangerous expansion ratios."""
+    try:
+        if hasattr(buffer, "seek"):
+            buffer.seek(0)
+        with zipfile.ZipFile(buffer, "r") as zf:
+            total_compressed = 0
+            total_uncompressed = 0
+            for info in zf.infolist():
+                total_compressed += info.compress_size
+                total_uncompressed += info.file_size
+                if total_uncompressed > max_uncompressed_bytes:
+                    raise ValueError(
+                        f"Decompressed archive size ({total_uncompressed / (1024 * 1024):.1f} MB) "
+                        f"exceeds safety limit of {max_uncompressed_bytes // (1024 * 1024)} MB."
+                    )
+            if total_compressed > 0 and (total_uncompressed / total_compressed) > max_ratio and total_uncompressed > 50 * 1024 * 1024:
+                raise ValueError(
+                    f"Decompressed archive expansion ratio ({total_uncompressed / total_compressed:.1f}x) "
+                    "exceeds safety limit (possible zip bomb)."
+                )
+    except (zipfile.BadZipFile, OSError):
+        pass
+    finally:
+        if hasattr(buffer, "seek"):
+            buffer.seek(0)
+
+
+def atomic_write(target_path, content, mode="w", encoding="utf-8"):
+    """Atomically write content to target_path via temporary file and os.replace."""
+    p = Path(target_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = p.with_name(f"{p.name}.tmp.{uuid.uuid4().hex}")
+    try:
+        if "b" in mode:
+            with open(tmp_path, mode) as f:
+                f.write(content)
+        else:
+            with open(tmp_path, mode, encoding=encoding) as f:
+                f.write(content)
+        for attempt in range(10):
+            try:
+                os.replace(tmp_path, p)
+                break
+            except PermissionError:
+                if attempt == 9:
+                    raise
+                time.sleep(0.005 * (2 ** attempt))
+    except Exception:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+        raise
 
 
 CONVERSION_MANIFEST_VERSION = "v1"
@@ -270,7 +331,7 @@ def get_dataset_row_count(dataset):
         try:
             import openpyxl
             wb = openpyxl.load_workbook(path, read_only=True)
-            sheet = wb.active
+            sheet = wb.worksheets[0] if wb.worksheets else wb.active
             rows = max(sheet.max_row - 1, 0) if sheet.max_row is not None else None
             wb.close()
             if rows is not None:
@@ -287,11 +348,16 @@ def get_dataset_row_count(dataset):
 
 def list_dataset_files():
     ensure_project_directories()
-    return sorted(
-        path.name
-        for path in DATASETS_DIR.iterdir()
-        if path.is_file() and not path.name.startswith(".") and path.suffix.lower() in SUPPORTED_DATASET_EXTENSIONS
-    )
+    datasets_root = DATASETS_DIR.resolve()
+    valid_files = []
+    for path in DATASETS_DIR.iterdir():
+        if path.is_file() and not path.name.startswith(".") and path.suffix.lower() in SUPPORTED_DATASET_EXTENSIONS:
+            try:
+                if path.resolve().parent == datasets_root:
+                    valid_files.append(path.name)
+            except OSError:
+                continue
+    return sorted(valid_files)
 
 
 def resolve_dataset_path(dataset):
@@ -402,10 +468,27 @@ def sanitize_for_csv_export(df):
     return df_out
 
 
+def _inspect_delimited_header_width(buffer, encoding, sep=","):
+    """Quickly inspect header width before full parsing to reject wide files early."""
+    buffer.seek(0)
+    try:
+        hdr = pd.read_csv(buffer, sep=sep, encoding=encoding, nrows=0)
+        if len(hdr.columns) > MAX_INGESTION_COLUMNS:
+            raise ValueError(
+                f"Dataset contains {len(hdr.columns):,} columns, which exceeds the maximum supported limit "
+                f"of {MAX_INGESTION_COLUMNS} columns. Filter or transpose the file before ingestion."
+            )
+    except (UnicodeDecodeError, pd.errors.EmptyDataError):
+        pass
+    finally:
+        buffer.seek(0)
+
+
 def _read_csv_from_buffer(buffer, nrows=None):
     last_error = None
     for encoding in CSV_ENCODINGS:
         try:
+            _inspect_delimited_header_width(buffer, encoding, sep=",")
             buffer.seek(0)
             return pd.read_csv(buffer, encoding=encoding, nrows=nrows)
         except UnicodeDecodeError as error:
@@ -415,13 +498,27 @@ def _read_csv_from_buffer(buffer, nrows=None):
     raise ValueError("Unable to decode CSV file.")
 
 
+def _read_tsv_from_buffer(buffer, nrows=None):
+    last_error = None
+    for encoding in CSV_ENCODINGS:
+        try:
+            _inspect_delimited_header_width(buffer, encoding, sep="\t")
+            buffer.seek(0)
+            return pd.read_csv(buffer, sep="\t", encoding=encoding, nrows=nrows)
+        except UnicodeDecodeError as error:
+            last_error = error
+    if last_error:
+        raise last_error
+    raise ValueError("Unable to decode TSV file.")
+
+
 def _read_delimited_text(text, nrows=None):
     """Native text-table policy.
 
     A .txt/.log/.md/.rst/.sql file parses natively ONLY when csv.Sniffer
     identifies one of the known field separators (comma, semicolon, tab,
-    pipe, colon) used consistently across the sampled lines. Whitespace is
-    deliberately NOT a candidate delimiter, so prose never becomes a junk
+    pipe) used consistently across the sampled lines. Whitespace and colon are
+    deliberately NOT candidate delimiters, so logs and prose never become a junk
     wide table -- unparseable text falls through to AIConversionRequired and
     the Gemini path. (A line-per-record prose file with exactly one comma on
     every line is genuinely ambiguous and still parses; that is inherent.)
@@ -431,7 +528,7 @@ def _read_delimited_text(text, nrows=None):
         return None
 
     try:
-        dialect = csv.Sniffer().sniff("\n".join(sample_lines), delimiters=",;\t|:")
+        dialect = csv.Sniffer().sniff("\n".join(sample_lines), delimiters=",;\t|")
         delimiter = dialect.delimiter
     except csv.Error:
         return None
@@ -480,6 +577,16 @@ def _read_json_from_buffer(buffer, nrows=None):
         if nrows is not None and nrows > 0:
             streamed = _stream_json_array(text, nrows)
             if streamed is not None:
+                if isinstance(streamed, list):
+                    unique_keys = set()
+                    for item in streamed:
+                        if isinstance(item, dict):
+                            unique_keys.update(item.keys())
+                            if len(unique_keys) > MAX_INGESTION_COLUMNS:
+                                raise ValueError(
+                                    f"JSON dataset has {len(unique_keys):,}+ unique column keys, "
+                                    f"exceeding the maximum limit of {MAX_INGESTION_COLUMNS} columns."
+                                )
                 try:
                     norm_df = pd.json_normalize(streamed)
                     if len(streamed) > 0 and norm_df.shape[1] == 0:
@@ -497,6 +604,11 @@ def _read_json_from_buffer(buffer, nrows=None):
                 and len({len(v) for v in data.values()}) == 1
                 and all(not any(isinstance(x, dict) for x in v) for v in data.values())
             ):
+                if len(data) > MAX_INGESTION_COLUMNS:
+                    raise ValueError(
+                        f"JSON dataset has {len(data):,} columns, "
+                        f"exceeding the maximum limit of {MAX_INGESTION_COLUMNS} columns."
+                    )
                 df = pd.DataFrame(data)
                 if nrows is not None and len(df) > nrows:
                     df = df.head(nrows)
@@ -519,6 +631,15 @@ def _read_json_from_buffer(buffer, nrows=None):
                 data = [data]
 
         if isinstance(data, list):
+            unique_keys = set()
+            for item in data:
+                if isinstance(item, dict):
+                    unique_keys.update(item.keys())
+                    if len(unique_keys) > MAX_INGESTION_COLUMNS:
+                        raise ValueError(
+                            f"JSON dataset has {len(unique_keys):,}+ unique column keys, "
+                            f"exceeding the maximum limit of {MAX_INGESTION_COLUMNS} columns."
+                        )
             if nrows is not None and len(data) > nrows:
                 data = data[:nrows]
             try:
@@ -528,7 +649,9 @@ def _read_json_from_buffer(buffer, nrows=None):
             except TypeError:
                 norm_df = pd.DataFrame(data)
             return _sanitize_unhashable_cells(norm_df)
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except ValueError:
+        raise
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
         pass
 
     buffer.seek(0)
@@ -541,7 +664,39 @@ def _read_json_from_buffer(buffer, nrows=None):
         raise ValueError(f"Failed to parse JSON dataset: {exc}") from exc
 
 
+def _inspect_jsonl_header_width(buffer):
+    try:
+        buffer.seek(0)
+        first_line = buffer.readline()
+        if first_line:
+            first_obj = json.loads(first_line.decode("utf-8", errors="replace"))
+            if isinstance(first_obj, dict) and len(first_obj) > MAX_INGESTION_COLUMNS:
+                raise ValueError(
+                    f"Dataset contains {len(first_obj):,} columns, which exceeds the maximum supported limit "
+                    f"of {MAX_INGESTION_COLUMNS} columns. Filter or transpose the file before ingestion."
+                )
+    except ValueError:
+        raise
+    except Exception:
+        pass
+    finally:
+        buffer.seek(0)
+
+
 def _read_jsonl_from_buffer(buffer, nrows=None):
+    _inspect_jsonl_header_width(buffer)
+    last_error = None
+    for encoding in CSV_ENCODINGS:
+        try:
+            buffer.seek(0)
+            df = pd.read_json(buffer, lines=True, nrows=nrows, encoding=encoding)
+            return _sanitize_unhashable_cells(df)
+        except UnicodeDecodeError as error:
+            last_error = error
+        except (ValueError, TypeError):
+            break
+    if last_error:
+        raise last_error
     buffer.seek(0)
     df = pd.read_json(buffer, lines=True, nrows=nrows)
     return _sanitize_unhashable_cells(df)
@@ -677,6 +832,14 @@ def _read_xml_from_buffer(buffer, nrows=None):
             if "nesting" in str(error).lower():
                 raise ValueError("XML nesting is too deep to process.") from error
             raise
+    unique_keys = set()
+    for item in records:
+        unique_keys.update(item.keys())
+        if len(unique_keys) > MAX_INGESTION_COLUMNS:
+            raise ValueError(
+                f"XML dataset contains {len(unique_keys):,}+ unique column tags, "
+                f"which exceeds the maximum supported limit of {MAX_INGESTION_COLUMNS} columns."
+            )
     df = pd.json_normalize(records)
     if nrows is not None and len(df) > nrows:
         df = df.head(nrows)
@@ -759,13 +922,13 @@ def _read_html_from_buffer(buffer, nrows=None):
     if parser.has_rowspan:
         raise AIConversionRequired(
             "HTML table contains complex rowspan spans; AI conversion required.",
-            raw_text=html_text,
+            raw_text=html_text[:MAX_TEXT_EXTRACT_CHARS],
         )
 
     if not parser.tables:
         raise AIConversionRequired(
             "No HTML table found; AI conversion required.",
-            raw_text=html_text,
+            raw_text=html_text[:MAX_TEXT_EXTRACT_CHARS],
         )
 
     best_idx = max(
@@ -830,18 +993,8 @@ def _read_parquet_from_buffer(buffer, nrows=None):
             return _sanitize_unhashable_cells(df)
     except ValueError:
         raise
-    except Exception:
-        buffer.seek(0)
-
-    df = pd.read_parquet(buffer)
-    if nrows is None and len(df) > MAX_INGESTION_ROWS:
-        raise ValueError(
-            f"Parquet dataset contains {len(df):,} rows, which exceeds the maximum supported limit "
-            f"of {MAX_INGESTION_ROWS:,} rows. Filter or split the file before ingestion."
-        )
-    if nrows is not None and len(df) > nrows:
-        df = df.head(nrows)
-    return _sanitize_unhashable_cells(df)
+    except Exception as exc:
+        raise ValueError(f"Unable to read Parquet dataset safely: {exc}") from exc
 
 
 MAX_PDF_PAGES = 30
@@ -903,18 +1056,23 @@ def read_tabular(source, filename=None, max_rows=None):
         if hasattr(buffer, "seek"):
             buffer.seek(0)
 
+    limit_check = max_rows is None
+    fetch_rows = (MAX_INGESTION_ROWS + 1) if limit_check else min(max_rows, MAX_INGESTION_ROWS)
+
     df = None
     if suffix == ".csv" or suffix == "":
-        df = _read_csv_from_buffer(buffer, nrows=max_rows)
+        df = _read_csv_from_buffer(buffer, nrows=fetch_rows)
 
     elif suffix == ".tsv":
-        df = pd.read_csv(buffer, sep="\t", nrows=max_rows)
+        df = _read_tsv_from_buffer(buffer, nrows=fetch_rows)
 
     elif suffix in {".xlsx", ".xls"}:
+        if suffix == ".xlsx":
+            _check_zip_bomb(buffer)
         if hasattr(buffer, "seek"):
             buffer.seek(0)
         try:
-            df = pd.read_excel(buffer, nrows=max_rows)
+            df = pd.read_excel(buffer, nrows=fetch_rows)
         except ImportError as exc:
             if suffix == ".xls" and "xlrd" in str(exc).lower():
                 raise ValueError(
@@ -924,19 +1082,19 @@ def read_tabular(source, filename=None, max_rows=None):
             raise
 
     elif suffix == ".json":
-        df = _read_json_from_buffer(buffer, nrows=max_rows)
+        df = _read_json_from_buffer(buffer, nrows=fetch_rows)
 
     elif suffix in {".jsonl", ".ndjson"}:
-        df = _read_jsonl_from_buffer(buffer, nrows=max_rows)
+        df = _read_jsonl_from_buffer(buffer, nrows=fetch_rows)
 
     elif suffix == ".parquet":
-        df = _read_parquet_from_buffer(buffer, nrows=max_rows)
+        df = _read_parquet_from_buffer(buffer, nrows=fetch_rows if not limit_check else None)
 
     elif suffix == ".xml":
-        df = _read_xml_from_buffer(buffer, nrows=max_rows)
+        df = _read_xml_from_buffer(buffer, nrows=fetch_rows)
 
     elif suffix in {".html", ".htm"}:
-        df = _read_html_from_buffer(buffer, nrows=max_rows)
+        df = _read_html_from_buffer(buffer, nrows=fetch_rows)
         if max_rows is not None and len(df) > max_rows:
             df = df.head(max_rows)
 
@@ -953,21 +1111,21 @@ def read_tabular(source, filename=None, max_rows=None):
         if not sample_text:
             sample_text = sample_bytes.decode("utf-8", errors="replace")
 
-        delimited_candidate = _read_delimited_text(sample_text, nrows=max_rows)
+        delimited_candidate = _read_delimited_text(sample_text, nrows=fetch_rows)
         if delimited_candidate is not None:
             sample_lines = [line for line in sample_text.splitlines() if line.strip()][:20]
             try:
-                dialect = csv.Sniffer().sniff("\n".join(sample_lines), delimiters=",;\t|:")
+                dialect = csv.Sniffer().sniff("\n".join(sample_lines), delimiters=",;\t|")
                 for encoding in CSV_ENCODINGS:
                     try:
                         buffer.seek(0)
-                        df = pd.read_csv(buffer, sep=dialect.delimiter, encoding=encoding, nrows=max_rows)
+                        df = pd.read_csv(buffer, sep=dialect.delimiter, encoding=encoding, nrows=fetch_rows)
                         break
                     except UnicodeDecodeError:
                         continue
                 if df is None:
                     buffer.seek(0)
-                    df = pd.read_csv(buffer, sep=dialect.delimiter, nrows=max_rows)
+                    df = pd.read_csv(buffer, sep=dialect.delimiter, nrows=fetch_rows)
             except Exception:
                 pass
 
@@ -1002,6 +1160,18 @@ def read_tabular(source, filename=None, max_rows=None):
         )
 
     if df is not None:
+        if limit_check and len(df) > MAX_INGESTION_ROWS:
+            raise ValueError(
+                f"Dataset contains over {MAX_INGESTION_ROWS:,} rows, which exceeds the maximum supported limit "
+                f"of {MAX_INGESTION_ROWS:,} rows. Filter or split the file before ingestion."
+            )
+        if not limit_check and max_rows is not None and len(df) > max_rows:
+            df = df.head(max_rows)
+        if df.shape[1] > MAX_INGESTION_COLUMNS:
+            raise ValueError(
+                f"Dataset contains {df.shape[1]:,} columns, which exceeds the maximum supported limit "
+                f"of {MAX_INGESTION_COLUMNS} columns. Filter or transpose the file before ingestion."
+            )
         return normalize_and_deduplicate_columns(df)
     return df
 

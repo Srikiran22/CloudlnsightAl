@@ -1,3 +1,4 @@
+from pathlib import Path
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -109,15 +110,28 @@ if results_match_active(results, selected_file, df=df):
     if results["problem_type"] == "Classification":
         if results.get("stratified_warning"):
             st.info(results["stratified_warning"])
-        m1, m2, m3, m4 = st.columns(4)
-        with m1:
-            st.metric("Accuracy", f"{results['accuracy'] * 100:.2f}%")
-        with m2:
-            st.metric("Precision (Weighted)", f"{results['precision'] * 100:.2f}%")
-        with m3:
-            st.metric("Recall (Weighted)", f"{results['recall'] * 100:.2f}%")
-        with m4:
-            st.metric("F1-Score (Weighted)", f"{results['f1_score'] * 100:.2f}%")
+        if results.get("f1_macro") is not None:
+            m1, m2, m3, m4, m5 = st.columns(5)
+            with m1:
+                st.metric("Accuracy", f"{results['accuracy'] * 100:.2f}%")
+            with m2:
+                st.metric("Precision (Weighted)", f"{results['precision'] * 100:.2f}%")
+            with m3:
+                st.metric("Recall (Weighted)", f"{results['recall'] * 100:.2f}%")
+            with m4:
+                st.metric("F1-Score (Weighted)", f"{results['f1_score'] * 100:.2f}%")
+            with m5:
+                st.metric("F1-Score (Macro)", f"{results['f1_macro'] * 100:.2f}%")
+        else:
+            m1, m2, m3, m4 = st.columns(4)
+            with m1:
+                st.metric("Accuracy", f"{results['accuracy'] * 100:.2f}%")
+            with m2:
+                st.metric("Precision (Weighted)", f"{results['precision'] * 100:.2f}%")
+            with m3:
+                st.metric("Recall (Weighted)", f"{results['recall'] * 100:.2f}%")
+            with m4:
+                st.metric("F1-Score (Weighted)", f"{results['f1_score'] * 100:.2f}%")
 
         st.subheader("Confusion Matrix")
         cm = results["confusion_matrix"]
@@ -151,13 +165,14 @@ if results_match_active(results, selected_file, df=df):
             "Residual": results["residuals"]
         })
 
+        plot_pred_df = pred_df.sample(25_000, random_state=42) if len(pred_df) > 25_000 else pred_df
         fig_pred = px.scatter(
-            pred_df,
+            plot_pred_df,
             x="Actual",
             y="Predicted",
             template=plot_template(),
             opacity=0.75,
-            title="Actual vs Predicted Values"
+            title="Actual vs Predicted Values" + (" (Sampled to 25k)" if len(pred_df) > 25_000 else "")
         )
         finite_actual = pred_df["Actual"].dropna()
         finite_actual = finite_actual[np.isfinite(finite_actual)]
@@ -253,10 +268,11 @@ with tab_load:
 
                 pred_cols = [c for c in predictions_df.columns if c.startswith("prediction")]
                 csv_bytes = sanitize_for_csv_export(predictions_df).to_csv(index=False).encode("utf-8")
+                pred_stem = Path(selected_file).stem if selected_file else "dataset"
                 st.download_button(
                     label="Download full predictions (CSV)",
                     data=csv_bytes,
-                    file_name=f"predictions_{selected_file}",
+                    file_name=f"predictions_{pred_stem}.csv",
                     mime="text/csv",
                     key="download_predictions"
                 )

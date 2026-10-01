@@ -86,19 +86,31 @@ if filter_cols:
                 max_v = float(finite_series.max())
                 if min_v < max_v:
                     selected_range = st.slider(f"{fcol}:", min_value=min_v, max_value=max_v, value=(min_v, max_v))
-                    filtered_df = filtered_df[
-                        filtered_df[fcol].isna()
-                        | ((filtered_df[fcol] >= selected_range[0]) & (filtered_df[fcol] <= selected_range[1]))
-                    ]
+                    if selected_range[0] > min_v or selected_range[1] < max_v:
+                        mask = (
+                            np.isfinite(filtered_df[fcol])
+                            & (filtered_df[fcol] >= selected_range[0])
+                            & (filtered_df[fcol] <= selected_range[1])
+                        )
+                        filtered_df = filtered_df[mask]
                 else:
                     st.caption(f"{fcol}: constant value {min_v}")
             else:
                 cardinality = int(df[fcol].nunique(dropna=True))
                 if cardinality <= 50:
-                    unique_vals = sorted(df[fcol].dropna().astype(str).unique().tolist())
+                    has_nulls = bool(df[fcol].isna().any())
+                    null_label = "(Missing / Null)"
+                    base_vals = sorted(df[fcol].dropna().astype(str).unique().tolist())
+                    unique_vals = [null_label] + base_vals if has_nulls else base_vals
                     chosen_vals = st.multiselect(f"{fcol}:", unique_vals, default=unique_vals)
-                    if chosen_vals:
-                        filtered_df = filtered_df[filtered_df[fcol].astype(str).isin(chosen_vals) | filtered_df[fcol].isna()]
+                    if len(chosen_vals) < len(unique_vals):
+                        keep_nulls = null_label in chosen_vals
+                        non_null_chosen = set(chosen_vals) - {null_label}
+                        mask = (
+                            (filtered_df[fcol].isna() if keep_nulls else False)
+                            | (filtered_df[fcol].notna() & filtered_df[fcol].astype(str).isin(non_null_chosen))
+                        )
+                        filtered_df = filtered_df[mask]
                 else:
                     st.caption(f"{fcol}: {cardinality:,} unique values (high cardinality).")
                     search = st.text_input(f"{fcol} contains:", key=f"dash_search_{fcol}")

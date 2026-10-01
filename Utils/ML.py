@@ -1,5 +1,8 @@
 import datetime
+import os
 import re
+import time
+import uuid
 
 import numpy as np
 import pandas as pd
@@ -61,11 +64,28 @@ def save_trained_model(res, model_name, directory=None):
         "dataset_fingerprint": res.get("dataset_fingerprint"),
         "metrics": {
             key: res[key]
-            for key in ("accuracy", "precision", "recall", "f1_score", "r2_score", "rmse", "mae")
+            for key in ("accuracy", "precision", "recall", "f1_score", "f1_macro", "r2_score", "rmse", "mae")
             if key in res
         },
     }
-    joblib.dump(bundle, path)
+    tmp_path = path.with_suffix(f".joblib.tmp.{uuid.uuid4().hex}")
+    try:
+        joblib.dump(bundle, tmp_path)
+        for attempt in range(10):
+            try:
+                os.replace(tmp_path, path)
+                break
+            except PermissionError:
+                if attempt == 9:
+                    raise
+                time.sleep(0.005 * (2 ** attempt))
+    except Exception:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+        raise
     return path
 
 
@@ -109,11 +129,12 @@ def list_saved_models():
 
 
 def _datetime_to_epoch(df):
-    # models can't handle datetime64 directly; epoch floats behave better than strings
+    # models can't handle datetime64 directly; epoch floats behave better than strings.
+    # normalize to Unix seconds to ensure invariant scale across datetime resolutions (s, ms, us, ns).
     for column in df.columns:
         if pd.api.types.is_datetime64_any_dtype(df[column]):
             ts = pd.to_datetime(df[column], errors="coerce")
-            df[column] = ts.astype("int64").astype("float64")
+            df[column] = ts.astype("datetime64[s]").astype("int64").astype("float64")
             df.loc[ts.isna(), column] = np.nan
 
 
@@ -127,6 +148,13 @@ def predict_with_model(bundle, df, feature_cols=None):
 
     X = df[features].copy()
     _datetime_to_epoch(X)
+
+    bad_features = _non_finite_columns(X, features)
+    if bad_features:
+        raise ValueError(
+            "Inference features contain infinity or overflow-sized values: "
+            f"{', '.join(bad_features)}. Clean or clip these columns before prediction."
+        )
 
     predictions = bundle["pipeline"].predict(X)
     output = df.copy()
@@ -326,13 +354,18 @@ def train_and_evaluate_model(
 
     if problem_type == "Classification":
         if model_name == "Random Forest":
-            clf = RandomForestClassifier(n_estimators=100, random_state=random_state)
+            clf = RandomForestClassifier(n_estimators=100, max_depth=15, min_samples_leaf=2, random_state=random_state)
         elif model_name == "Decision Tree":
             clf = DecisionTreeClassifier(random_state=random_state)
         elif model_name == "Gradient Boosting":
             clf = GradientBoostingClassifier(random_state=random_state)
-        else:
+        elif model_name in ("Logistic Regression", "Default"):
             clf = LogisticRegression(max_iter=1000, random_state=random_state)
+        else:
+            raise ValueError(
+                f"Unsupported classification model: '{model_name}'. "
+                "Choose from Random Forest, Decision Tree, Gradient Boosting, or Logistic Regression."
+            )
 
         pipe = Pipeline(steps=[
             ("preprocessor", preprocessor),
@@ -347,6 +380,7 @@ def train_and_evaluate_model(
         prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)
         rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)
         f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)
+        f1_macro = f1_score(y_test, y_pred, average="macro", zero_division=0)
         cm = confusion_matrix(y_test, y_pred, labels=classes)
         cr = classification_report(y_test, y_pred, labels=classes, output_dict=True, zero_division=0)
 
@@ -360,6 +394,7 @@ def train_and_evaluate_model(
             "precision": round(prec, 4),
             "recall": round(rec, 4),
             "f1_score": round(f1, 4),
+            "f1_macro": round(f1_macro, 4),
             "confusion_matrix": cm,
             "classes": classes,
             "classification_report": cr,
@@ -376,13 +411,18 @@ def train_and_evaluate_model(
         y_test = pd.to_numeric(y_test, errors="raise")
 
         if model_name == "Random Forest":
-            reg = RandomForestRegressor(n_estimators=100, random_state=random_state)
+            reg = RandomForestRegressor(n_estimators=100, max_depth=15, min_samples_leaf=2, random_state=random_state)
         elif model_name == "Gradient Boosting":
             reg = GradientBoostingRegressor(random_state=random_state)
         elif model_name == "Ridge Regression":
             reg = Ridge()
-        else:
+        elif model_name in ("Linear Regression", "Default"):
             reg = LinearRegression()
+        else:
+            raise ValueError(
+                f"Unsupported regression model: '{model_name}'. "
+                "Choose from Random Forest, Gradient Boosting, Ridge Regression, or Linear Regression."
+            )
 
         pipe = Pipeline(steps=[
             ("preprocessor", preprocessor),
