@@ -492,10 +492,40 @@ class StorageCleanupAndRetentionTests(unittest.TestCase):
             time.sleep(0.01)
             # Run cleanup with max_files=3
             pruned = cleanup_storage(directory=target_dir, max_files=3, max_age_days=30)
-            self.assertIn(str(tmp_file), pruned)
+            self.assertTrue(
+                any(Path(p).resolve() == tmp_file.resolve() for p in pruned)
+                or str(tmp_file) in pruned,
+                f"Expected {tmp_file} in pruned list: {pruned}",
+            )
             # Check remaining regular files <= 3
             csvs = list(target_dir.glob("*.csv"))
             self.assertLessEqual(len(csvs), 3)
+
+    def test_cleanup_storage_cross_platform_symlink_and_resolution(self):
+        import tempfile
+        from pathlib import Path
+        from Utils.paths import cleanup_storage
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_dir = Path(tmpdir)
+            resolved_dir = raw_dir.resolve()
+            # Test cleanup works identically whether invoked with raw or resolved directory
+            orphan = raw_dir / "orphan.csv.tmp.999"
+            orphan.write_text("data", encoding="utf-8")
+            pruned_raw = cleanup_storage(directory=raw_dir, include_temp_only=True)
+            self.assertTrue(
+                any(Path(p).resolve() == orphan.resolve() for p in pruned_raw),
+                f"Raw directory invocation failed to match: {pruned_raw}",
+            )
+
+            # Test resolved directory invocation
+            orphan2 = resolved_dir / "orphan2.csv.tmp.888"
+            orphan2.write_text("data", encoding="utf-8")
+            pruned_resolved = cleanup_storage(directory=resolved_dir, include_temp_only=True)
+            self.assertTrue(
+                any(Path(p).resolve() == orphan2.resolve() for p in pruned_resolved),
+                f"Resolved directory invocation failed to match: {pruned_resolved}",
+            )
 
     def test_delete_dataset_traversal_protection(self):
         from Utils.paths import delete_dataset

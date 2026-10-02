@@ -387,7 +387,7 @@ def cleanup_storage(
     include_temp_only=False,
 ):
     """Safely prune old or temporary files from a managed directory (retention control)."""
-    target_dir = Path(directory).resolve()
+    target_dir = Path(directory)
     if not target_dir.exists():
         return []
 
