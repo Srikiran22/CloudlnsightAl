@@ -307,6 +307,31 @@ class ZeroRowParquetTests(unittest.TestCase):
 class OversizedMergeRerunAppTest(unittest.TestCase):
     """Defect 5: Oversized merge error persistence across Streamlit reruns."""
 
+    def setUp(self):
+        import tempfile
+        from Utils import paths
+        self.orig_datasets_dir = paths.DATASETS_DIR
+        self.temp_dir = tempfile.mkdtemp()
+        paths.DATASETS_DIR = Path(self.temp_dir)
+        try:
+            import Pages.Upload
+            self.orig_upload_datasets_dir = getattr(Pages.Upload, "DATASETS_DIR", self.orig_datasets_dir)
+            Pages.Upload.DATASETS_DIR = Path(self.temp_dir)
+        except Exception:
+            self.orig_upload_datasets_dir = None
+
+    def tearDown(self):
+        import shutil
+        from Utils import paths
+        paths.DATASETS_DIR = self.orig_datasets_dir
+        if self.orig_upload_datasets_dir is not None:
+            try:
+                import Pages.Upload
+                Pages.Upload.DATASETS_DIR = self.orig_upload_datasets_dir
+            except Exception:
+                pass
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
     def test_oversized_merge_error_survives_reruns(self):
         """When MAX_COMBINED_ROWS is exceeded, error must remain visible on subsequent rerun."""
         upload_script = str(Path(__file__).resolve().parent.parent / "Pages" / "Upload.py")

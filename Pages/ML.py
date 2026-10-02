@@ -26,6 +26,10 @@ df, selected_file = select_working_dataset("Select Dataset for Modeling:")
 render_sidebar()
 st.caption(f"Dataset: `{selected_file}` ({df.shape[0]:,} rows × {df.shape[1]} columns)")
 
+if df.empty or len(df.columns) < 2 or len(df) < 2:
+    st.warning("The selected dataset must contain at least 2 columns and at least 2 rows to train machine learning models.")
+    st.stop()
+
 st.subheader("Problem setup")
 col1, col2 = st.columns(2)
 
@@ -35,6 +39,10 @@ with col1:
         df.columns.tolist(),
         index=len(df.columns) - 1
     )
+
+if not target_column:
+    st.warning("Please select a target variable to continue.")
+    st.stop()
 
 auto_type = detect_problem_type(df, target_column)
 
@@ -49,6 +57,9 @@ with col2:
 
 st.subheader("Features & algorithm")
 available_features = [col for col in df.columns if col != target_column]
+if not available_features:
+    st.warning("No input features available to predict the selected target. At least one predictor feature is required.")
+    st.stop()
 
 col_feat1, col_feat2 = st.columns([3, 2])
 with col_feat1:

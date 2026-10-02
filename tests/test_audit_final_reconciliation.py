@@ -428,14 +428,13 @@ class TestF24CredentialSessionStateSecurity(unittest.TestCase):
             self.assertEqual(state.get("gemini_ver"), 1)
 
 
-class TestF27LicenseFilePresent(unittest.TestCase):
-    """F-27: MIT License file present in repository root."""
+class TestF27LicenseRemoval(unittest.TestCase):
+    """F-27: License file removed from repository root."""
 
-    def test_license_file_exists_in_root(self):
+    def test_no_license_file_in_root(self):
         root = Path(__file__).resolve().parent.parent
-        license_path = root / "LICENSE"
-        self.assertTrue(license_path.exists())
-        self.assertIn("MIT License", license_path.read_text(encoding="utf-8"))
+        for candidate in ("LICENSE", "LICENSE.txt", "LICENSE.md", "COPYING", "COPYING.txt"):
+            self.assertFalse((root / candidate).exists(), f"{candidate} should not exist in repository root")
 
 
 if __name__ == "__main__":

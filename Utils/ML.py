@@ -440,6 +440,8 @@ def detect_problem_type(df, target_col):
     Legitimate edge cases exist (e.g. year columns with few rows), which is
     why the ML page lets users override the suggestion.
     """
+    if df is None or not target_col or target_col not in df.columns:
+        return "Classification"
     target_series = df[target_col].dropna()
     if target_series.empty:
         return "Regression"

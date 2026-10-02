@@ -1,5 +1,8 @@
 import sys
 from streamlit.testing.v1 import AppTest
+from Utils.paths import ensure_project_directories
+
+ensure_project_directories()
 
 pages = [
     "App.py",
@@ -23,7 +26,11 @@ for page in pages:
             failures += 1
             print(f"[FAIL] {page}")
             for ex in at.exception:
-                print(f"       {type(ex).__name__}: {ex.message}")
+                val = getattr(ex, "value", None) or getattr(ex, "message", None) or str(ex)
+                print(f"       {type(ex).__name__}: {val}")
+                stack = getattr(ex, "stack_trace", None)
+                if stack:
+                    print(f"       {stack}")
         else:
             print(f"[ OK ] {page}")
     except Exception as e:
