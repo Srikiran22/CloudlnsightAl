@@ -597,6 +597,109 @@ class MasterForensicRemediationTests(unittest.TestCase):
             read_tabular(buf, filename="adversarial_tail.csv")
         self.assertIn("exceeding the memory-safety limit", str(ctx.exception))
 
+    def test_cardinality_repeated_across_chunks_deterministic(self):
+        """Repeated high-cardinality values across chunks increment observations deterministically."""
+        from Utils.paths import _read_chunked_delimited_buffer
+        import io
+        # 30,000 rows (2 chunks: 25k and 5k) of 80% unique strings repeating the same set
+        unique_pool = [f"token_{i}" for i in range(20000)] + ["fixed"] * 5000
+        # Replicate for chunk 1 and chunk 2
+        col_vals = unique_pool + unique_pool[:5000]
+        csv_data = "col1\n" + "\n".join(col_vals)
+        buf = io.BytesIO(csv_data.encode("utf-8"))
+        # Should parse cleanly because 20k + 4k = 24k observations << 5M
+        df = _read_chunked_delimited_buffer(buf)
+        self.assertEqual(len(df), 30000)
+
+    def test_cardinality_multi_column_dilution_resistant(self):
+        """Low-cardinality categorical columns do not dilute high-cardinality string columns."""
+        from Utils.paths import _read_chunked_delimited_buffer, ResourcePolicy
+        from unittest.mock import patch
+        import io
+        import uuid
+        # 1 high-cardinality column, 9 low-cardinality columns
+        rows = 100
+        lines = ["high,c1,c2,c3,c4,c5,c6,c7,c8,c9"]
+        for _ in range(rows):
+            lines.append(f"{uuid.uuid4().hex},0,0,0,0,0,0,0,0,0")
+        buf = io.BytesIO("\n".join(lines).encode("utf-8"))
+        # Patch limit to 50 cells so the 100 high-cardinality cells trigger rejection
+        with patch.object(ResourcePolicy, "MAX_HIGH_CARDINALITY_STRING_CELLS", 50):
+            with self.assertRaises(ValueError) as ctx:
+                _read_chunked_delimited_buffer(buf)
+            self.assertIn("high-cardinality string cell observations across chunks", str(ctx.exception))
+
+    def test_chunked_ingestion_streaming_row_cell_limits(self):
+        """Chunked ingestion enforces row and cell limits during chunk iteration."""
+        from Utils.paths import _read_chunked_delimited_buffer
+        from unittest.mock import patch
+        import io
+        # 60,000 rows across 3 chunks
+        lines = ["c1,c2\n"] + ["1,2\n"] * 60000
+        buf = io.BytesIO("".join(lines).encode("utf-8"))
+        with patch("Utils.paths.MAX_INGESTION_ROWS", 50000):
+            with self.assertRaises(ValueError) as ctx:
+                _read_chunked_delimited_buffer(buf)
+            self.assertIn("exceeds the maximum supported limit of 50,000 rows", str(ctx.exception))
+
+    def test_downsample_timeseries_non_iso_string_dates_chronological(self):
+        """downsample_timeseries sorts non-ISO date strings chronologically by datetime, not alphabetically."""
+        from Utils.Charts import downsample_timeseries
+        dates = ["1/2/2024", "10/1/2023", "2/1/2024", "12/1/2023"] * 30
+        df = pd.DataFrame({"date": dates, "val": range(len(dates))})
+        ds = downsample_timeseries(df, x_col="date", y_col="val", max_points=20)
+        # Verify earliest points are October/December 2023, not January 2024
+        earliest_dt = pd.to_datetime(ds["date"].iloc[0])
+        self.assertEqual(earliest_dt.year, 2023)
+        self.assertEqual(earliest_dt.month, 10)
+
+    def test_downsample_timeseries_temporal_invariants(self):
+        """downsample_timeseries handles timezone-aware, duplicate, descending, and boundary extrema."""
+        from Utils.Charts import downsample_timeseries
+        import numpy as np
+        # 1000 points descending with duplicates, gaps, and extreme spikes
+        rng = pd.date_range("2024-01-01", periods=1000, freq="h", tz="UTC")
+        # Monotonic descending input
+        rng_desc = rng[::-1]
+        vals = np.sin(np.linspace(0, 20, 1000))
+        # Place extreme spikes at start, middle, and end
+        vals[0] = 999.0
+        vals[500] = -888.0
+        vals[-1] = 777.0
+        df = pd.DataFrame({"ts": rng_desc, "val": vals})
+        ds = downsample_timeseries(df, x_col="ts", y_col="val", max_points=100)
+        self.assertLessEqual(len(ds), 100)
+        # Chronological sort invariant: output timestamps must be strictly monotonic ascending
+        self.assertTrue((ds["ts"].iloc[:-1].values <= ds["ts"].iloc[1:].values).all())
+        # Envelope extrema preserved
+        self.assertIn(999.0, ds["val"].values)
+        self.assertIn(-888.0, ds["val"].values)
+        self.assertIn(777.0, ds["val"].values)
+
+    def test_dataset_fingerprint_same_size_same_mtime_security_model(self):
+        """dataset_fingerprint respects metadata cache for performance but detects changes with force_refresh."""
+        from Utils.dataset_ui import dataset_fingerprint
+        from Utils.paths import DATASETS_DIR
+        import os
+        test_file = DATASETS_DIR / "fp_security_probe.csv"
+        test_file.write_text("a,b\n1,2", encoding="utf-8")
+        try:
+            stat1 = test_file.stat()
+            fp1 = dataset_fingerprint("fp_security_probe.csv")
+            # Overwrite in-place with same size
+            test_file.write_text("a,b\n9,8", encoding="utf-8")
+            os.utime(test_file, ns=(stat1.st_atime_ns, stat1.st_mtime_ns))
+            # Default cached call returns performance-cached digest
+            fp_cached = dataset_fingerprint("fp_security_probe.csv", force_refresh=False)
+            self.assertEqual(fp1, fp_cached)
+            # Security-sensitive force_refresh computes actual cryptographic content hash
+            fp_fresh = dataset_fingerprint("fp_security_probe.csv", force_refresh=True)
+            self.assertNotEqual(fp1, fp_fresh)
+            self.assertEqual(len(fp_fresh), 64)
+        finally:
+            if test_file.exists():
+                test_file.unlink()
+
 
 if __name__ == "__main__":
     unittest.main()

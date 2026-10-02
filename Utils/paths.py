@@ -899,7 +899,7 @@ def _check_string_cardinality_amplification(buffer, sep=",", encoding="utf-8", m
 
             if est_high_card_cells > ResourcePolicy.MAX_HIGH_CARDINALITY_STRING_CELLS:
                 raise ValueError(
-                    f"Dataset contains an estimated {est_high_card_cells:,} high-cardinality string cells across "
+                    f"Dataset contains an estimated {est_high_card_cells:,} memory-risk high-cardinality string cells across "
                     f"{len(high_card_cols)} columns, exceeding the memory-safety limit of "
                     f"{ResourcePolicy.MAX_HIGH_CARDINALITY_STRING_CELLS:,} cells. "
                     "High-cardinality text at this scale requires excessive RAM (>1.5 GB). "
@@ -912,20 +912,48 @@ def _check_string_cardinality_amplification(buffer, sep=",", encoding="utf-8", m
 
 
 def _read_chunked_delimited_buffer(buffer, sep=",", encoding="utf-8", nrows=None):
-    """Read delimited buffer in bounded chunks, tracking accumulated deep memory and string cells."""
+    """Read delimited buffer in bounded chunks, tracking accumulated deep memory and string cells.
+
+    Tracks accumulated per-chunk high-cardinality string cell observations (not global distinct cardinality),
+    which directly reflects Python process heap pressure since each chunk allocates distinct string objects.
+    Enforces row, cell, deep memory, and high-cardinality limits streamingly during ingestion to abort before
+    expensive full-file materialization. For multi-chunk inputs, intermediate chunk DataFrames are retained
+    until concatenation into the final DataFrame.
+    """
     if nrows is not None and nrows <= 10_000:
         buffer.seek(0)
         return pd.read_csv(buffer, sep=sep, encoding=encoding, nrows=nrows)
 
     chunks = []
+    accumulated_rows = 0
     accumulated_deep_bytes = 0
-    accumulated_unique_string_cells = 0
+    accumulated_high_cardinality_cells = 0
     string_cols = None
     chunk_size = 25_000
 
     buffer.seek(0)
     reader = pd.read_csv(buffer, sep=sep, encoding=encoding, nrows=nrows, chunksize=chunk_size)
     for chunk in reader:
+        chunk_len = len(chunk)
+        if chunk_len == 0:
+            continue
+
+        accumulated_rows += chunk_len
+        if accumulated_rows > MAX_INGESTION_ROWS:
+            raise ValueError(
+                f"Dataset contains over {MAX_INGESTION_ROWS:,} rows, which exceeds the maximum supported limit "
+                f"of {MAX_INGESTION_ROWS:,} rows. Filter or split the file before ingestion."
+            )
+
+        num_cols = chunk.shape[1]
+        accumulated_cells = accumulated_rows * num_cols
+        if accumulated_cells > MAX_INGESTION_CELLS:
+            raise ValueError(
+                f"Dataset contains over {MAX_INGESTION_CELLS:,} cells ({accumulated_rows:,} rows × {num_cols:,} columns), "
+                f"which exceeds the maximum supported limit of {MAX_INGESTION_CELLS:,} cells. "
+                "Filter, sample, or split the dataset before ingestion."
+            )
+
         if string_cols is None:
             string_cols = [
                 c for c in chunk.columns
@@ -941,24 +969,31 @@ def _read_chunked_delimited_buffer(buffer, sep=",", encoding="utf-8", nrows=None
                 "Filter, sample, or downcast columns before ingestion."
             )
 
-        if string_cols and len(chunk) >= 50:
+        if string_cols and chunk_len >= 10:
             chunk_high_card_cells = sum(
                 chunk[c].nunique() for c in string_cols
-                if (chunk[c].nunique() / max(1, len(chunk))) >= 0.7
+                if (chunk[c].nunique() / max(1, chunk_len)) >= 0.7
             )
             if chunk_high_card_cells > 0:
-                accumulated_unique_string_cells += chunk_high_card_cells
-                if accumulated_unique_string_cells > ResourcePolicy.MAX_HIGH_CARDINALITY_STRING_CELLS:
+                accumulated_high_cardinality_cells += chunk_high_card_cells
+                if accumulated_high_cardinality_cells > ResourcePolicy.MAX_HIGH_CARDINALITY_STRING_CELLS:
                     raise ValueError(
                         f"Dataset contains over {ResourcePolicy.MAX_HIGH_CARDINALITY_STRING_CELLS:,} "
-                        "high-cardinality string cells across chunks, exceeding the memory-safety limit. "
+                        "high-cardinality string cell observations across chunks, exceeding the memory-safety limit. "
                         "High-cardinality text at this scale requires excessive RAM (>1.5 GB). "
                         "Filter, chunk, or downcast string columns before ingestion."
                     )
 
         chunks.append(chunk)
 
-    return pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
+    if not chunks:
+        return pd.DataFrame()
+    if len(chunks) == 1:
+        return chunks[0]
+
+    df = pd.concat(chunks, ignore_index=True)
+    del chunks
+    return df
 
 
 def _read_csv_from_buffer(buffer, nrows=None):
@@ -1981,7 +2016,7 @@ def read_tabular(source, filename=None, max_rows=None):
 
     elif suffix in {".xlsx", ".xls"}:
         if suffix == ".xlsx":
-            _check_zip_bomb(buffer)
+            _check_zip_bomb(buffer, max_uncompressed_bytes=100 * 1024 * 1024)
         if hasattr(buffer, "seek"):
             buffer.seek(0)
         try:

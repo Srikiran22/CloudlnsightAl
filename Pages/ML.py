@@ -305,7 +305,7 @@ tab_save, tab_load = st.tabs(["Save trained model", "Load saved model & predict"
 
 with tab_save:
     current_results = st.session_state.get("ml_results")
-    if not results_match_active(current_results, selected_file):
+    if not results_match_active(current_results, selected_file, df=df):
         st.info("Train a model above first, then save it here for reuse.")
     else:
         save_name = st.text_input(

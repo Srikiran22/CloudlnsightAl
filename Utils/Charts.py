@@ -211,10 +211,14 @@ def create_bar_count_plot(df, x_col, y_col=None, agg_func="Count", hue_col=None,
 
 
 def downsample_timeseries(df: pd.DataFrame, x_col: str, y_col: str, max_points: int = 25000, hue_col: str = None) -> pd.DataFrame:
-    """Time-preserving downsampling using min-max peak and envelope bucketing.
+    """Min-max envelope decimation for time series data.
 
-    Guarantees that extreme spikes, periodic troughs/crests, and temporal bounds
-    are preserved without the aliasing and data loss caused by random sampling.
+    Enforces chronological ordering before decimation (datetime coercion -> chronological sort -> decimation).
+    Divides the chronological series into N/4 buckets and extracts four representative points per bucket:
+    bucket start, bucket end, local minimum, and local maximum. This preserves local extrema and temporal
+    envelope boundaries significantly better than naive random sampling or uniform decimation, while bounding
+    render points for interactive visualization. Does not guarantee zero aliasing for frequencies above
+    the Nyquist limit of the bucket sampling rate.
     """
     if df is None or len(df) <= max_points:
         return df
@@ -223,7 +227,21 @@ def downsample_timeseries(df: pd.DataFrame, x_col: str, y_col: str, max_points: 
         if len(sub_df) <= target_n:
             return sub_df
 
-        s_df = sub_df.sort_values(by=x_col).reset_index(drop=True)
+        if pd.api.types.is_datetime64_any_dtype(sub_df[x_col]):
+            s_df = sub_df.sort_values(by=x_col).reset_index(drop=True)
+        else:
+            try:
+                converted_dt = pd.to_datetime(sub_df[x_col], errors="coerce")
+                non_null_count = sub_df[x_col].dropna().shape[0]
+                if non_null_count > 0 and (converted_dt.notna().sum() / non_null_count) >= 0.8:
+                    temp_sub = sub_df.copy()
+                    temp_sub["_dt_sort_key"] = converted_dt
+                    s_df = temp_sub.sort_values(by="_dt_sort_key").drop(columns=["_dt_sort_key"]).reset_index(drop=True)
+                else:
+                    s_df = sub_df.sort_values(by=x_col).reset_index(drop=True)
+            except Exception:
+                s_df = sub_df.sort_values(by=x_col).reset_index(drop=True)
+
         num_buckets = max(1, target_n // 4)
         bucket_size = len(s_df) / num_buckets
 

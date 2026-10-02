@@ -270,22 +270,26 @@ The application is designed for local, single-user use.
 Key safeguards include:
 
 - Strict dataset path containment preventing directory traversal
-- Full 64-character SHA-256 cryptographic dataset content identity
+- SHA-256 cryptographic dataset content identity with metadata-backed performance caching and fresh byte verification (`force_refresh=True`)
 - XML DTD and external entity rejection preventing XXE attacks
-- Decompression bomb and size guards across ZIP, Excel, and Parquet parsers
-- 200 MB upload ceiling and parser size limits
+- Decompression bomb and size guards across ZIP, Excel (100 MB decompressed limit), and Parquet parsers
+- 200 MB upload ceiling, 1,000,000 row limit, 200 column limit, and 20,000,000 cell limit enforced streamingly during ingestion
+- 400 MB deep DataFrame memory budget and continuous 5,000,000 high-cardinality string cell observation monitoring
 - Bounded AI response parsing with column caps (>200 columns rejected)
 - Ephemeral in-memory credential handling (no disk storage or intentional logging of API keys)
 - Sensitive-column screening before Gemini analysis
 - Provenance metadata, dataset fingerprinting, and HMAC-SHA256 authenticity signing for saved ML models
 
-## Limitations
+## Limitations and architectural considerations
 
-- Local-first architecture: No built-in authentication or multi-tenant per-user storage isolation
+- Local-first architecture: Designed for single-user analytical sessions; no multi-tenant authorization or per-user storage isolation
+- Memory governance: The 400 MB DataFrame memory budget governs pandas in-memory data structures; total process RSS (working set) is higher due to Python runtime heap, openpyxl/parser objects, and temporary intermediate buffers during multi-chunk ingestion or S3 export
+- Excel memory profile: Excel files (.xlsx / .xls) construct in-memory workbook DOMs; while bounded by decompression limits and row/cell limits, process RSS expands significantly compared to flat delimited text
+- Temporal decimation: Min-max envelope bucketing enforces chronological ordering and captures local extrema and temporal boundaries, but does not guarantee zero aliasing for frequencies exceeding the bucket sampling rate
 - Gemini and S3 require external services when those features are used
 - PDF ingestion requires extractable text; scanned image PDFs need a separate OCR workflow
 - Joblib model bundles rely on pickle and execute Python bytecode upon deserialization. Models trained in CloudInsight are cryptographically signed with HMAC-SHA256 to ensure integrity; external or untrusted `.joblib` files are blocked from loading
-- Production deployment requires additional authenticating reverse proxy, storage isolation, and network controls
+- Production deployment requires an authenticating reverse proxy, storage isolation, and network controls
 
 ## Contributing
 

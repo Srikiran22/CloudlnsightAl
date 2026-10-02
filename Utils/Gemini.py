@@ -262,6 +262,12 @@ def _truncate_cell(value):
 
 
 def _sanitize_prompt_delimiter(text):
+    """Sanitize structural XML/prompt delimiters in untrusted text inputs.
+
+    Note: This is structured-data hygiene to prevent accidental delimiter tag collision
+    and preserve intended prompt framing. It is not a formal semantic jailbreak defense;
+    system-level instruction boundaries and model safety filters provide the primary control.
+    """
     if not text:
         return ""
     s = str(text)

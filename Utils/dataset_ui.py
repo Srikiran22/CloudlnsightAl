@@ -90,9 +90,16 @@ def invalidate_dataset_cache(dataset=None):
 def dataset_fingerprint(dataset, force_refresh=False):
     """Cryptographic content-derived fingerprint for a dataset file.
 
-    Computes a full SHA-256 hash over the actual file content to guarantee
-    exact content identity, with metadata-based caching (mtime_ns, size)
+    Computes a full SHA-256 hash over the actual file content to establish
+    exact content identity, with metadata-based caching (path, mtime_ns, size)
     to avoid redundant disk reads when the file is unchanged.
+
+    Security & Correctness Model:
+    - Performance cache: Metadata (path, mtime_ns, size) validates the cached digest.
+    - Security-sensitive provenance: If verifying model provenance or validating
+      against potential in-place same-mtime/same-size replacements, specify
+      force_refresh=True to freshly compute the SHA-256 digest directly from disk bytes.
+    - In-memory session datasets: Validated via dataframe_fingerprint(df).
     """
     path = resolve_dataset_path(dataset)
     path_str = str(path)

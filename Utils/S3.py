@@ -191,6 +191,15 @@ def upload_s3_dataset(df, bucket_name, file_key, client, max_bytes=MAX_UPLOAD_BY
     When sanitize=False (default), canonical internal analytical values are preserved.
     When sanitize=True, external spreadsheet formula-injection neutralization is applied.
     Raises ValueError if serialized dataset exceeds max_bytes.
+
+    Memory Model:
+    This operation utilizes bounded in-memory buffering. During CSV export, up to 4 representations
+    can coexist temporarily:
+    1. The source DataFrame (or sanitized DataFrame copy if sanitize=True)
+    2. The io.TextIOWrapper / io.BytesIO serialization buffer
+    3. The extracted immutable bytes payload
+    4. Boto3 / botocore HTTP request transport payload
+    The BytesIO buffer is explicitly closed and intermediate references are freed prior to transmission.
     """
     total_cells = df.shape[0] * df.shape[1]
     if total_cells > ResourcePolicy.MAX_INGESTION_CELLS:
@@ -210,6 +219,9 @@ def upload_s3_dataset(df, bucket_name, file_key, client, max_bytes=MAX_UPLOAD_BY
         csv_bytes = buf.getvalue()
     finally:
         buf.close()
+
+    if sanitize:
+        del target_df
 
     if len(csv_bytes) > max_bytes:
         raise ValueError(
