@@ -214,12 +214,13 @@ def _render_correlation_heatmap(df):
     num_df = df.select_dtypes(include="number")
     if len(num_df.columns) < 2:
         return None
+    # C-18: Align column selection with correlation insights using highest-variance features
+    if len(num_df.columns) > 10:
+        variances = num_df.var().sort_values(ascending=False)
+        num_df = num_df[variances.head(10).index]
     corr = num_df.corr(numeric_only=True)
     if corr.dropna(how="all").empty:
         return None
-
-    if len(corr.columns) > 10:
-        corr = corr.iloc[:10, :10]
 
     fig, ax = plt.subplots(figsize=(5.2, 4.4), dpi=100)
     image = ax.imshow(corr.values, cmap="coolwarm", vmin=-1, vmax=1)
@@ -384,10 +385,15 @@ def generate_pdf_report(
     ))
 
     from Utils.sampling import sample_for_analysis
+    total_input_rows = len(df)
     if source_rows is None:
-        source_rows = len(df)
+        source_rows = total_input_rows
     df, is_sampled, _ = sample_for_analysis(df, max_rows=50_000, random_state=42)
-    if is_sampled and analyzed_rows is None:
+    if is_sampled:
+        analyzed_rows = len(df)
+        if source_rows is None or source_rows < total_input_rows:
+            source_rows = total_input_rows
+    elif analyzed_rows is None:
         analyzed_rows = len(df)
 
     rows, cols = df.shape
@@ -648,7 +654,9 @@ def generate_pdf_report(
         ))
         story.append(Spacer(1, 12))
     else:
-        story.append(Paragraph("8. Sample Records (First 8 Rows)", heading2_style))
+        is_subset = is_sampled or (source_rows is not None and analyzed_rows is not None and source_rows != analyzed_rows)
+        sample_title = "8. Sample Records (First 8 Rows of Sample)" if is_subset else "8. Sample Records (First 8 Rows)"
+        story.append(Paragraph(sample_title, heading2_style))
         sample_cols = list(df.columns[:8])
         sample_data = [[escape(str(c)) for c in sample_cols]]
         # Mask sensitive columns to prevent accidental credential/PII leakage in PDF reports
@@ -722,7 +730,7 @@ def generate_pdf_report(
                 _image_grid(box_images, image_width=250, image_height=130)
             if heatmap_buffer is not None:
                 story.append(Spacer(1, 6))
-                story.append(Paragraph("Correlation Heatmap", body_style))
+                story.append(Paragraph("Correlation Heatmap (Top Columns by Variance)", body_style))
                 heat_table = Table([[Image(heatmap_buffer, width=330, height=280)]], colWidths=[540])
                 heat_table.setStyle(TableStyle([
                     ("ALIGN", (0, 0), (-1, -1), "CENTER"),

@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
-from Utils.dataset_ui import render_sidebar, select_working_dataset
+from Utils.dataset_ui import dataframe_fingerprint, render_sidebar, select_working_dataset
 from Utils.quality import quality_metrics
 from Utils.Charts import create_histogram_plot, create_box_violin_plot
 from Utils.sampling import sample_for_visualization
@@ -15,7 +15,12 @@ df, selected_file = select_working_dataset("Select Dataset for Dashboard:")
 render_sidebar()
 st.caption(f"Active: `{selected_file}`")
 
-metrics = quality_metrics(df)
+# P-07: Cache quality metrics by dataset fingerprint to avoid repeated O(N) full dataset scans on reruns
+df_fp = dataframe_fingerprint(df)
+metrics_cache_key = f"dash_quality_metrics_{selected_file}_{df_fp}"
+if metrics_cache_key not in st.session_state:
+    st.session_state[metrics_cache_key] = quality_metrics(df)
+metrics = st.session_state[metrics_cache_key]
 rows, cols = metrics["rows"], metrics["cols"]
 missing_cells = metrics["missing_cells"]
 completeness_score = metrics["completeness"]
@@ -69,7 +74,8 @@ st.subheader("Filter rows")
 st.markdown("Slice the dataset by column conditions; filters combine in real time.")
 
 filter_cols = st.multiselect("Select Columns to Filter On:", df.columns.tolist())
-filtered_df = df.copy()
+# P-17: Avoid unconditional full DataFrame copy; slice/copy only when filters are active
+filtered_df = df
 
 if filter_cols:
     col_chunks = st.columns(min(len(filter_cols), 4))

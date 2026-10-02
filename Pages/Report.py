@@ -6,7 +6,7 @@ import streamlit as st
 from Utils.PDF import generate_pdf_report, validate_report_template
 from Utils.paths import (
     REPORTS_DIR, REPORT_TEMPLATES_DIR, atomic_write, get_dataset_row_count, get_unique_filename,
-    list_dataset_files, resolve_dataset_path, safe_stem,
+    list_ready_datasets, resolve_dataset_path, safe_stem,
 )
 from Utils.privacy import detect_sensitive_columns
 from Utils.dataset_ui import (
@@ -76,6 +76,7 @@ try:
     is_file_backed = resolve_dataset_path(selected_file).is_file()
 except Exception:
     is_file_backed = False
+source_type = "disk" if is_file_backed else "session"
 curr_fp = dataset_fingerprint(selected_file) if is_file_backed else dataframe_fingerprint(df)
 
 latest_ai = st.session_state.get("latest_ai_insights")
@@ -182,6 +183,8 @@ if st.button("Generate PDF report", type="primary"):
             )
             st.session_state["last_pdf_report"] = {
                 "dataset": selected_file,
+                "dataset_name": selected_file,
+                "source_type": source_type,
                 "dataset_fingerprint": curr_fp,
                 "filename": pdf_filename,
                 "bytes": pdf_bytes,
@@ -192,8 +195,7 @@ if st.button("Generate PDF report", type="primary"):
 
 pdf_result = st.session_state.get("last_pdf_report")
 if pdf_result and results_match_active(
-    {"dataset_name": pdf_result.get("dataset"),
-     "dataset_fingerprint": pdf_result.get("dataset_fingerprint")},
+    pdf_result,
     selected_file,
     df=df,
 ):
@@ -206,7 +208,8 @@ if pdf_result and results_match_active(
 
 st.markdown("---")
 st.subheader("Batch generation")
-st.caption(f"Generates a PDF report for each of the {len(list_dataset_files())} datasets in the Datasets/ folder using the settings above.")
+ready_files = list_ready_datasets()
+st.caption(f"Generates a PDF report for each of the {len(ready_files)} tabular datasets in the Datasets/ folder using the settings above.")
 
 max_batch = st.number_input(
     "Row limit per dataset in batch mode:",
@@ -215,7 +218,7 @@ max_batch = st.number_input(
 )
 
 if st.button("Generate reports for all datasets"):
-    all_files = list_dataset_files()
+    all_files = list_ready_datasets()
     progress = st.progress(0.0)
     generated, failures = [], []
 

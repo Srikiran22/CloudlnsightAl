@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 from Utils.compare_logic import column_drift_rows, schema_diff
-from Utils.paths import list_ready_datasets
+from Utils.paths import ResourcePolicy, get_dataset_row_count, list_ready_datasets
 from Utils.dataset_ui import render_sidebar, load_dataset_cached
 from Utils.sampling import sample_for_analysis
 
@@ -28,8 +28,13 @@ if name_a == name_b:
     st.stop()
 
 try:
-    df_a = load_dataset_cached(name_a)
-    df_b = load_dataset_cached(name_b)
+    row_count_a = get_dataset_row_count(name_a)
+    row_count_b = get_dataset_row_count(name_b)
+    # P-09: Enforce resource bound at ingestion/load rather than loading full multi-gigabyte datasets first
+    df_a = load_dataset_cached(name_a, max_rows=ResourcePolicy.MAX_ANALYSIS_ROWS)
+    df_b = load_dataset_cached(name_b, max_rows=ResourcePolicy.MAX_ANALYSIS_ROWS)
+    total_a = row_count_a if row_count_a is not None else len(df_a)
+    total_b = row_count_b if row_count_b is not None else len(df_b)
 except Exception as error:
     st.error(f"Failed to load datasets: {error}")
     st.stop()
@@ -38,9 +43,9 @@ except Exception as error:
 st.subheader("Overview")
 m1, m2, m3, m4 = st.columns(4)
 with m1:
-    st.metric("Rows — A", f"{df_a.shape[0]:,}", delta=f"{df_b.shape[0] - df_a.shape[0]:,} vs B")
+    st.metric("Total Rows — A", f"{total_a:,}", delta=f"{total_b - total_a:,} vs B")
 with m2:
-    st.metric("Rows — B", f"{df_b.shape[0]:,}")
+    st.metric("Total Rows — B", f"{total_b:,}")
 with m3:
     st.metric("Columns — A", df_a.shape[1])
 with m4:
@@ -70,10 +75,10 @@ if not common:
 
 st.subheader("Column-level metric comparison & shifts")
 
-if len(df_a) > 50_000 or len(df_b) > 50_000:
+if total_a > len(df_a) or total_b > len(df_b):
     st.info(
         f"Analytical scope: Column metric comparison and statistical drift tests are evaluated on a representative sample of "
-        f"{min(len(df_a), 50_000):,} rows for A and {min(len(df_b), 50_000):,} rows for B."
+        f"{len(df_a):,} rows for A (out of {total_a:,}) and {len(df_b):,} rows for B (out of {total_b:,})."
     )
 
 drift_df = pd.DataFrame(column_drift_rows(df_a, df_b))

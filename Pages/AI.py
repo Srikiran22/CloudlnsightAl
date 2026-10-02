@@ -4,14 +4,17 @@ import streamlit as st
 from Utils.Gemini import (
     generate_executive_insights, chat_with_gemini_dataset,
     GEMINI_MODELS, DEFAULT_GEMINI_MODEL, GeminiError, MAX_CHAT_HISTORY,
-    prune_ai_contexts,
+    MAX_MESSAGE_CHARS, prune_ai_contexts,
 )
+
 from Utils.privacy import apply_exclusions, detect_sensitive_columns
 from Utils.secrets import ask, value_of, keep_box, release, drop
 from Utils.logsys import get_logger
 from Utils.dataset_ui import dataframe_fingerprint, dataset_fingerprint, render_sidebar, select_working_dataset
 
 logger = get_logger("AI")
+
+MAX_TOTAL_CHAT_CHARS = 100_000
 
 st.title("AI insights")
 st.markdown("Gemini-powered executive summaries and conversational Q&A over the active dataset.")
@@ -156,8 +159,14 @@ with tab_chat:
         if not api_key:
             st.error("Google Gemini API key is required to chat. Enter your key in the sidebar.")
         else:
+            if len(user_prompt) > MAX_MESSAGE_CHARS:
+                user_prompt = f"{user_prompt[:MAX_MESSAGE_CHARS]}... [truncated]"
             st.session_state[chat_key].append({"role": "user", "content": user_prompt})
             del st.session_state[chat_key][:-MAX_CHAT_HISTORY]
+            total_chars = sum(len(m.get("content", "")) for m in st.session_state[chat_key])
+            while total_chars > MAX_TOTAL_CHAT_CHARS and len(st.session_state[chat_key]) > 1:
+                evicted = st.session_state[chat_key].pop(0)
+                total_chars -= len(evicted.get("content", ""))
             with st.chat_message("user"):
                 st.markdown(user_prompt)
 
@@ -174,6 +183,10 @@ with tab_chat:
                         st.markdown(reply)
                         st.session_state[chat_key].append({"role": "assistant", "content": reply})
                         del st.session_state[chat_key][:-MAX_CHAT_HISTORY]
+                        total_chars = sum(len(m.get("content", "")) for m in st.session_state[chat_key])
+                        while total_chars > MAX_TOTAL_CHAT_CHARS and len(st.session_state[chat_key]) > 1:
+                            evicted = st.session_state[chat_key].pop(0)
+                            total_chars -= len(evicted.get("content", ""))
                     except GeminiError as e:
                         st.error(f"Gemini error — {e}")
                     except Exception as e:

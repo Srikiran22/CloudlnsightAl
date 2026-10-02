@@ -23,16 +23,17 @@ MAX_PARSE_CANDIDATES = 2000
 def build_conversion_prompt(raw_text, filename, extra_instructions=None):
     sample = raw_text[:MAX_SAMPLE_CHARS]
     # Escape closing tag to prevent prompt injection / sandbox breakout
-    safe_sample = sample.replace("</source_file>", "<\\/source_file>")
-    safe_filename = str(filename).replace("</source_file>", "")
+    safe_sample = sample.replace("</source_file>", "<\\/source_file>").replace("<source_file>", "<\\source_file>")
+    safe_filename = str(filename).replace("</source_file>", "").replace("<source_file>", "")
     truncated_note = (
         f"\n(Content truncated for length: showing first {MAX_SAMPLE_CHARS:,} of {len(raw_text):,} characters; infer the schema and extract records from what is shown.)"
         if len(raw_text) > MAX_SAMPLE_CHARS
         else ""
     )
+    safe_extra = str(extra_instructions).replace("</source_file>", "").replace("<source_file>", "") if extra_instructions else ""
     extra_block = (
-        f"\nDomain-specific requirements:\n{extra_instructions}\n"
-        if extra_instructions
+        f"\nDomain-specific requirements:\n{safe_extra}\n"
+        if safe_extra
         else ""
     )
 
@@ -60,12 +61,13 @@ Rules:
 
 def build_continuation_prompt(chunk_text, filename, expected_columns, chunk_idx, total_chunks,
                               extra_instructions=None, preceding_context=None):
-    safe_sample = chunk_text.replace("</source_file>", "<\\/source_file>")
-    safe_filename = str(filename).replace("</source_file>", "")
+    safe_sample = chunk_text.replace("</source_file>", "<\\/source_file>").replace("<source_file>", "<\\source_file>")
+    safe_filename = str(filename).replace("</source_file>", "").replace("<source_file>", "")
     cols_str = ",".join(expected_columns)
+    safe_extra = str(extra_instructions).replace("</source_file>", "").replace("<source_file>", "") if extra_instructions else ""
     extra_block = (
-        f"\nDomain-specific requirements:\n{extra_instructions}\n"
-        if extra_instructions
+        f"\nDomain-specific requirements:\n{safe_extra}\n"
+        if safe_extra
         else ""
     )
     context_block = ""
@@ -281,6 +283,13 @@ def _is_plausible_header_row(header_fields):
             return False
         if _CONVERSATIONAL_VERBS.search(s_lower):
             return False
+        tokens = s.split()
+        if tokens:
+            last_tok = tokens[-1]
+            if s.endswith(".") and not _is_abbreviation_token(last_tok) and (len(tokens) >= 2 or s[0].isupper()):
+                return False
+            if s.endswith(":") and len(tokens) >= 2:
+                return False
     return True
 
 
@@ -289,7 +298,7 @@ def _plausible_header(columns):
 
 
 def _is_column_structured(series):
-    non_empty = [str(v).strip() for v in series if str(v).strip()]
+    non_empty = [str(v).strip() for v in series if pd.notna(v) and str(v).strip() and str(v).strip().lower() not in ("none", "nan", "null", "")]
     if not non_empty:
         return False
     if sum(1 for v in non_empty if _is_numeric_token(v)) / len(non_empty) >= 0.5:
@@ -396,7 +405,7 @@ def _is_valid_one_column_table(df):
 
 
 def _normalize(df):
-    df = df.dropna(axis=0, how="all").dropna(axis=1, how="all")
+    df = df.dropna(axis=0, how="all")
     if df is not None and hasattr(df, "columns"):
         cleaned_cols, _ = _clean_header_names(list(df.columns))
         df.columns = cleaned_cols
@@ -523,8 +532,6 @@ def parse_ai_csv(text):
                 data_rows = []
                 for j in range(i + 1, len(records)):
                     row = records[j]
-                    if len(row) != width:
-                        break
                     # Break on conversational sign-offs / disclaimers
                     if len(row) == 1 or (
                         len(row) > 0
@@ -532,6 +539,11 @@ def parse_ai_csv(text):
                         and all(not c.strip() for c in row[1:])
                     ):
                         break
+                    if len(row) != width:
+                        if abs(len(row) - width) <= 2 and not any(_is_definitely_prose_cell(c) for c in row):
+                            row = (row + [""] * width)[:width]
+                        else:
+                            break
                     data_rows.append(row)
                 if data_rows:
                     score = len(data_rows) * width
@@ -546,9 +558,8 @@ def parse_ai_csv(text):
     except (csv.Error, ValueError, TypeError, pd.errors.ParserError, pd.errors.EmptyDataError) as exc:
         logger.debug("Structured CSV reader extraction encountered non-fatal error: %s", exc)
 
-    # 3. 1-column table extraction when no multi-column lines exist
-    comma_indexes = [i for i, line in enumerate(lines) if _field_count_quote_aware(line) >= 2]
-    if not comma_indexes:
+    # 3. 1-column table extraction helper
+    def _extract_1col_candidate():
         best_1col = None
         for i in range(len(lines)):
             line_i = lines[i].strip()
@@ -572,6 +583,11 @@ def parse_ai_csv(text):
                             best_1col = cand_df
                     except (pd.errors.ParserError, pd.errors.EmptyDataError, ValueError, TypeError) as exc:
                         logger.debug("One-column candidate failed to parse: %s", exc)
+        return best_1col
+
+    comma_indexes = [i for i, line in enumerate(lines) if _field_count_quote_aware(line) >= 2]
+    if not comma_indexes:
+        best_1col = _extract_1col_candidate()
         if best_1col is not None:
             return best_1col
         raise ValueError("AI response did not contain CSV data.")
@@ -608,6 +624,9 @@ def parse_ai_csv(text):
 
     winner = best_clean
     if winner is None:
+        best_1col = _extract_1col_candidate()
+        if best_1col is not None:
+            return best_1col
         raise ValueError("AI response did not contain valid CSV data.")
     return winner[2]
 
@@ -706,12 +725,17 @@ def convert_to_dataframe(api_key, raw_text, filename, model_name=DEFAULT_GEMINI_
             cont_response = _generate_content(api_key, model_name, cont_prompt)
             chunk_df = parse_ai_csv(cont_response)
             if not chunk_df.empty:
-                overlap_cols = set(expected_cols) & set(chunk_df.columns)
-                if not overlap_cols and len(expected_cols) > 0 and len(chunk_df.columns) > 0:
+                norm_chunk_cols = [str(c).strip().lower() for c in chunk_df.columns]
+                norm_expected_cols = [str(c).strip().lower() for c in expected_cols]
+                if len(norm_chunk_cols) != len(norm_expected_cols) or sorted(norm_chunk_cols) != sorted(norm_expected_cols):
                     raise ValueError(
                         f"Chunk {idx} schema mismatch: extracted columns {list(chunk_df.columns)[:5]} "
                         f"do not match established table schema {expected_cols[:5]}."
                     )
+                # Reorder columns deterministically to match established schema
+                col_mapping = {str(c).strip().lower(): c for c in chunk_df.columns}
+                chunk_df = chunk_df[[col_mapping[ec] for ec in norm_expected_cols]]
+                chunk_df.columns = expected_cols
                 frames.append(chunk_df)
         except Exception as exc:
             logger.error("Chunk %d/%d extraction failed: %s", idx, len(chunks), exc)

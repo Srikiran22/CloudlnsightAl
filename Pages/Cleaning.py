@@ -3,13 +3,14 @@ from pathlib import Path
 
 from Utils.Preprocessing import remove_duplicates, fill_missing_values, drop_missing_values
 from Utils.paths import (
-    AIConversionRequired, DATASETS_DIR, atomic_write, get_unique_filename, list_dataset_files, read_dataset,
+    AIConversionRequired, DATASETS_DIR, atomic_write, get_unique_filename, list_ready_datasets,
     read_tabular, sanitize_for_csv_export, SUPPORTED_DATASET_EXTENSIONS,
 )
 from Utils.dataset_ui import (
     dataframe_fingerprint,
     dataset_fingerprint,
     invalidate_dataset_cache,
+    load_dataset_cached,
     render_sidebar,
     set_active_dataset,
 )
@@ -18,7 +19,7 @@ st.title("Data cleaning")
 st.markdown("Remove duplicate rows and resolve missing values, then save the result as a new dataset.")
 
 dataset_folder = DATASETS_DIR
-available_files = list_dataset_files()
+available_files = list_ready_datasets()
 
 source_option = st.radio(
     "Choose Dataset Source:",
@@ -35,7 +36,7 @@ if source_option == "Select from Datasets Folder":
     else:
         selected_filename = st.selectbox("Select Dataset to Clean:", available_files)
         try:
-            df = read_dataset(selected_filename)
+            df = load_dataset_cached(selected_filename)
         except Exception as e:
             st.error(f"Error reading file: {e}")
 else:
@@ -57,8 +58,17 @@ else:
 
 if df is not None:
     st.subheader("Original dataset")
-    dup_count = int(df.duplicated().sum())
-    missing_count = int(df.isnull().sum().sum())
+    is_stored = (source_option == "Select from Datasets Folder")
+    active_fp = dataset_fingerprint(selected_filename) if (is_stored and selected_filename) else dataframe_fingerprint(df)
+    metrics_cache_key = f"clean_orig_metrics_{selected_filename}_{active_fp}"
+    if metrics_cache_key not in st.session_state:
+        st.session_state[metrics_cache_key] = {
+            "dup_count": int(df.duplicated().sum()),
+            "missing_count": int(df.isnull().sum().sum()),
+        }
+    cached_metrics = st.session_state[metrics_cache_key]
+    dup_count = cached_metrics["dup_count"]
+    missing_count = cached_metrics["missing_count"]
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:

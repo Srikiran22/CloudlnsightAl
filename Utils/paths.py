@@ -37,6 +37,23 @@ MAX_UPLOAD_FILES = 20
 MAX_AGGREGATE_UPLOAD_BYTES = 250 * 1024 * 1024
 MAX_COMBINED_ROWS = 1_000_000
 
+
+class ResourcePolicy:
+    """Centralized resource boundaries and memory multipliers for CloudInsight AI."""
+    MAX_UPLOAD_BYTES = MAX_UPLOAD_BYTES
+    MAX_INGESTION_ROWS = MAX_INGESTION_ROWS
+    MAX_INGESTION_COLUMNS = MAX_INGESTION_COLUMNS
+    MAX_INGESTION_CELLS = MAX_INGESTION_CELLS
+    MAX_UPLOAD_FILES = MAX_UPLOAD_FILES
+    MAX_AGGREGATE_UPLOAD_BYTES = MAX_AGGREGATE_UPLOAD_BYTES
+    MAX_COMBINED_ROWS = MAX_COMBINED_ROWS
+    MAX_VISUALIZATION_ROWS = 25_000
+    MAX_ANALYSIS_ROWS = 50_000
+    MAX_MODEL_FILE_SIZE = 100 * 1024 * 1024
+    MAX_DATAFRAME_MEMORY_BYTES = 400 * 1024 * 1024  # 400 MB deep in-memory ceiling
+    MAX_HIGH_CARDINALITY_STRING_CELLS = 5_000_000   # 5M high-cardinality string cells early guard
+
+
 TABULAR_EXTENSIONS = {
     ".csv", ".tsv", ".xlsx", ".xls", ".json", ".jsonl", ".ndjson",
     ".parquet", ".xml", ".html", ".htm",
@@ -149,10 +166,18 @@ def get_unique_filename(filename, directory=DATASETS_DIR, extra_names=None):
         name = Path(filename).name
         stem = Path(name).stem
         suffix = Path(name).suffix
+        if stem.upper() in WINDOWS_RESERVED_NAMES:
+            stem = f"{stem}_safe"
+            name = f"{stem}{suffix}"
 
         candidate = name
         counter = 1
         while True:
+            if counter > 10_000:
+                raise OSError(
+                    f"Failed to allocate a unique filename for '{name}' after {counter} attempts. "
+                    "Check directory permissions and reservation limits."
+                )
             # Check disk, extra names, in-memory registry
             if (
                 (target_dir / candidate).exists()
@@ -265,11 +290,14 @@ def atomic_write(target_path, content, mode="w", encoding="utf-8"):
         raise
 
 
-CONVERSION_MANIFEST_VERSION = "v1"
+CONVERSION_MANIFEST_VERSION = "v2"
+PARSER_POLICY_VERSION = "2.0"
+PROMPT_POLICY_VERSION = "2.0"
+RECONCILIATION_POLICY_VERSION = "2.0"
 
 
 def compute_conversion_provenance(raw_text, model_name=None, extra_instructions=None):
-    """Deterministic hash incorporating source content, model, instructions, and version."""
+    """Deterministic hash incorporating source content, model, instructions, and policy versions."""
     norm_model = (model_name or "").strip().lower()
     norm_instr = (extra_instructions or "").strip()
     hasher = hashlib.sha256()
@@ -279,7 +307,7 @@ def compute_conversion_provenance(raw_text, model_name=None, extra_instructions=
     hasher.update(b"|")
     hasher.update(norm_instr.encode("utf-8"))
     hasher.update(b"|")
-    hasher.update(CONVERSION_MANIFEST_VERSION.encode("utf-8"))
+    hasher.update(f"{CONVERSION_MANIFEST_VERSION}:{PARSER_POLICY_VERSION}:{PROMPT_POLICY_VERSION}:{RECONCILIATION_POLICY_VERSION}".encode("utf-8"))
     return hasher.hexdigest()[:32]
 
 
@@ -379,13 +407,22 @@ def get_valid_conversion(
     norm_source = Path(source_name).name
     req_instr = (extra_instructions or "").strip()
     req_model = (model_name or "").strip().lower() if model_name is not None else None
+    prov_hash = compute_conversion_provenance(raw_text, model_name=model_name, extra_instructions=extra_instructions)
 
     for conv_name, meta in manifest.items():
         if not isinstance(meta, dict):
             continue
         if meta.get("version") != CONVERSION_MANIFEST_VERSION:
             continue
-        if meta.get("source_name") != norm_source and meta.get("source_name") != source_name:
+        meta_source = meta.get("source_name", "")
+        meta_ext = Path(meta_source).suffix.lower()
+        req_ext = Path(source_name).suffix.lower()
+        if meta_ext and req_ext and meta_ext != req_ext:
+            continue
+
+        is_name_match = (meta_source == norm_source or meta_source == source_name)
+        is_prov_match = bool(meta.get("provenance_hash") and meta.get("provenance_hash") == prov_hash)
+        if not (is_name_match or is_prov_match):
             continue
 
         meta_model = (meta.get("model_name") or "").strip().lower()
@@ -464,22 +501,23 @@ def cleanup_storage(
         except OSError:
             pass
 
+    dir_key = str(target_dir.resolve()) if target_dir.exists() else str(target_dir)
+    with _FILENAME_LOCK:
+        active_reservations = {cand for (d, cand) in _RESERVED_FILENAMES.keys() if d == dir_key}
+
     # Clean orphaned temporary files and orphan signatures
     for p in files:
         if _is_temp_artifact(p):
-            try:
-                p.unlink(missing_ok=True)
-                removed_files.append(str(p))
-            except OSError:
-                pass
+            # S-09: Do not delete active filename reservations
+            if p.name.startswith(".") and p.name.endswith(".reserve"):
+                candidate_name = p.name[1:-8]
+                if candidate_name in active_reservations and (now - p.stat().st_mtime) <= 60.0:
+                    continue
+            _safe_unlink(p)
         elif p.name.endswith(".joblib.sig"):
             companion = p.with_name(p.name[:-4])
             if not companion.exists():
-                try:
-                    p.unlink(missing_ok=True)
-                    removed_files.append(str(p))
-                except OSError:
-                    pass
+                _safe_unlink(p)
 
     if include_temp_only:
         return removed_files
@@ -528,9 +566,11 @@ def delete_dataset(filename, directory=DATASETS_DIR):
     """Safely delete a dataset file and remove any manifest/provenance records."""
     target_dir = Path(directory).resolve()
     fn_path = Path(filename)
-    if ".." in fn_path.parts or fn_path.is_absolute():
-        raise ValueError(f"Path traversal detected in filename: {filename}")
+    if ".." in fn_path.parts or fn_path.is_absolute() or bool(fn_path.drive) or ":" in str(filename):
+        raise ValueError(f"Security boundary rejection: Path traversal, drive, or Invalid character ':' detected in filename: {filename}")
     safe_name = fn_path.name
+    if Path(safe_name).stem.upper() in WINDOWS_RESERVED_NAMES:
+        raise ValueError(f"Security boundary rejection: Windows reserved device name in filename: {filename}")
     target_path = (target_dir / safe_name).resolve()
     if not target_path.is_relative_to(target_dir):
         raise ValueError(f"Filename {filename} escapes target directory {target_dir}.")
@@ -560,10 +600,23 @@ def delete_dataset(filename, directory=DATASETS_DIR):
     return False
 
 
+_ROW_COUNT_CACHE = {}
+
+
 def get_dataset_row_count(dataset):
     """Lightweight determination of exact source row count without full dataset materialization."""
     path = resolve_dataset_path(dataset)
     suffix = path.suffix.lower()
+
+    try:
+        st_stat = path.stat()
+        cache_key = (str(path), st_stat.st_mtime_ns, st_stat.st_size)
+        if cache_key in _ROW_COUNT_CACHE:
+            return _ROW_COUNT_CACHE[cache_key]
+    except OSError:
+        cache_key = None
+
+    row_count = None
 
     if suffix in {".csv", ".tsv"}:
         delimiter = "\t" if suffix == ".tsv" else ","
@@ -572,39 +625,44 @@ def get_dataset_row_count(dataset):
                 reader = csv.reader(f, delimiter=delimiter)
                 header = next(reader, None)
                 if header is None:
-                    return 0
-                return sum(1 for row in reader if row and any(cell.strip() for cell in row))
+                    row_count = 0
+                else:
+                    row_count = sum(1 for row in reader if row and any(cell.strip() for cell in row))
         except Exception:
             pass
 
-    if suffix == ".parquet":
+    elif suffix == ".parquet":
         try:
             import pyarrow.parquet as pq
             meta = pq.read_metadata(path)
-            return meta.num_rows
+            row_count = meta.num_rows
         except Exception:
             pass
 
-    if suffix in {".jsonl", ".ndjson"}:
+    elif suffix in {".jsonl", ".ndjson"}:
         try:
             with path.open("r", encoding="utf-8", errors="replace") as f:
-                return sum(1 for line in f if line.strip())
+                row_count = sum(1 for line in f if line.strip())
         except Exception:
             pass
 
-    if suffix in {".xlsx", ".xls"}:
+    elif suffix in {".xlsx", ".xls"}:
         try:
             import openpyxl
             wb = openpyxl.load_workbook(path, read_only=True)
             sheet = wb.worksheets[0] if wb.worksheets else wb.active
             rows = max(sheet.max_row - 1, 0) if sheet.max_row is not None else None
             wb.close()
-            if rows is not None:
-                return rows
+            row_count = rows
         except Exception:
             pass
 
-    return None
+    if cache_key is not None and row_count is not None:
+        if len(_ROW_COUNT_CACHE) >= 256:
+            _ROW_COUNT_CACHE.pop(next(iter(_ROW_COUNT_CACHE)), None)
+        _ROW_COUNT_CACHE[cache_key] = row_count
+
+    return row_count
 
 
 def list_dataset_files(directory=None, tabular_only=False):
@@ -641,10 +699,20 @@ def list_source_documents(directory=None):
 
 def resolve_dataset_path(dataset):
     path = Path(dataset)
+    if ".." in path.parts:
+        raise ValueError(f"Security boundary rejection: Path traversal detected in dataset path: {dataset}; must stay in Datasets directory")
+    if ":" in path.name:
+        raise ValueError(f"Security boundary rejection: Alternate Data Stream / Invalid character ':' detected in dataset filename: {dataset}")
+    if bool(path.drive) and not path.is_absolute():
+        raise ValueError(f"Security boundary rejection: Drive-relative path detected in dataset path: {dataset}")
+    stem = Path(path.name).stem.upper()
+    if stem in WINDOWS_RESERVED_NAMES:
+        raise ValueError(f"Security boundary rejection: Windows reserved device name in dataset filename: {dataset}")
+
     datasets_root = DATASETS_DIR.resolve()
     candidate = path.resolve() if path.is_absolute() else (datasets_root / path).resolve()
 
-    if candidate.parent != datasets_root:
+    if not candidate.is_relative_to(datasets_root) or candidate == datasets_root or candidate.parent != datasets_root:
         raise ValueError("Datasets must be read from the project's Datasets directory.")
 
     return candidate
@@ -718,14 +786,14 @@ def _sanitize_formula_val(val):
         return val
     if not val:
         return val
-    if val[0] in ("\t", "\r"):
-        return f"'{val}"
-    s = val.strip()
-    if not s:
+    lstripped = val.lstrip()
+    if not lstripped:
         return val
-    if s[0] in ("=", "+", "-", "@"):
+    if val[0] in ("\t", "\r") or lstripped[0] in ("\t", "\r"):
+        return f"'{val}"
+    if lstripped[0] in ("=", "+", "-", "@"):
         try:
-            float(s)
+            float(lstripped)
             return val
         except ValueError:
             return f"'{val}"
@@ -748,17 +816,19 @@ def sanitize_for_csv_export(df):
 
 
 def _inspect_delimited_header_width(buffer, encoding, sep=","):
-    """Quickly inspect header width before full parsing to reject wide files early."""
+    """Quickly inspect header width before full parsing to reject wide files early and return column count."""
     buffer.seek(0)
     try:
         hdr = pd.read_csv(buffer, sep=sep, encoding=encoding, nrows=0)
-        if len(hdr.columns) > MAX_INGESTION_COLUMNS:
+        num_cols = len(hdr.columns)
+        if num_cols > MAX_INGESTION_COLUMNS:
             raise ValueError(
-                f"Dataset contains {len(hdr.columns):,} columns, which exceeds the maximum supported limit "
+                f"Dataset contains {num_cols:,} columns, which exceeds the maximum supported limit "
                 f"of {MAX_INGESTION_COLUMNS} columns. Filter or transpose the file before ingestion."
             )
+        return num_cols
     except (UnicodeDecodeError, pd.errors.EmptyDataError):
-        pass
+        return 1
     finally:
         buffer.seek(0)
 
@@ -792,6 +862,105 @@ def _detect_csv_delimiter(sample_text):
     return best_delim
 
 
+def _check_string_cardinality_amplification(buffer, sep=",", encoding="utf-8", max_rows=None):
+    """Early estimation guard to reject massive high-cardinality string datasets before full materialization."""
+    try:
+        if not (hasattr(buffer, "seek") and hasattr(buffer, "tell")):
+            return
+        buffer.seek(0, io.SEEK_END)
+        total_bytes = buffer.tell()
+        buffer.seek(0)
+
+        # Datasets under 10 MB cannot exceed 5M string cells
+        if total_bytes <= 10 * 1024 * 1024:
+            return
+
+        sample_df = pd.read_csv(buffer, sep=sep, encoding=encoding, nrows=200)
+        buffer.seek(0)
+        if sample_df.empty or sample_df.shape[1] == 0 or len(sample_df) < 50:
+            return
+
+        string_cols = [
+            c for c in sample_df.columns
+            if pd.api.types.is_string_dtype(sample_df[c]) or sample_df[c].dtype == object
+        ]
+        if not string_cols:
+            return
+
+        high_card_cols = [
+            c for c in string_cols
+            if (sample_df[c].nunique() / max(1, len(sample_df))) >= 0.7
+        ]
+        if high_card_cols:
+            sample_bytes = max(1, len(sample_df.to_csv(sep=sep, index=False)))
+            est_bytes_per_row = max(1.0, sample_bytes / len(sample_df))
+            est_total_rows = min(max_rows or MAX_INGESTION_ROWS, int(total_bytes / est_bytes_per_row))
+            est_high_card_cells = est_total_rows * len(high_card_cols)
+
+            if est_high_card_cells > ResourcePolicy.MAX_HIGH_CARDINALITY_STRING_CELLS:
+                raise ValueError(
+                    f"Dataset contains an estimated {est_high_card_cells:,} high-cardinality string cells across "
+                    f"{len(high_card_cols)} columns, exceeding the memory-safety limit of "
+                    f"{ResourcePolicy.MAX_HIGH_CARDINALITY_STRING_CELLS:,} cells. "
+                    "High-cardinality text at this scale requires excessive RAM (>1.5 GB). "
+                    "Filter, chunk, or downcast string columns before ingestion."
+                )
+    except (UnicodeDecodeError, pd.errors.ParserError):
+        pass
+    finally:
+        buffer.seek(0)
+
+
+def _read_chunked_delimited_buffer(buffer, sep=",", encoding="utf-8", nrows=None):
+    """Read delimited buffer in bounded chunks, tracking accumulated deep memory and string cells."""
+    if nrows is not None and nrows <= 10_000:
+        buffer.seek(0)
+        return pd.read_csv(buffer, sep=sep, encoding=encoding, nrows=nrows)
+
+    chunks = []
+    accumulated_deep_bytes = 0
+    accumulated_unique_string_cells = 0
+    string_cols = None
+    chunk_size = 25_000
+
+    buffer.seek(0)
+    reader = pd.read_csv(buffer, sep=sep, encoding=encoding, nrows=nrows, chunksize=chunk_size)
+    for chunk in reader:
+        if string_cols is None:
+            string_cols = [
+                c for c in chunk.columns
+                if pd.api.types.is_string_dtype(chunk[c]) or chunk[c].dtype == object
+            ]
+
+        chunk_deep_bytes = int(chunk.memory_usage(index=True, deep=True).sum())
+        accumulated_deep_bytes += chunk_deep_bytes
+        if accumulated_deep_bytes > ResourcePolicy.MAX_DATAFRAME_MEMORY_BYTES:
+            raise ValueError(
+                f"Dataset in-memory footprint exceeds the maximum allowed memory budget "
+                f"of {ResourcePolicy.MAX_DATAFRAME_MEMORY_BYTES // (1024 * 1024)} MB. "
+                "Filter, sample, or downcast columns before ingestion."
+            )
+
+        if string_cols and len(chunk) >= 50:
+            chunk_high_card_cells = sum(
+                chunk[c].nunique() for c in string_cols
+                if (chunk[c].nunique() / max(1, len(chunk))) >= 0.7
+            )
+            if chunk_high_card_cells > 0:
+                accumulated_unique_string_cells += chunk_high_card_cells
+                if accumulated_unique_string_cells > ResourcePolicy.MAX_HIGH_CARDINALITY_STRING_CELLS:
+                    raise ValueError(
+                        f"Dataset contains over {ResourcePolicy.MAX_HIGH_CARDINALITY_STRING_CELLS:,} "
+                        "high-cardinality string cells across chunks, exceeding the memory-safety limit. "
+                        "High-cardinality text at this scale requires excessive RAM (>1.5 GB). "
+                        "Filter, chunk, or downcast string columns before ingestion."
+                    )
+
+        chunks.append(chunk)
+
+    return pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
+
+
 def _read_csv_from_buffer(buffer, nrows=None):
     last_error = None
     buffer.seek(0)
@@ -802,15 +971,17 @@ def _read_csv_from_buffer(buffer, nrows=None):
         try:
             sample_text = sample_bytes.decode(encoding, errors="replace")
             _inspect_delimited_header_width(buffer, encoding, sep=",")
+            _check_string_cardinality_amplification(buffer, sep=",", encoding=encoding, max_rows=nrows)
             buffer.seek(0)
-            df = pd.read_csv(buffer, encoding=encoding, nrows=nrows)
+            df = _read_chunked_delimited_buffer(buffer, sep=",", encoding=encoding, nrows=nrows)
             if df.shape[1] == 1:
                 detected_sep = _detect_csv_delimiter(sample_text)
                 if detected_sep != ",":
                     buffer.seek(0)
                     _inspect_delimited_header_width(buffer, encoding, sep=detected_sep)
+                    _check_string_cardinality_amplification(buffer, sep=detected_sep, encoding=encoding, max_rows=nrows)
                     buffer.seek(0)
-                    df = pd.read_csv(buffer, sep=detected_sep, encoding=encoding, nrows=nrows)
+                    df = _read_chunked_delimited_buffer(buffer, sep=detected_sep, encoding=encoding, nrows=nrows)
             return df
         except UnicodeDecodeError as error:
             last_error = error
@@ -824,13 +995,16 @@ def _read_tsv_from_buffer(buffer, nrows=None):
     for encoding in CSV_ENCODINGS:
         try:
             _inspect_delimited_header_width(buffer, encoding, sep="\t")
+            _check_string_cardinality_amplification(buffer, sep="\t", encoding=encoding, max_rows=nrows)
             buffer.seek(0)
-            return pd.read_csv(buffer, sep="\t", encoding=encoding, nrows=nrows)
+            return _read_chunked_delimited_buffer(buffer, sep="\t", encoding=encoding, nrows=nrows)
         except UnicodeDecodeError as error:
             last_error = error
     if last_error:
         raise last_error
     raise ValueError("Unable to decode TSV file.")
+
+
 
 
 def _read_delimited_text(text, nrows=None):
@@ -1053,7 +1227,8 @@ def _stream_json_array(text, nrows):
     - Root arrays: [ {...}, ... ]
     - Keyed record arrays in dicts: {"status": 200, "records": [ {...}, ... ]}
     - Columnar tables in dicts: {"colA": [1, 2, ...], "colB": [3, 4, ...]}
-    Streams only nrows objects/values without parsing or materializing full graphs or malformed tails.
+    Streams only nrows objects/values without parsing or materializing full graphs.
+    Validates that the requested prefix is well-formed; does not validate unread trailing content.
     """
     s_text = text.lstrip()
     decoder = json.JSONDecoder()
@@ -1754,6 +1929,20 @@ def read_tabular(source, filename=None, max_rows=None):
         enforce_size_limit(source.size, label=f"File '{name}'")
     elif isinstance(source, (bytes, bytearray)):
         enforce_size_limit(len(source), label=f"File '{name}'")
+    elif hasattr(source, "fileno"):
+        try:
+            enforce_size_limit(os.fstat(source.fileno()).st_size, label=f"File '{name}'")
+        except (OSError, io.UnsupportedOperation):
+            pass
+    elif hasattr(source, "seek") and hasattr(source, "tell"):
+        try:
+            cur_pos = source.tell()
+            source.seek(0, io.SEEK_END)
+            stream_len = source.tell()
+            source.seek(cur_pos)
+            enforce_size_limit(stream_len, label=f"File '{name}'")
+        except (OSError, io.UnsupportedOperation, AttributeError):
+            pass
 
     if isinstance(source, (bytes, bytearray)):
         buffer = io.BytesIO(source)
@@ -1767,10 +1956,28 @@ def read_tabular(source, filename=None, max_rows=None):
 
     df = None
     if suffix == ".csv" or suffix == "":
-        df = _read_csv_from_buffer(buffer, nrows=fetch_rows)
+        num_cols = 1
+        for encoding in CSV_ENCODINGS:
+            try:
+                num_cols = _inspect_delimited_header_width(buffer, encoding, sep=",")
+                break
+            except UnicodeDecodeError:
+                continue
+        max_cell_rows = (MAX_INGESTION_CELLS // max(1, num_cols)) + 1
+        effective_rows = min(fetch_rows, max_cell_rows) if limit_check else fetch_rows
+        df = _read_csv_from_buffer(buffer, nrows=effective_rows)
 
     elif suffix == ".tsv":
-        df = _read_tsv_from_buffer(buffer, nrows=fetch_rows)
+        num_cols = 1
+        for encoding in CSV_ENCODINGS:
+            try:
+                num_cols = _inspect_delimited_header_width(buffer, encoding, sep="\t")
+                break
+            except UnicodeDecodeError:
+                continue
+        max_cell_rows = (MAX_INGESTION_CELLS // max(1, num_cols)) + 1
+        effective_rows = min(fetch_rows, max_cell_rows) if limit_check else fetch_rows
+        df = _read_tsv_from_buffer(buffer, nrows=effective_rows)
 
     elif suffix in {".xlsx", ".xls"}:
         if suffix == ".xlsx":
@@ -1884,6 +2091,13 @@ def read_tabular(source, filename=None, max_rows=None):
                 f"Dataset contains {total_cells:,} cells ({len(df):,} rows × {df.shape[1]:,} columns), "
                 f"which exceeds the maximum supported limit of {MAX_INGESTION_CELLS:,} cells. "
                 "Filter, sample, or split the dataset before ingestion."
+            )
+        df_deep_bytes = int(df.memory_usage(index=True, deep=True).sum())
+        if limit_check and df_deep_bytes > ResourcePolicy.MAX_DATAFRAME_MEMORY_BYTES:
+            raise ValueError(
+                f"Dataset in-memory footprint ({df_deep_bytes / (1024 * 1024):.1f} MB) exceeds "
+                f"the maximum allowed memory budget of {ResourcePolicy.MAX_DATAFRAME_MEMORY_BYTES // (1024 * 1024)} MB. "
+                "Filter, sample, or downcast columns before ingestion."
             )
         return normalize_and_deduplicate_columns(df)
     return df

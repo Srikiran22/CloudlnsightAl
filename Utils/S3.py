@@ -13,8 +13,8 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from Utils.logsys import get_logger
 from Utils.paths import (
-    AIConversionRequired, MAX_UPLOAD_BYTES, read_tabular,
-    sanitize_for_csv_export, SUPPORTED_DATASET_EXTENSIONS,
+    AIConversionRequired, DATASETS_DIR, MAX_UPLOAD_BYTES, ResourcePolicy,
+    read_tabular, sanitize_for_csv_export, SUPPORTED_DATASET_EXTENSIONS,
 )
 
 
@@ -100,7 +100,7 @@ def list_s3_datasets(bucket_name, client, return_meta=False):
     return files
 
 
-def download_s3_dataset(bucket_name, file_key, client, destination_path=None):
+def download_s3_dataset(bucket_name, file_key, client, destination_path=None, allowed_dir=None):
     """Download an S3 dataset with strict memory bounding and temporary-file streaming.
 
     Streams chunks into a temporary file on disk rather than holding duplicate
@@ -120,8 +120,15 @@ def download_s3_dataset(bucket_name, file_key, client, destination_path=None):
             )
 
         # Stream into a bounded temporary file to prevent multiple in-memory payload duplicates
+        dest = None
         if destination_path is not None:
-            dest = Path(destination_path)
+            target_dir = (Path(allowed_dir) if allowed_dir is not None else DATASETS_DIR).resolve()
+            raw_dest = Path(destination_path)
+            if ".." in raw_dest.parts or ":" in raw_dest.name or (not raw_dest.is_absolute() and (bool(raw_dest.drive) or ":" in str(destination_path))):
+                raise ValueError(f"Security boundary rejection: Invalid destination path: {destination_path}")
+            dest = (target_dir / raw_dest).resolve() if not raw_dest.is_absolute() else raw_dest.resolve()
+            if not dest.is_relative_to(target_dir):
+                raise ValueError(f"Security boundary rejection: Destination path '{destination_path}' escapes allowed directory '{target_dir}'.")
             dest.parent.mkdir(parents=True, exist_ok=True)
             tmp_target = dest.with_name(f"{dest.name}.tmp.{uuid.uuid4().hex}")
         else:
@@ -145,8 +152,7 @@ def download_s3_dataset(bucket_name, file_key, client, destination_path=None):
                 f.write(chunk)
 
         filename = Path(file_key).name
-        if destination_path is not None:
-            dest = Path(destination_path)
+        if destination_path is not None and dest is not None:
             os.replace(tmp_path, dest)
             tmp_path = None  # target now safely owns the file
             try:
@@ -186,8 +192,24 @@ def upload_s3_dataset(df, bucket_name, file_key, client, max_bytes=MAX_UPLOAD_BY
     When sanitize=True, external spreadsheet formula-injection neutralization is applied.
     Raises ValueError if serialized dataset exceeds max_bytes.
     """
+    total_cells = df.shape[0] * df.shape[1]
+    if total_cells > ResourcePolicy.MAX_INGESTION_CELLS:
+        raise ValueError(
+            f"Dataset export size ({total_cells:,} cells) exceeds "
+            f"the maximum allowed limit of {ResourcePolicy.MAX_INGESTION_CELLS:,} cells."
+        )
+
     target_df = sanitize_for_csv_export(df) if sanitize else df
-    csv_bytes = target_df.to_csv(index=False).encode("utf-8")
+    import io
+
+    buf = io.BytesIO()
+    try:
+        txt = io.TextIOWrapper(buf, encoding="utf-8", write_through=True)
+        target_df.to_csv(txt, index=False, chunksize=25_000)
+        txt.detach()
+        csv_bytes = buf.getvalue()
+    finally:
+        buf.close()
 
     if len(csv_bytes) > max_bytes:
         raise ValueError(
@@ -202,3 +224,4 @@ def upload_s3_dataset(df, bucket_name, file_key, client, max_bytes=MAX_UPLOAD_BY
         ContentType="text/csv"
     )
     return True
+

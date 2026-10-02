@@ -1,4 +1,5 @@
 import hashlib
+import threading
 import pandas as pd
 import streamlit as st
 from html import escape
@@ -10,6 +11,25 @@ from Utils.paths import (
     resolve_dataset_path,
 )
 from Utils.theme import toggle_theme_button
+
+
+class DatasetIdentity:
+    """Unified dataset identity binding source type, name, and cryptographic fingerprint."""
+
+    def __init__(self, dataset_name, fingerprint=None, source_type="disk", shape=None, path=None):
+        self.dataset_name = dataset_name
+        self.fingerprint = fingerprint
+        self.source_type = source_type  # "session" or "disk"
+        self.shape = shape
+        self.path = path
+
+    def to_dict(self):
+        return {
+            "dataset_name": self.dataset_name,
+            "dataset_fingerprint": self.fingerprint,
+            "source_type": self.source_type,
+            "shape": list(self.shape) if self.shape else None,
+        }
 
 
 _BRAND_HTML = """
@@ -77,6 +97,7 @@ def dataset_fingerprint(dataset, force_refresh=False):
     path = resolve_dataset_path(dataset)
     path_str = str(path)
     stat = path.stat()
+
     cache_key = (path_str, stat.st_mtime_ns, stat.st_size)
 
     if not force_refresh and cache_key in _CONTENT_HASH_CACHE:
@@ -119,10 +140,12 @@ def dataframe_fingerprint(df):
             hasher.update(row_hashes.values.tobytes())
         except Exception:
             for col in df.columns:
-                hasher.update(df[col].astype(str).str.cat(sep=",").encode("utf-8", errors="replace"))
+                col_bytes = b"".join(f"{len(s)}:{s}".encode("utf-8", errors="replace") for s in df[col].astype(str))
+                hasher.update(col_bytes)
     except Exception:
         for col in df.columns:
-            hasher.update(df[col].astype(str).str.cat(sep=",").encode("utf-8", errors="replace"))
+            col_bytes = b"".join(f"{len(s)}:{s}".encode("utf-8", errors="replace") for s in df[col].astype(str))
+            hasher.update(col_bytes)
     return hasher.hexdigest()
 
 
@@ -130,22 +153,32 @@ def results_match_active(results, selected_file, df=None):
     """True when stored analysis results still describe the active dataset.
 
     Guards against the same filename being replaced on disk between training
-    and viewing. Results saved before fingerprints existed keep working on a
-    name-only basis.
+    and viewing. Prioritizes active in-memory session datasets when present.
     """
-    if not results or results.get("dataset_name") != selected_file:
+    if not results:
+        return False
+    res_name = results.get("dataset_name")
+    if res_name != selected_file and not (selected_file and selected_file.startswith("Active Session") and res_name in selected_file):
         return False
     expected = results.get("dataset_fingerprint")
     if expected is None:
         return True
+
+    source_type = results.get("source_type")
+    if df is not None:
+        actual_df_fp = dataframe_fingerprint(df)
+        if actual_df_fp == expected:
+            return True
+        if source_type == "session":
+            return False
+
     try:
         path = resolve_dataset_path(selected_file)
         if path.is_file():
             return dataset_fingerprint(selected_file, force_refresh=True) == expected
     except (ValueError, OSError):
         pass
-    if df is not None:
-        return dataframe_fingerprint(df) == expected
+
     return False
 
 
@@ -165,6 +198,7 @@ class BoundedDatasetMemoryCache:
         self.max_bytes = max_bytes
         self.current_bytes = 0
         self._cache = collections.OrderedDict()
+        self._lock = threading.RLock()
 
     def _estimate_size(self, df: pd.DataFrame) -> int:
         try:
@@ -173,44 +207,51 @@ class BoundedDatasetMemoryCache:
             return int(df.shape[0] * df.shape[1] * 8)
 
     def get(self, key):
-        if key in self._cache:
-            df, size = self._cache.pop(key)
-            self._cache[key] = (df, size)
-            return df
-        return None
+        with self._lock:
+            if key in self._cache:
+                df, size = self._cache.pop(key)
+                self._cache[key] = (df, size)
+                # Copy-on-read contract: callers receive isolated copy, preserving fingerprint identity
+                return df.copy(deep=True)
+            return None
 
     def put(self, key, df: pd.DataFrame):
-        size = self._estimate_size(df)
-        if size > self.max_bytes:
-            return
+        with self._lock:
+            size = self._estimate_size(df)
+            if size > self.max_bytes:
+                return
 
-        if key in self._cache:
-            _, old_size = self._cache.pop(key)
-            self.current_bytes -= old_size
+            cached_df = df.copy(deep=True)
+            if key in self._cache:
+                _, old_size = self._cache.pop(key)
+                self.current_bytes -= old_size
 
-        while self.current_bytes + size > self.max_bytes and self._cache:
-            _, (_, evicted_size) = self._cache.popitem(last=False)
-            self.current_bytes -= evicted_size
+            while self.current_bytes + size > self.max_bytes and self._cache:
+                _, (_, evicted_size) = self._cache.popitem(last=False)
+                self.current_bytes -= evicted_size
 
-        self._cache[key] = (df, size)
-        self.current_bytes += size
+            self._cache[key] = (cached_df, size)
+            self.current_bytes += size
 
     def invalidate(self, path_str):
-        for key in list(self._cache.keys()):
-            if key[0] == path_str:
-                _, size = self._cache.pop(key)
-                self.current_bytes -= size
+        with self._lock:
+            for key in list(self._cache.keys()):
+                if key[0] == path_str:
+                    _, size = self._cache.pop(key)
+                    self.current_bytes -= size
 
     def clear(self):
-        self._cache.clear()
-        self.current_bytes = 0
+        with self._lock:
+            self._cache.clear()
+            self.current_bytes = 0
 
     def stats(self):
-        return {
-            "current_bytes": self.current_bytes,
-            "max_bytes": self.max_bytes,
-            "entry_count": len(self._cache),
-        }
+        with self._lock:
+            return {
+                "current_bytes": self.current_bytes,
+                "max_bytes": self.max_bytes,
+                "entry_count": len(self._cache),
+            }
 
 
 _DATASET_MEMORY_CACHE = BoundedDatasetMemoryCache()
@@ -291,7 +332,10 @@ def select_working_dataset(selectbox_label, max_rows=None):
                     )
             except Exception:
                 pass
-        return df_session, name_session or "Session Dataset"
+        ret_df = df_session
+        if max_rows is not None and len(ret_df) > max_rows:
+            ret_df = ret_df.iloc[:max_rows].copy()
+        return ret_df, name_session or "Session Dataset"
 
     try:
         loaded_df = load_dataset_cached(selected_option, max_rows=max_rows)

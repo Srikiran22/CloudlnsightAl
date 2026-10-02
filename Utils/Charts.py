@@ -91,12 +91,13 @@ def create_box_violin_plot(df, y_col, x_col=None, hue_col=None, plot_type="Box",
 
 def create_scatter_plot(df, x_col, y_col, hue_col=None, size_col=None,
                         add_trendline=False):
+    df_sample, is_sampled, _ = sample_for_visualization(df)
     # OLS only makes sense when both axes are numeric and finite
     can_fit_trendline = (
-        pd.api.types.is_numeric_dtype(df[x_col])
-        and pd.api.types.is_numeric_dtype(df[y_col])
+        pd.api.types.is_numeric_dtype(df_sample[x_col])
+        and pd.api.types.is_numeric_dtype(df_sample[y_col])
     )
-    plot_df = _cap_hue_column(df, hue_col)
+    plot_df = _cap_hue_column(df_sample, hue_col)
     if add_trendline and can_fit_trendline:
         try:
             import importlib
@@ -107,8 +108,8 @@ def create_scatter_plot(df, x_col, y_col, hue_col=None, size_col=None,
 
         if has_statsmodels:
             import numpy as np
-            x_num = pd.to_numeric(df[x_col], errors="coerce")
-            y_num = pd.to_numeric(df[y_col], errors="coerce")
+            x_num = pd.to_numeric(plot_df[x_col], errors="coerce")
+            y_num = pd.to_numeric(plot_df[y_col], errors="coerce")
             finite_mask = np.isfinite(x_num) & np.isfinite(y_num)
             if finite_mask.sum() >= 2:
                 plot_df = plot_df[finite_mask]
@@ -162,10 +163,11 @@ def create_scatter_plot(df, x_col, y_col, hue_col=None, size_col=None,
 
 def create_bar_count_plot(df, x_col, y_col=None, agg_func="Count", hue_col=None,
                           orientation="v"):
+    df_sample, is_sampled, _ = sample_for_visualization(df)
     # Defend against unhashable elements (e.g. lists/dicts in cells)
-    plot_df = _cap_hue_column(df, hue_col)
-    if x_col in df.columns:
-        if df[x_col].apply(lambda v: isinstance(v, (list, dict, set))).any():
+    plot_df = _cap_hue_column(df_sample, hue_col)
+    if x_col in plot_df.columns:
+        if plot_df[x_col].apply(lambda v: isinstance(v, (list, dict, set))).any():
             plot_df = plot_df.copy()
             plot_df[x_col] = plot_df[x_col].astype(str)
         # Cap high-cardinality x_col to top 30 categories plus "Other"
@@ -251,15 +253,20 @@ def downsample_timeseries(df: pd.DataFrame, x_col: str, y_col: str, max_points: 
         groups = []
         unique_hues = df[hue_col].dropna().unique()
         if len(unique_hues) > 0:
-            points_per_group = max(100, max_points // len(unique_hues))
+            points_per_group = max(4, max_points // len(unique_hues))
             for _, grp in df.groupby(hue_col):
                 groups.append(_downsample_single_series(grp, points_per_group))
-            return pd.concat(groups, ignore_index=True)
+            res = pd.concat(groups, ignore_index=True)
+            if len(res) > max_points:
+                res = res.iloc[:max_points]
+            return res
 
     return _downsample_single_series(df, max_points)
 
 
 def create_line_chart(df, x_col, y_col, hue_col=None, markers=True):
+    if df is None or df.empty:
+        return px.line(title="Empty Dataset", template=plot_template())
     sorted_df = _cap_hue_column(df, hue_col)
     if x_col in sorted_df.columns:
         if pd.api.types.is_datetime64_any_dtype(sorted_df[x_col]):
@@ -300,27 +307,29 @@ def create_line_chart(df, x_col, y_col, hue_col=None, markers=True):
 
 
 def create_pie_treemap_plot(df, names_col, values_col=None, plot_type="Pie"):
+    df_sample, _, _ = sample_for_visualization(df)
+    plot_df = df_sample
     # Defend against unhashable elements in names_col
-    if names_col in df.columns and df[names_col].apply(lambda v: isinstance(v, (list, dict, set))).any():
-        df = df.copy()
-        df[names_col] = df[names_col].astype(str)
+    if names_col in plot_df.columns and plot_df[names_col].apply(lambda v: isinstance(v, (list, dict, set))).any():
+        plot_df = plot_df.copy()
+        plot_df[names_col] = plot_df[names_col].astype(str)
 
     if values_col:
-        numeric_vals = pd.to_numeric(df[values_col], errors="coerce").dropna()
+        numeric_vals = pd.to_numeric(plot_df[values_col], errors="coerce").dropna()
         if (numeric_vals < 0).any():
             raise ValueError(
                 f"Column '{values_col}' contains negative values. Pie and Treemap charts "
                 "require non-negative values to represent proportional parts of a whole."
             )
         value_name = f"{values_col}_sum" if names_col == values_col else values_col
-        grouped = df.groupby(names_col, dropna=False).agg(**{value_name: (values_col, "sum")}).reset_index()
+        grouped = plot_df.groupby(names_col, dropna=False).agg(**{value_name: (values_col, "sum")}).reset_index()
         if (grouped[value_name] < 0).any():
             raise ValueError(
                 f"Aggregated values for '{values_col}' contain negative sums, "
                 "which cannot be represented in a part-to-whole chart."
             )
     else:
-        grouped = df[names_col].value_counts(dropna=False).reset_index()
+        grouped = plot_df[names_col].value_counts(dropna=False).reset_index()
         grouped.columns = [names_col, "count"]
         value_name = "count"
 
@@ -363,7 +372,9 @@ def create_pie_treemap_plot(df, names_col, values_col=None, plot_type="Pie"):
 
 
 def create_correlation_heatmap(df, colorscale="RdBu_r"):
-    num_df = df.select_dtypes(include="number")
+    from Utils.sampling import sample_for_analysis
+    sample_df, is_sampled, _ = sample_for_analysis(df, max_rows=50_000)
+    num_df = sample_df.select_dtypes(include="number")
     if num_df.shape[1] < 2:
         return None
 

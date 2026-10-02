@@ -10,6 +10,7 @@ from Utils.paths import (
     DATASETS_DIR,
     atomic_write,
     get_unique_filename,
+    release_filename_reservation,
     get_valid_conversion,
     record_conversion,
     read_dataset,
@@ -120,6 +121,7 @@ if upload_mode == "Local file":
                         except Exception as read_error:
                             logger.warning("ingest failed for %s: %s: %s", target_name, type(read_error).__name__, read_error)
                             failures.append((target_name, str(read_error)))
+                            release_filename_reservation(target_name, directory=DATASETS_DIR)
 
                     if parsed:
                         if len(parsed) == 1:
@@ -127,6 +129,7 @@ if upload_mode == "Local file":
                             fresh_ingest = True
                         else:
                             total_rows = sum(len(f[1]) for f in parsed)
+                            approx_cols = len(set().union(*(set(f[1].columns) for f in parsed)))
                             if total_rows > MAX_COMBINED_ROWS:
                                 merge_error = (
                                     f"Combined row count ({total_rows:,}) exceeds the maximum supported limit of "
@@ -134,10 +137,22 @@ if upload_mode == "Local file":
                                 )
                                 st.error(merge_error)
                                 file_name, df = None, None
+                            elif approx_cols > MAX_INGESTION_COLUMNS:
+                                merge_error = (
+                                    f"Estimated combined column count ({approx_cols:,}) exceeds the maximum supported limit of "
+                                    f"{MAX_INGESTION_COLUMNS:,} columns. Merge was aborted."
+                                )
+                                st.error(merge_error)
+                                file_name, df = None, None
+                            elif total_rows * approx_cols > MAX_INGESTION_CELLS:
+                                merge_error = (
+                                    f"Estimated combined dataset cell count ({total_rows * approx_cols:,}) exceeds the maximum "
+                                    f"limit of {MAX_INGESTION_CELLS:,} cells. Merge was aborted."
+                                )
+                                st.error(merge_error)
+                                file_name, df = None, None
                             else:
                                 combined = merge_frames(parsed)
-                                csv_text = combined.to_csv(index=False)
-                                csv_bytes = csv_text.encode("utf-8")
                                 if combined.empty:
                                     merge_error = "Combined dataset has no records or columns. Merge was aborted."
                                     st.error(merge_error)
@@ -156,20 +171,23 @@ if upload_mode == "Local file":
                                     )
                                     st.error(merge_error)
                                     file_name, df = None, None
-                                elif len(csv_bytes) > MAX_UPLOAD_BYTES:
-                                    merge_error = (
-                                        f"Combined dataset byte size ({len(csv_bytes)/(1024*1024):.1f} MB) exceeds the maximum "
-                                        f"limit of {MAX_UPLOAD_BYTES/(1024*1024):.0f} MB. Merge was aborted."
-                                    )
-                                    st.error(merge_error)
-                                    file_name, df = None, None
                                 else:
-                                    file_name = get_unique_filename("combined_dataset.csv", directory=DATASETS_DIR)
-                                    DATASETS_DIR.mkdir(parents=True, exist_ok=True)
-                                    atomic_write(DATASETS_DIR / file_name, csv_text, mode="w", encoding="utf-8")
-                                    invalidate_dataset_cache(file_name)
-                                    df = combined
-                                    fresh_ingest = True
+                                    csv_text = combined.to_csv(index=False)
+                                    csv_bytes = csv_text.encode("utf-8")
+                                    if len(csv_bytes) > MAX_UPLOAD_BYTES:
+                                        merge_error = (
+                                            f"Combined dataset byte size ({len(csv_bytes)/(1024*1024):.1f} MB) exceeds the maximum "
+                                            f"limit of {MAX_UPLOAD_BYTES/(1024*1024):.0f} MB. Merge was aborted."
+                                        )
+                                        st.error(merge_error)
+                                        file_name, df = None, None
+                                    else:
+                                        file_name = get_unique_filename("combined_dataset.csv", directory=DATASETS_DIR)
+                                        DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+                                        atomic_write(DATASETS_DIR / file_name, csv_text, mode="w", encoding="utf-8")
+                                        invalidate_dataset_cache(file_name)
+                                        df = combined
+                                        fresh_ingest = True
 
                     st.session_state["last_upload_signature"] = current_sig
                     st.session_state["last_upload_state"] = {

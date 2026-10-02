@@ -1,6 +1,7 @@
 import datetime
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
@@ -14,7 +15,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split, StratifiedKFold, KFold, TimeSeriesSplit, cross_val_score
+from sklearn.model_selection import train_test_split, StratifiedKFold, KFold, TimeSeriesSplit, cross_validate
 from sklearn.dummy import DummyClassifier, DummyRegressor
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
@@ -137,7 +138,7 @@ def sign_model_artifact(model_path: Path) -> Path:
     return sig_path
 
 
-def verify_model_artifact_signature(model_path: Path) -> bool:
+def verify_model_artifact_signature(model_path: Path, content: bytes = None) -> bool:
     """Verify cryptographic authenticity and integrity of a model file before deserialization."""
     p = Path(model_path).resolve()
     sig_path = p.with_suffix(".joblib.sig")
@@ -148,7 +149,8 @@ def verify_model_artifact_signature(model_path: Path) -> bool:
         expected_sig = sig_data.get("signature", "")
         key_dir = p.parent if (p.parent / ".model_signing_key").is_file() else MODELS_DIR
         key = _get_or_create_model_signing_key(directory=key_dir)
-        content = p.read_bytes()
+        if content is None:
+            content = p.read_bytes()
         actual_sig = hmac.new(key, content, hashlib.sha256).hexdigest()
         return hmac.compare_digest(actual_sig, expected_sig)
     except Exception as exc:
@@ -199,6 +201,9 @@ def save_trained_model(res, model_name, directory=None):
             "feature_cols": res.get("feature_cols", []),
             "random_state": res.get("random_state"),
             "test_size": res.get("test_size"),
+            "test_size_fraction": res.get("test_size_fraction"),
+            "test_rows": res.get("test_rows"),
+            "cv_scope": res.get("cv_scope", "train_population"),
         },
         "metrics": {
             key: res[key]
@@ -247,11 +252,11 @@ def load_trained_model(path, require_signature=True, allowed_dir=None, trusted=F
     raw_p = Path(path)
     if ".." in raw_p.parts:
         raise ValueError(f"Security boundary rejection: Path traversal detected in model path: {path}")
-    if ":" in raw_p.name:
+    if ":" in raw_p.name or (not raw_p.is_absolute() and (bool(raw_p.drive) or ":" in str(path))):
         raise ValueError(f"Security boundary rejection: Invalid character ':' in model filename: {path}")
 
     effective_allowed = (Path(allowed_dir) if allowed_dir is not None else MODELS_DIR).resolve()
-    p = raw_p.resolve()
+    p = raw_p.resolve() if raw_p.is_absolute() else (effective_allowed / raw_p).resolve()
 
     # Directory containment: verify path does not escape allowed directory (guards traversal & symlink escape)
     if not p.is_relative_to(effective_allowed):
@@ -267,7 +272,8 @@ def load_trained_model(path, require_signature=True, allowed_dir=None, trusted=F
 
     if not p.exists() or not p.is_file():
         raise ValueError(f"Model file not found: {path}")
-    size = p.stat().st_size
+    content = p.read_bytes()
+    size = len(content)
     if size > MAX_MODEL_FILE_SIZE:
         raise ValueError(
             f"Model file size ({size / (1024*1024):.1f} MB) exceeds maximum allowed size "
@@ -283,13 +289,13 @@ def load_trained_model(path, require_signature=True, allowed_dir=None, trusted=F
                     "The model lacks a cryptographic authenticity signature from this application. "
                     "Joblib/pickle deserialization is blocked to protect against arbitrary code execution."
                 )
-            if not verify_model_artifact_signature(p):
+            if not verify_model_artifact_signature(p, content=content):
                 raise ValueError(
                     f"Security integrity violation: Cryptographic signature verification failed for model '{p.name}'. "
                     "The file has been modified, tampered with, or signed with an untrusted key. Deserialization blocked."
                 )
         else:
-            if sig_path.is_file() and not verify_model_artifact_signature(p):
+            if sig_path.is_file() and not verify_model_artifact_signature(p, content=content):
                 raise ValueError(
                     f"Security integrity violation: Cryptographic signature verification failed for model '{p.name}'. "
                     "The file has been modified, tampered with, or signed with an untrusted key. Deserialization blocked."
@@ -297,8 +303,9 @@ def load_trained_model(path, require_signature=True, allowed_dir=None, trusted=F
     else:
         logger.warning("AUDIT OVERRIDE: Loading model bundle '%s' with explicit trusted override", p.name)
 
-    # Trust boundary enforced: only verified, contained files reach joblib.load
-    bundle = joblib.load(p)
+    # Trust boundary enforced: only verified, contained in-memory bytes reach joblib.load
+    # (eliminates TOCTOU race where disk file could be altered between verification and load)
+    bundle = joblib.load(io.BytesIO(content))
     if not isinstance(bundle, dict) or "pipeline" not in bundle:
         raise ValueError("The selected file is not a valid CloudInsight model bundle.")
     bundle_ver = bundle.get("bundle_version", 1)
@@ -511,6 +518,14 @@ def train_and_evaluate_model(
             "Consider enabling TimeSeriesSplit."
         )
 
+    # C-04: If TimeSeriesSplit is requested, sort chronologically to establish temporal ordering
+    if time_series_cv:
+        datetime_cols = [col for col in clean_df.columns if pd.api.types.is_datetime64_any_dtype(clean_df[col])]
+        if isinstance(clean_df.index, pd.DatetimeIndex):
+            clean_df = clean_df.sort_index(kind="mergesort")
+        elif datetime_cols:
+            clean_df = clean_df.sort_values(by=datetime_cols[0], kind="mergesort")
+
     if problem_type == "Regression":
         y = pd.to_numeric(clean_df[target_col], errors="coerce")
         if y.isna().any():
@@ -563,13 +578,16 @@ def train_and_evaluate_model(
                 "overflow-sized values."
             )
 
-    split_kwargs = {"test_size": test_size, "random_state": random_state}
+    if time_series_cv:
+        split_kwargs = {"test_size": test_size, "shuffle": False}
+    else:
+        split_kwargs = {"test_size": test_size, "random_state": random_state}
     y_for_split = y
     stratified_requested = False
     stratified_succeeded = False
     stratified_warning = None
 
-    if problem_type == "Classification":
+    if problem_type == "Classification" and not time_series_cv:
         class_counts = y_for_split.value_counts()
         test_rows = ceil(len(clean_df) * test_size)
         train_rows = len(clean_df) - test_rows
@@ -663,30 +681,39 @@ def train_and_evaluate_model(
         base_f1_macro = round(f1_score(y_test, dummy_pred, average="macro", zero_division=0), 4)
 
         # Cross-validation: TimeSeriesSplit, StratifiedKFold, or KFold
-        class_counts = pd.Series(y).value_counts()
-        min_class = class_counts.min() if len(class_counts) > 0 else 0
-        cv_folds = min(5, int(min_class)) if min_class >= 2 else min(5, len(X))
+        # C-10: Evaluate CV strictly on the training population (X_train, y_train) to keep test holdout untouched
+        class_counts_train = pd.Series(y_train).value_counts()
+        min_class_train = class_counts_train.min() if len(class_counts_train) > 0 else 0
+        if time_series_cv:
+            cv_folds = min(5, max(0, len(X_train) - 1))
+        elif min_class_train >= 2:
+            cv_folds = min(5, int(min_class_train))
+        else:
+            cv_folds = min(5, len(X_train))
+
         cv_acc_mean, cv_acc_std, cv_f1_mean, cv_f1_std = None, None, None, None
         cv_sampled = False
         if cv_folds >= 2:
             try:
                 if time_series_cv:
                     cv = TimeSeriesSplit(n_splits=cv_folds)
-                elif min_class >= 2:
+                elif min_class_train >= 2:
                     cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
                 else:
                     cv = KFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
 
-                X_cv, y_cv = X, y
-                if len(X) > 10_000 and model_name in ("Random Forest", "Gradient Boosting"):
-                    cv_sample_idx = np.random.RandomState(random_state).choice(len(X), size=10_000, replace=False)
+                X_cv, y_cv = X_train, y_train
+                if len(X_train) > 10_000 and model_name in ("Random Forest", "Gradient Boosting"):
                     if time_series_cv:
-                        cv_sample_idx = np.sort(cv_sample_idx)
-                    X_cv, y_cv = X.iloc[cv_sample_idx], y.iloc[cv_sample_idx]
+                        cv_sample_idx = np.linspace(0, len(X_train) - 1, 10_000, dtype=int)
+                    else:
+                        cv_sample_idx = np.random.RandomState(random_state).choice(len(X_train), size=10_000, replace=False)
+                    X_cv, y_cv = X_train.iloc[cv_sample_idx], y_train.iloc[cv_sample_idx]
                     cv_sampled = True
 
-                cv_acc = cross_val_score(pipe, X_cv, y_cv, cv=cv, scoring="accuracy")
-                cv_f1 = cross_val_score(pipe, X_cv, y_cv, cv=cv, scoring="f1_macro")
+                cv_results = cross_validate(pipe, X_cv, y_cv, cv=cv, scoring={"accuracy": "accuracy", "f1_macro": "f1_macro"})
+                cv_acc = cv_results["test_accuracy"]
+                cv_f1 = cv_results["test_f1_macro"]
                 cv_acc_mean = round(float(np.mean(cv_acc)), 4)
                 cv_acc_std = round(float(np.std(cv_acc)), 4)
                 cv_f1_mean = round(float(np.mean(cv_f1)), 4)
@@ -706,8 +733,9 @@ def train_and_evaluate_model(
             "f1_score": round(f1, 4),
             "f1_macro": round(f1_macro, 4),
             "cv_folds": cv_folds if cv_acc_mean is not None else None,
-            "cv_strategy": "TimeSeriesSplit" if time_series_cv else ("StratifiedKFold" if min_class >= 2 else "KFold"),
+            "cv_strategy": "TimeSeriesSplit" if time_series_cv else ("StratifiedKFold" if min_class_train >= 2 else "KFold"),
             "cv_sampled": cv_sampled,
+            "cv_scope": "train_population",
             "cv_accuracy_mean": cv_acc_mean,
             "cv_accuracy_std": cv_acc_std,
             "cv_f1_macro_mean": cv_f1_mean,
@@ -722,6 +750,9 @@ def train_and_evaluate_model(
             "y_pred": y_pred.tolist(),
             "train_size": len(X_train),
             "test_size": len(X_test),
+            "test_size_fraction": test_size,
+            "test_rows": len(X_test),
+            "train_rows": len(X_train),
             "stratified_split": stratified_succeeded,
             "stratified_warning": stratified_warning,
         }
@@ -767,7 +798,12 @@ def train_and_evaluate_model(
         base_mae = round(mean_absolute_error(y_test, dummy_pred), 4)
 
         # Cross-validation: TimeSeriesSplit or KFold
-        cv_folds = min(5, len(X))
+        # C-10: Evaluate CV strictly on the training population (X_train, y_train) to keep test holdout untouched
+        if time_series_cv:
+            cv_folds = min(5, max(0, len(X_train) - 1))
+        else:
+            cv_folds = min(5, len(X_train))
+
         cv_r2_mean, cv_r2_std, cv_rmse_mean, cv_rmse_std = None, None, None, None
         cv_sampled = False
         if cv_folds >= 2:
@@ -776,17 +812,19 @@ def train_and_evaluate_model(
                     cv = TimeSeriesSplit(n_splits=cv_folds)
                 else:
                     cv = KFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
-                y_num_all = pd.to_numeric(y, errors="coerce")
-                X_cv, y_cv = X, y_num_all
-                if len(X) > 10_000 and model_name in ("Random Forest", "Gradient Boosting"):
-                    cv_sample_idx = np.random.RandomState(random_state).choice(len(X), size=10_000, replace=False)
+                y_train_num = pd.to_numeric(y_train, errors="coerce")
+                X_cv, y_cv = X_train, y_train_num
+                if len(X_train) > 10_000 and model_name in ("Random Forest", "Gradient Boosting"):
                     if time_series_cv:
-                        cv_sample_idx = np.sort(cv_sample_idx)
-                    X_cv, y_cv = X.iloc[cv_sample_idx], y_num_all.iloc[cv_sample_idx]
+                        cv_sample_idx = np.linspace(0, len(X_train) - 1, 10_000, dtype=int)
+                    else:
+                        cv_sample_idx = np.random.RandomState(random_state).choice(len(X_train), size=10_000, replace=False)
+                    X_cv, y_cv = X_train.iloc[cv_sample_idx], y_train_num.iloc[cv_sample_idx]
                     cv_sampled = True
 
-                cv_r2 = cross_val_score(pipe, X_cv, y_cv, cv=cv, scoring="r2")
-                cv_mse = -cross_val_score(pipe, X_cv, y_cv, cv=cv, scoring="neg_mean_squared_error")
+                cv_results = cross_validate(pipe, X_cv, y_cv, cv=cv, scoring={"r2": "r2", "neg_mse": "neg_mean_squared_error"})
+                cv_r2 = cv_results["test_r2"]
+                cv_mse = -cv_results["test_neg_mse"]
                 cv_r2_mean = round(float(np.mean(cv_r2)), 4)
                 cv_r2_std = round(float(np.std(cv_r2)), 4)
                 cv_rmse_mean = round(float(np.mean(np.sqrt(np.maximum(0, cv_mse)))), 4)
@@ -807,6 +845,7 @@ def train_and_evaluate_model(
             "cv_folds": cv_folds if cv_r2_mean is not None else None,
             "cv_strategy": "TimeSeriesSplit" if time_series_cv else "KFold",
             "cv_sampled": cv_sampled,
+            "cv_scope": "train_population",
             "cv_r2_mean": cv_r2_mean,
             "cv_r2_std": cv_r2_std,
             "cv_rmse_mean": cv_rmse_mean,
@@ -819,7 +858,10 @@ def train_and_evaluate_model(
             "y_pred": y_pred.tolist(),
             "residuals": (y_test - y_pred).tolist(),
             "train_size": len(X_train),
-            "test_size": len(X_test)
+            "test_size": len(X_test),
+            "test_size_fraction": test_size,
+            "test_rows": len(X_test),
+            "train_rows": len(X_train),
         }
 
     # best-effort importances; linear models expose coef_, trees importances_
@@ -902,14 +944,42 @@ def train_and_evaluate_model(
             res["feature_importances"] = dict(sorted(
                 raw_fi.items(), key=lambda x: x[1], reverse=True
             )[:15])
-            for name, imp in raw_fi.items():
-                parent = name
-                if name not in feature_cols:
-                    for orig in categorical_features:
-                        if name.startswith(f"{orig}_") or name.startswith(orig):
-                            parent = orig
-                            break
-                grouped_fi[parent] = grouped_fi.get(parent, 0.0) + float(imp)
+            # C-14: Group feature importances by true originating parent feature via encoder metadata
+            feature_idx_to_parent = {}
+            curr_idx = 0
+            if preprocessor is not None and hasattr(preprocessor, "transformers_"):
+                for name, trans, cols in preprocessor.transformers_:
+                    if name == "num":
+                        for c in cols:
+                            feature_idx_to_parent[curr_idx] = c
+                            curr_idx += 1
+                    elif name == "cat":
+                        cat_enc = trans.named_steps.get("encoder") if hasattr(trans, "named_steps") else None
+                        if cat_enc is not None and hasattr(cat_enc, "categories_"):
+                            for c, cats in zip(cols, cat_enc.categories_):
+                                for _ in cats:
+                                    feature_idx_to_parent[curr_idx] = c
+                                    curr_idx += 1
+                        else:
+                            for c in cols:
+                                feature_idx_to_parent[curr_idx] = c
+                                curr_idx += 1
+
+            if len(feature_idx_to_parent) == len(feat_names):
+                for idx, name in enumerate(feat_names):
+                    parent = feature_idx_to_parent.get(idx, name)
+                    imp = raw_fi.get(name, 0.0)
+                    grouped_fi[parent] = grouped_fi.get(parent, 0.0) + float(imp)
+            else:
+                sorted_cat_features = sorted(categorical_features, key=len, reverse=True)
+                for name, imp in raw_fi.items():
+                    parent = name
+                    if name not in feature_cols:
+                        for orig in sorted_cat_features:
+                            if name.startswith(f"{orig}_") or name == orig:
+                                parent = orig
+                                break
+                    grouped_fi[parent] = grouped_fi.get(parent, 0.0) + float(imp)
             res["grouped_feature_importances"] = dict(sorted(
                 grouped_fi.items(), key=lambda x: x[1], reverse=True
             )[:15])

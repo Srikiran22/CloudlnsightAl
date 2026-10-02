@@ -31,12 +31,20 @@ def _missing_pct(series):
     return series.isnull().mean() * 100
 
 
+def _is_numeric_series(series):
+    return pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series)
+
+
 def _numeric_mean(series):
+    if not _is_numeric_series(series):
+        return None
     numeric = pd.to_numeric(series, errors="coerce").dropna()
     return float(numeric.mean()) if not numeric.empty else None
 
 
 def _numeric_std(series):
+    if not _is_numeric_series(series):
+        return None
     numeric = pd.to_numeric(series, errors="coerce").dropna()
     return float(numeric.std()) if len(numeric) > 1 else None
 
@@ -148,7 +156,7 @@ def column_drift_rows(df_a, df_b, max_rows=COMPARE_MAX_ANALYSIS_ROWS, random_sta
         tvd_val = None
 
         # Statistical distributional drift for numeric columns (two-sample KS test)
-        if mean_a is not None and mean_b is not None:
+        if _is_numeric_series(sa) and _is_numeric_series(sb) and mean_a is not None and mean_b is not None:
             num_a = pd.to_numeric(sa, errors="coerce").dropna()
             num_b = pd.to_numeric(sb, errors="coerce").dropna()
             num_a = num_a[np.isfinite(num_a)]

@@ -261,6 +261,21 @@ def _truncate_cell(value):
     return text if len(text) <= MAX_CELL_CHARS else f"{text[:MAX_CELL_CHARS]}..."
 
 
+def _sanitize_prompt_delimiter(text):
+    if not text:
+        return ""
+    s = str(text)
+    s = s.replace("</dataset_context>", "<\\/dataset_context>")
+    s = s.replace("<dataset_context>", "<\\dataset_context>")
+    s = s.replace("</system>", "<\\/system>")
+    s = s.replace("<system>", "<\\system>")
+    s = s.replace("</source_file>", "<\\/source_file>")
+    s = s.replace("<source_file>", "<\\source_file>")
+    s = s.replace("</data>", "<\\/data>")
+    s = s.replace("<data>", "<\\data>")
+    return s
+
+
 def get_dataset_summary_context(df, dataset_name):
     if df is None or df.shape[1] == 0:
         raise ValueError("Cannot summarize dataset: DataFrame has no columns or all columns were excluded.")
@@ -286,9 +301,10 @@ def get_dataset_summary_context(df, dataset_name):
         if pd.api.types.is_object_dtype(sample[column]) or pd.api.types.is_string_dtype(sample[column]):
             sample[column] = sample[column].map(_truncate_cell)
 
+    safe_name = _sanitize_prompt_delimiter(dataset_name)
     omitted_columns = max(cols - MAX_CONTEXT_COLUMNS, 0)
     context = f"""
-Dataset name: {dataset_name}
+Dataset name: {safe_name}
 Total rows: {rows}
 Total columns: {cols}
 {f'Columns omitted from this summary: {omitted_columns}' if omitted_columns else ''}
@@ -302,7 +318,7 @@ Numeric summary:
 Sample rows (up to {MAX_SAMPLE_ROWS}; text values may be truncated):
 {sample.to_csv(index=False)}
 """
-    return context.strip()
+    return _sanitize_prompt_delimiter(context.strip())
 
 
 def generate_executive_insights(

@@ -20,8 +20,8 @@ def fill_missing_values(df, numeric_strategy="mean", categorical_strategy="mode"
     numeric_strategy: mean / median / zero (an all-null numeric column gets 0).
     categorical_strategy: mode / unknown.
     datetime_strategy:
-        - "ffill" (default): Forward-fill only. Prevents future observations from leaking
-          backward into past timestamps (avoids temporal lookahead bias).
+        - "ffill" (default): Forward-fill sequentially along row order. Prevents future observations from leaking
+          backward into past rows (avoids temporal lookahead bias when rows are in chronological order).
         - "ffill_bfill": Forward-fill then back-fill.
         - "none": Leave missing datetime values untouched.
     Invalid strategy names raise ValueError instead of silently imputing the wrong way.
@@ -39,21 +39,29 @@ def fill_missing_values(df, numeric_strategy="mean", categorical_strategy="mode"
     cleaned_df = df.copy()
 
     for column in cleaned_df.columns:
-        if cleaned_df[column].isnull().sum() == 0:
-            continue
-
         if is_numeric_dtype(cleaned_df[column]):
+            import numpy as np
+            has_inf = np.isinf(cleaned_df[column]).any()
+            if cleaned_df[column].isnull().sum() == 0 and not has_inf:
+                continue
+
+            col_series = cleaned_df[column].replace([np.inf, -np.inf], np.nan)
+            finite_vals = col_series.dropna()
             if numeric_strategy == "median":
-                fill_val = cleaned_df[column].median()
+                fill_val = finite_vals.median() if not finite_vals.empty else 0
             elif numeric_strategy == "zero":
                 fill_val = 0
             else:
-                fill_val = cleaned_df[column].mean()
+                fill_val = finite_vals.mean() if not finite_vals.empty else 0
 
-            # all-NaN column gives NaN as the mean/median
-            if pd.isna(fill_val):
+            # all-NaN or non-finite column gives NaN/inf
+            if pd.isna(fill_val) or not np.isfinite(fill_val):
                 fill_val = 0
-            cleaned_df[column] = cleaned_df[column].fillna(fill_val)
+            cleaned_df[column] = col_series.fillna(fill_val)
+            continue
+
+        if cleaned_df[column].isnull().sum() == 0:
+            continue
 
         elif is_datetime64_any_dtype(cleaned_df[column]):
             if datetime_strategy == "ffill":
