@@ -32,6 +32,7 @@ CSV_ENCODINGS = ("utf-8-sig", "utf-8", "cp1252", "latin1")
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 MAX_INGESTION_ROWS = 1_000_000
 MAX_INGESTION_COLUMNS = 200
+MAX_INGESTION_CELLS = 20_000_000
 MAX_UPLOAD_FILES = 20
 MAX_AGGREGATE_UPLOAD_BYTES = 250 * 1024 * 1024
 MAX_COMBINED_ROWS = 1_000_000
@@ -60,15 +61,53 @@ def ensure_project_directories():
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def safe_stem(value, fallback="model"):
+WINDOWS_RESERVED_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+}
+
+
+def safe_stem(value, fallback="model", max_len=100):
     """Reduce a user-supplied name to a single safe path component.
 
     Keeps letters/digits/space/-/_ only (no separators, no traversal), so a
-    crafted name can never escape its target directory. Falls back when
+    crafted name can never escape its target directory. Guards against Windows
+    reserved device names and bounds component length. Falls back when
     nothing survives the filter.
     """
     cleaned = "".join(ch for ch in str(value) if ch.isalnum() or ch in "-_ ").strip()
-    return cleaned or fallback
+    if not cleaned:
+        cleaned = fallback
+    if cleaned.upper() in WINDOWS_RESERVED_NAMES:
+        cleaned = f"{cleaned}_safe"
+    if len(cleaned) > max_len:
+        cleaned = cleaned[:max_len].rstrip("-_ ") or fallback
+    return cleaned
+
+
+def compute_upload_signature(files):
+    """Compute deterministic cryptographic signature tuples for uploaded file buffers."""
+    sigs = []
+    for f in files:
+        if hasattr(f, "seek"):
+            f.seek(0)
+        hasher = hashlib.sha256()
+        total_size = 0
+        while True:
+            chunk = f.read(64 * 1024)
+            if not chunk:
+                break
+            if isinstance(chunk, str):
+                chunk = chunk.encode("utf-8", errors="replace")
+            hasher.update(chunk)
+            total_size += len(chunk)
+        if hasattr(f, "seek"):
+            f.seek(0)
+        size = getattr(f, "size", total_size)
+        content_hash = hasher.hexdigest()
+        sigs.append((getattr(f, "name", "file"), size, content_hash))
+    return tuple(sigs)
 
 
 _FILENAME_LOCK = threading.Lock()
@@ -405,20 +444,48 @@ def cleanup_storage(
     except OSError:
         return []
 
-    # Clean orphaned temporary files
+    def _is_temp_artifact(p: Path) -> bool:
+        name = p.name
+        if re.search(r"\.tmp\.[0-9a-fA-F]+$", name):
+            return True
+        if name.startswith(".") and name.endswith(".reserve"):
+            return True
+        return False
+
+    def _safe_unlink(p_to_del: Path):
+        try:
+            p_to_del.unlink(missing_ok=True)
+            removed_files.append(str(p_to_del))
+            if p_to_del.name.endswith(".joblib"):
+                sig = p_to_del.with_name(f"{p_to_del.name}.sig")
+                if sig.is_file():
+                    sig.unlink(missing_ok=True)
+                    removed_files.append(str(sig))
+        except OSError:
+            pass
+
+    # Clean orphaned temporary files and orphan signatures
     for p in files:
-        if ".tmp." in p.name:
+        if _is_temp_artifact(p):
             try:
                 p.unlink(missing_ok=True)
                 removed_files.append(str(p))
             except OSError:
                 pass
+        elif p.name.endswith(".joblib.sig"):
+            companion = p.with_name(p.name[:-4])
+            if not companion.exists():
+                try:
+                    p.unlink(missing_ok=True)
+                    removed_files.append(str(p))
+                except OSError:
+                    pass
 
     if include_temp_only:
         return removed_files
 
     try:
-        remaining_files = [p for p in target_dir.iterdir() if p.is_file() and p.name not in preserve and ".tmp." not in p.name]
+        remaining_files = [p for p in target_dir.iterdir() if p.is_file() and p.name not in preserve and not _is_temp_artifact(p) and not p.name.endswith(".joblib.sig")]
     except OSError:
         return removed_files
 
@@ -426,24 +493,32 @@ def cleanup_storage(
         for p in remaining_files:
             try:
                 if (now - p.stat().st_mtime) > max_age_seconds:
-                    p.unlink(missing_ok=True)
-                    removed_files.append(str(p))
+                    _safe_unlink(p)
             except OSError:
                 pass
 
     if max_files is not None and max_files > 0:
         try:
-            valid = [p for p in target_dir.iterdir() if p.is_file() and p.name not in preserve and ".tmp." not in p.name]
+            valid = [p for p in target_dir.iterdir() if p.is_file() and p.name not in preserve and not _is_temp_artifact(p) and not p.name.endswith(".joblib.sig")]
             if len(valid) > max_files:
                 valid.sort(key=lambda p: p.stat().st_mtime)
                 excess = len(valid) - max_files
                 for p in valid[:excess]:
-                    try:
-                        p.unlink(missing_ok=True)
-                        removed_files.append(str(p))
-                    except OSError:
-                        pass
+                    _safe_unlink(p)
         except OSError:
+            pass
+
+    # Prune orphaned conversion manifest entries
+    manifest_file = target_dir / ".conversions.json"
+    if manifest_file.is_file():
+        try:
+            manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
+            if isinstance(manifest_data, dict):
+                current_names = {p.name for p in target_dir.iterdir() if p.is_file()}
+                pruned_manifest = {k: v for k, v in manifest_data.items() if k in current_names}
+                if len(pruned_manifest) != len(manifest_data):
+                    atomic_write(manifest_file, json.dumps(pruned_manifest, indent=2), mode="w", encoding="utf-8")
+        except Exception:
             pass
 
     return removed_files
@@ -529,30 +604,39 @@ def get_dataset_row_count(dataset):
         except Exception:
             pass
 
-    try:
-        df = read_dataset(dataset)
-        return len(df)
-    except Exception:
-        return None
+    return None
 
 
-def list_dataset_files(directory=DATASETS_DIR):
-    if directory is None or directory == DATASETS_DIR:
+def list_dataset_files(directory=None, tabular_only=False):
+    if directory is None:
         ensure_project_directories()
         target_dir = DATASETS_DIR
     else:
         target_dir = Path(directory)
     datasets_root = target_dir.resolve()
     valid_files = []
+    allowed_exts = TABULAR_EXTENSIONS if tabular_only else SUPPORTED_DATASET_EXTENSIONS
     if target_dir.exists():
         for path in target_dir.iterdir():
-            if path.is_file() and not path.name.startswith(".") and path.suffix.lower() in SUPPORTED_DATASET_EXTENSIONS:
+            if path.is_file() and not path.name.startswith(".") and path.suffix.lower() in allowed_exts:
                 try:
                     if path.resolve().parent == datasets_root:
                         valid_files.append(path.name)
                 except OSError:
                     continue
     return sorted(valid_files)
+
+
+def list_ready_datasets(directory=None):
+    """Return only tabular datasets ready for immediate analytical querying and modeling."""
+    return list_dataset_files(directory=directory, tabular_only=True)
+
+
+def list_source_documents(directory=None):
+    """Return unstructured or source documents that require AI extraction before analysis."""
+    all_files = list_dataset_files(directory=directory, tabular_only=False)
+    tabular = set(list_dataset_files(directory=directory, tabular_only=True))
+    return [f for f in all_files if f not in tabular]
 
 
 def resolve_dataset_path(dataset):
@@ -679,13 +763,55 @@ def _inspect_delimited_header_width(buffer, encoding, sep=","):
         buffer.seek(0)
 
 
+def _detect_csv_delimiter(sample_text):
+    """Detect delimiter for CSV files when default comma parsing produces a single column.
+    Checks candidate separators: ';', '\t', '|'.
+    Returns detected delimiter if consistently observed across sample rows, else ','."""
+    sample_lines = [line for line in sample_text.splitlines() if line.strip()][:25]
+    if len(sample_lines) < 1:
+        return ","
+
+    candidates = [";", "\t", "|"]
+    best_delim = ","
+    best_cols = 1
+
+    for delim in candidates:
+        try:
+            reader = csv.reader(io.StringIO("\n".join(sample_lines)), delimiter=delim)
+            counts = [len(row) for row in reader if row]
+            if not counts:
+                continue
+            first_count = counts[0]
+            if first_count >= 2 and all(c == first_count for c in counts):
+                if first_count > best_cols:
+                    best_cols = first_count
+                    best_delim = delim
+        except Exception:
+            continue
+
+    return best_delim
+
+
 def _read_csv_from_buffer(buffer, nrows=None):
     last_error = None
+    buffer.seek(0)
+    sample_bytes = buffer.read(64 * 1024)
+    buffer.seek(0)
+
     for encoding in CSV_ENCODINGS:
         try:
+            sample_text = sample_bytes.decode(encoding, errors="replace")
             _inspect_delimited_header_width(buffer, encoding, sep=",")
             buffer.seek(0)
-            return pd.read_csv(buffer, encoding=encoding, nrows=nrows)
+            df = pd.read_csv(buffer, encoding=encoding, nrows=nrows)
+            if df.shape[1] == 1:
+                detected_sep = _detect_csv_delimiter(sample_text)
+                if detected_sep != ",":
+                    buffer.seek(0)
+                    _inspect_delimited_header_width(buffer, encoding, sep=detected_sep)
+                    buffer.seek(0)
+                    df = pd.read_csv(buffer, sep=detected_sep, encoding=encoding, nrows=nrows)
+            return df
         except UnicodeDecodeError as error:
             last_error = error
     if last_error:
@@ -1055,6 +1181,19 @@ def _read_json_from_buffer(buffer, nrows=None):
                         norm_df = pd.DataFrame(streamed)
                     return _sanitize_unhashable_cells(norm_df)
 
+        buf_size = 0
+        if hasattr(buffer, "seek") and hasattr(buffer, "tell"):
+            buffer.seek(0, 2)
+            buf_size = buffer.tell()
+            buffer.seek(0)
+
+        if buf_size > 2 * 1024 * 1024:
+            raise ValueError(
+                f"JSON dataset exceeds bounded streaming capacity ({buf_size / (1024 * 1024):.1f} MB) "
+                "and structure cannot be parsed incrementally. Maximum allowed for unstreamable JSON is 2 MB. "
+                "Ensure the JSON root is an array of objects or columnar dictionary, or convert to JSON Lines / Parquet."
+            )
+
         text = _decode_text_buffer(buffer)
         if nrows is not None and nrows > 0:
             streamed = _stream_json_array(text, nrows)
@@ -1141,16 +1280,7 @@ def _read_json_from_buffer(buffer, nrows=None):
             return _sanitize_unhashable_cells(norm_df)
     except ValueError:
         raise
-    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
-        pass
-
-    buffer.seek(0)
-    try:
-        df = pd.read_json(buffer)
-        if nrows is not None and len(df) > nrows:
-            df = df.head(nrows)
-        return _sanitize_unhashable_cells(df)
-    except Exception as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError) as exc:
         raise ValueError(f"Failed to parse JSON dataset: {exc}") from exc
 
 
@@ -1533,10 +1663,22 @@ def _read_parquet_from_buffer(buffer, nrows=None):
         import pyarrow.parquet as pq
         pf = pq.ParquetFile(buffer)
         total_rows = pf.metadata.num_rows
+        total_cols = pf.metadata.num_columns
         if nrows is None and total_rows > MAX_INGESTION_ROWS:
             raise ValueError(
                 f"Parquet dataset contains {total_rows:,} rows, which exceeds the maximum supported limit "
                 f"of {MAX_INGESTION_ROWS:,} rows. Filter or split the file before ingestion."
+            )
+        if total_cols > MAX_INGESTION_COLUMNS:
+            raise ValueError(
+                f"Parquet dataset contains {total_cols:,} columns, which exceeds the maximum supported limit "
+                f"of {MAX_INGESTION_COLUMNS} columns. Filter or transpose the file before ingestion."
+            )
+        if nrows is None and (total_rows * total_cols) > MAX_INGESTION_CELLS:
+            raise ValueError(
+                f"Parquet dataset contains {total_rows * total_cols:,} cells ({total_rows:,} rows × {total_cols:,} columns), "
+                f"which exceeds the maximum supported limit of {MAX_INGESTION_CELLS:,} cells. "
+                "Filter, sample, or split the file before ingestion."
             )
         if total_rows == 0 or (nrows is not None and nrows == 0):
             tbl = pf.schema_arrow.empty_table()
@@ -1735,6 +1877,13 @@ def read_tabular(source, filename=None, max_rows=None):
             raise ValueError(
                 f"Dataset contains {df.shape[1]:,} columns, which exceeds the maximum supported limit "
                 f"of {MAX_INGESTION_COLUMNS} columns. Filter or transpose the file before ingestion."
+            )
+        total_cells = len(df) * df.shape[1]
+        if limit_check and total_cells > MAX_INGESTION_CELLS:
+            raise ValueError(
+                f"Dataset contains {total_cells:,} cells ({len(df):,} rows × {df.shape[1]:,} columns), "
+                f"which exceeds the maximum supported limit of {MAX_INGESTION_CELLS:,} cells. "
+                "Filter, sample, or split the dataset before ingestion."
             )
         return normalize_and_deduplicate_columns(df)
     return df

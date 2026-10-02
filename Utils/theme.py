@@ -42,6 +42,51 @@ def _palette(dark):
     }
 
 
+SEMANTIC_TOKENS = {
+    "accent": "#2563EB",
+    "accent_hover": "#1D4ED8",
+    "success": "#16A34A",
+    "warning": "#D97706",
+    "danger": "#DC2626",
+    "info": "#0284C7",
+    "text": "#101828",
+    "muted": "#64748B",
+    "background": "#FFFFFF",
+    "surface": "#F7F8FA",
+    "border": "#E2E8F0",
+}
+
+DARK_SEMANTIC_TOKENS = {
+    "accent": "#3B82F6",
+    "accent_hover": "#60A5FA",
+    "success": "#22C55E",
+    "warning": "#F59E0B",
+    "danger": "#EF4444",
+    "info": "#38BDF8",
+    "text": "#E5E7EB",
+    "muted": "#94A3B8",
+    "background": "#0E1117",
+    "surface": "#111827",
+    "border": "#374151",
+}
+
+CHART_PALETTE = [
+    "#2563EB",  # Primary Blue
+    "#10B981",  # Emerald Green
+    "#F59E0B",  # Amber Gold
+    "#8B5CF6",  # Violet Purple
+    "#EC4899",  # Pink
+    "#06B6D4",  # Cyan
+    "#F97316",  # Orange
+    "#64748B",  # Slate
+]
+
+
+def get_semantic_tokens(dark: bool = False) -> dict:
+    """Return dictionary of semantic color tokens based on active mode."""
+    return DARK_SEMANTIC_TOKENS.copy() if dark else SEMANTIC_TOKENS.copy()
+
+
 _CSS = """
 :root {
   --ci-accent: __ACCENT__;

@@ -47,9 +47,10 @@ class UploadSafetyAndCollisionsTests(unittest.TestCase):
             self.assertEqual(u2, "data_2.csv")
 
     def test_get_unique_filename_with_extra_names(self):
-        seen = {"file.csv", "file_1.csv"}
-        u = get_unique_filename("file.csv", extra_names=seen)
-        self.assertEqual(u, "file_2.csv")
+        with tempfile.TemporaryDirectory() as tmp:
+            seen = {"file.csv", "file_1.csv"}
+            u = get_unique_filename("file.csv", directory=tmp, extra_names=seen)
+            self.assertEqual(u, "file_2.csv")
 
     def test_conversion_manifest_caching_and_staleness(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -336,7 +337,8 @@ class GeminiHardeningTests(unittest.TestCase):
             self.assertIn("You do NOT have full-dataset or row-level query execution access", prompt)
 
     def test_new_sdk_client_fails_closed_when_timeout_unsupported(self):
-        import sys, types
+        import sys
+        import types
         from Utils.Gemini import GeminiError, _new_sdk_client
         fake_genai = types.ModuleType("google.genai")
         class OldClient:
@@ -403,7 +405,7 @@ class MLPipelineHardeningTests(unittest.TestCase):
             self.assertEqual(p1.name, "test_model.joblib")
             self.assertEqual(p2.name, "test_model_1.joblib")
 
-            bundle = load_trained_model(p1)
+            bundle = load_trained_model(p1, allowed_dir=tmp)
             self.assertEqual(bundle.get("dataset_fingerprint"), "abc12345")
 
     def test_stratified_split_status_tracking(self):

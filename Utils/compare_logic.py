@@ -6,9 +6,11 @@ import numpy as np
 import pandas as pd
 import scipy.stats as stats
 
+from Utils.sampling import sample_for_analysis
 
 MISSINGNESS_DRIFT_PCT = 10.0
 MEAN_DRIFT_PCT = 10.0
+COMPARE_MAX_ANALYSIS_ROWS = 50_000
 
 
 def schema_diff(df_a, df_b):
@@ -65,7 +67,25 @@ def _safe_nunique(series):
         return int(series.dropna().map(_to_hashable).nunique())
 
 
-def column_drift_rows(df_a, df_b):
+def benjamini_hochberg_correction(p_values):
+    """Compute Benjamini-Hochberg FDR-adjusted p-values (q-values).
+
+    Guarantees monotonic q-values bounded in [0.0, 1.0].
+    """
+    n = len(p_values)
+    if n == 0:
+        return []
+    indexed = sorted(enumerate(p_values), key=lambda x: x[1])
+    q_values = [0.0] * n
+    min_q = 1.0
+    for rank, (orig_idx, p) in reversed(list(enumerate(indexed, 1))):
+        q = min(1.0, (n / rank) * p)
+        min_q = min(min_q, q)
+        q_values[orig_idx] = round(float(min_q), 4)
+    return q_values
+
+
+def column_drift_rows(df_a, df_b, max_rows=COMPARE_MAX_ANALYSIS_ROWS, random_state=42):
     """Per-column summary metric shift records for every column the datasets share.
 
     Mean shift is relative: (mean_b - mean_a) / |mean_a| * 100 for non-zero baselines.
@@ -76,11 +96,14 @@ def column_drift_rows(df_a, df_b):
     the mean shifts by >= 10 percent (or notable absolute delta for near-zero baselines).
     """
     common, _, _ = schema_diff(df_a, df_b)
-    df_a_clean = df_a.copy()
-    df_b_clean = df_b.copy()
+    sample_a, sampled_a, _ = sample_for_analysis(df_a, max_rows=max_rows, random_state=random_state)
+    sample_b, sampled_b, _ = sample_for_analysis(df_b, max_rows=max_rows, random_state=random_state)
+    df_a_clean = sample_a.copy()
+    df_b_clean = sample_b.copy()
     df_a_clean.columns = [str(c) for c in df_a.columns]
     df_b_clean.columns = [str(c) for c in df_b.columns]
     rows = []
+    ks_tests = []
     for col in common:
         sa, sb = df_a_clean[col], df_b_clean[col]
         if isinstance(sa, pd.DataFrame):
@@ -135,8 +158,6 @@ def column_drift_rows(df_a, df_b):
                     ks_res = stats.ks_2samp(num_a, num_b)
                     ks_stat = round(float(ks_res.statistic), 4)
                     ks_pval = round(float(ks_res.pvalue), 4)
-                    if ks_res.pvalue < 0.01:
-                        flags.append(f"distribution drift (KS stat={ks_stat:.3f}, p={ks_pval:.4f})")
                 except Exception:
                     pass
         else:
@@ -155,6 +176,10 @@ def column_drift_rows(df_a, df_b):
                 except Exception:
                     pass
 
+        row_idx = len(rows)
+        if ks_stat is not None and ks_pval is not None:
+            ks_tests.append((row_idx, ks_stat, ks_pval))
+
         rows.append({
             "Column": col,
             "Dtype Match": "yes" if dtype_match else "no",
@@ -165,9 +190,27 @@ def column_drift_rows(df_a, df_b):
             "Mean Shift %": round(mean_drift, 1) if mean_drift is not None else ("N/A (baseline ≈ 0)" if is_near_zero_baseline else None),
             "KS Stat": ks_stat,
             "KS p-val": ks_pval,
+            "KS p-adj (FDR)": None,
             "Categorical TVD": tvd_val,
             "Unique A": _safe_nunique(sa),
             "Unique B": _safe_nunique(sb),
             "Flags": "; ".join(flags) if flags else "OK",
         })
+
+    # Apply Benjamini-Hochberg FDR correction across all conducted KS tests
+    if ks_tests:
+        raw_pvals = [item[2] for item in ks_tests]
+        adj_pvals = benjamini_hochberg_correction(raw_pvals)
+        for (r_idx, k_stat, k_pval), adj_p in zip(ks_tests, adj_pvals):
+            rows[r_idx]["KS p-adj (FDR)"] = adj_p
+            is_drift = (adj_p < 0.05) if len(ks_tests) > 1 else (k_pval < 0.01)
+            if is_drift:
+                curr_flags = rows[r_idx]["Flags"]
+                flag_list = [f for f in curr_flags.split("; ") if f != "OK"]
+                if len(ks_tests) > 1:
+                    flag_list.append(f"distribution drift (KS stat={k_stat:.3f}, p_adj={adj_p:.4f})")
+                else:
+                    flag_list.append(f"distribution drift (KS stat={k_stat:.3f}, p={k_pval:.4f})")
+                rows[r_idx]["Flags"] = "; ".join(flag_list)
+
     return rows

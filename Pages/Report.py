@@ -1,13 +1,14 @@
-import streamlit as st
-import os
-import json
 import datetime
+import json
+import os
+import streamlit as st
 
-from Utils.PDF import generate_pdf_report
+from Utils.PDF import generate_pdf_report, validate_report_template
 from Utils.paths import (
     REPORTS_DIR, REPORT_TEMPLATES_DIR, atomic_write, get_dataset_row_count, get_unique_filename,
     list_dataset_files, resolve_dataset_path, safe_stem,
 )
+from Utils.privacy import detect_sensitive_columns
 from Utils.dataset_ui import (
     dataframe_fingerprint, dataset_fingerprint, load_dataset_cached, render_sidebar,
     results_match_active, select_working_dataset,
@@ -39,13 +40,30 @@ if saved_templates:
     )
     if chosen_template != "(none)":
         try:
-            applied_template = json.loads((REPORT_TEMPLATES_DIR / f"{chosen_template}.json").read_text(encoding="utf-8"))
+            raw_tpl = json.loads((REPORT_TEMPLATES_DIR / f"{chosen_template}.json").read_text(encoding="utf-8"))
+            applied_template = validate_report_template(raw_tpl)
         except Exception as e:
             st.error(f"Could not read template: {e}")
 
-default_title = (applied_template or {}).get("title", "CloudInsight AI Executive Analytics Report")
-default_author = (applied_template or {}).get("author", "CloudInsight AI Platform")
-default_charts = bool((applied_template or {}).get("include_charts", True))
+def _parse_bool(val, default=True) -> bool:
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(val)
+    if isinstance(val, str):
+        v = val.strip().lower()
+        if v in ("true", "1", "yes", "on"):
+            return True
+        if v in ("false", "0", "no", "off"):
+            return False
+    return default
+
+
+default_title = str((applied_template or {}).get("title") or "CloudInsight AI Executive Analytics Report")
+default_author = str((applied_template or {}).get("author") or "CloudInsight AI Platform")
+default_charts = _parse_bool((applied_template or {}).get("include_charts"), default=True)
 
 c1, c2 = st.columns(2)
 with c1:
@@ -71,7 +89,7 @@ if (
 elif st.session_state.get(f"insights_{selected_file}_{curr_fp}"):
     ai_saved = st.session_state.get(f"insights_{selected_file}_{curr_fp}")
 
-template_ai_pref = bool((applied_template or {}).get("include_ai", True))
+template_ai_pref = _parse_bool((applied_template or {}).get("include_ai"), default=True)
 include_ai = False
 if ai_saved:
     include_ai = st.checkbox("Include Gemini AI Executive Insights section in PDF", value=template_ai_pref)
@@ -84,7 +102,6 @@ include_charts = st.checkbox(
     help="Skipped automatically if matplotlib is not installed."
 )
 
-from Utils.privacy import detect_sensitive_columns
 sensitive_detected = list(detect_sensitive_columns(df).keys())
 excluded_cols = st.multiselect(
     "Exclude columns from PDF statistics, correlations & charts (PII/confidential):",
@@ -110,14 +127,14 @@ if template_name and st.button("Save Template"):
             )
         REPORT_TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
         config = {
-            "title": rep_title,
-            "author": author,
-            "include_charts": include_charts,
-            "include_ai": include_ai,
+            "title": str(rep_title).strip() or default_title,
+            "author": str(author).strip() or default_author,
+            "include_charts": bool(include_charts),
+            "include_ai": bool(include_ai),
             "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
         }
-        template_file.write_text(
-            json.dumps(config, indent=2), encoding="utf-8"
+        atomic_write(
+            template_file, json.dumps(config, indent=2), mode="w", encoding="utf-8"
         )
         st.success(f"Template `{safe_template}` saved.")
     except Exception as e:
@@ -210,14 +227,31 @@ if st.button("Generate reports for all datasets"):
             analyzed_rows = len(batch_df)
             if total_source_rows is None:
                 total_source_rows = analyzed_rows
+
+            batch_excluded = [c for c in excluded_cols if c in batch_df.columns]
+            batch_sensitive = list(detect_sensitive_columns(batch_df).keys())
+            for sc in batch_sensitive:
+                if sc not in batch_excluded:
+                    batch_excluded.append(sc)
+
+            batch_ai = None
+            if include_ai:
+                if file_name == selected_file:
+                    batch_ai = ai_saved
+                else:
+                    batch_fp = dataframe_fingerprint(batch_df)
+                    batch_ai = st.session_state.get(f"insights_{file_name}_{batch_fp}")
+
             filename_out, _ = _build_report(
                 file_name,
                 batch_df,
                 rep_title,
                 author,
                 include_charts,
+                ai_insights=batch_ai,
                 source_rows=total_source_rows,
                 analyzed_rows=analyzed_rows,
+                excluded_columns=batch_excluded,
             )
             generated.append(filename_out)
         except Exception as e:

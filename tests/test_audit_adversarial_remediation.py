@@ -20,11 +20,10 @@ from pathlib import Path
 import pandas as pd
 from streamlit.testing.v1 import AppTest
 
-from Pages.Upload import _compute_upload_signature
+from Utils.paths import DATASETS_DIR, MAX_COMBINED_ROWS, compute_upload_signature as _compute_upload_signature
 from Utils.AIConvert import parse_ai_csv
 from Utils.Charts import create_bar_count_plot, create_pie_treemap_plot
 from Utils.ML import train_and_evaluate_model
-from Utils.paths import DATASETS_DIR, MAX_COMBINED_ROWS
 
 
 class UploadSignatureAdversarialTests(unittest.TestCase):

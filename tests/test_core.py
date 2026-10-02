@@ -146,7 +146,7 @@ class ModelPersistenceTests(unittest.TestCase):
             path = save_trained_model(results, "round trip model", directory=tmp)
             self.assertTrue(Path(path).exists())
 
-            bundle = load_trained_model(path)
+            bundle = load_trained_model(path, allowed_dir=tmp)
             self.assertEqual(bundle["problem_type"], "Classification")
             self.assertEqual(bundle["target_col"], "target")
 
@@ -159,7 +159,7 @@ class ModelPersistenceTests(unittest.TestCase):
         results = self._train()
         with tempfile.TemporaryDirectory() as tmp:
             path = save_trained_model(results, "strict", directory=tmp)
-            bundle = load_trained_model(path)
+            bundle = load_trained_model(path, allowed_dir=tmp)
             with self.assertRaisesRegex(ValueError, "missing required features"):
                 predict_with_model(bundle, pd.DataFrame({"unrelated": [1]}))
 
@@ -1242,20 +1242,22 @@ class ModelProvenanceTests(unittest.TestCase):
     def test_bundle_records_creation_and_sklearn_version(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = save_trained_model(self._train(), "meta", directory=tmp)
-            bundle = load_trained_model(path)
+            bundle = load_trained_model(path, allowed_dir=tmp)
             self.assertIn(bundle["sklearn_version"].split(".")[0], {"1", "2"})
             self.assertIn("created_at", bundle)
             self.assertNotIn("sklearn_version_mismatch", bundle)
 
     def test_version_mismatch_is_flagged_on_load(self):
+        from Utils.ML import sign_model_artifact
         with tempfile.TemporaryDirectory() as tmp:
             path = save_trained_model(self._train(), "stale", directory=tmp)
             bundle = joblib.load(path)
             bundle["sklearn_version"] = "0.0-fake"
             stale_path = Path(tmp) / "stale_edited.joblib"
             joblib.dump(bundle, stale_path)
+            sign_model_artifact(stale_path)
 
-            reloaded = load_trained_model(stale_path)
+            reloaded = load_trained_model(stale_path, allowed_dir=tmp)
             self.assertTrue(reloaded.get("sklearn_version_mismatch"))
 
     def test_training_failures_are_value_errors_not_crashes(self):

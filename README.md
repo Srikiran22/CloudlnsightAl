@@ -1,6 +1,6 @@
 # CloudInsight AI
 
-CloudInsight AI is a local-first data analytics application built with Streamlit, Pandas, Scikit-Learn, Plotly, ReportLab, and Google Gemini.
+CloudInsight AI is a local-first data analytics application built with Streamlit, pandas, scikit-learn, Plotly, ReportLab, and Google Gemini.
 
 It brings common data-analysis tasks into one workspace: ingest a dataset, clean it, compare it with another dataset, explore it, train a machine-learning model, and export an executive PDF report. Google Gemini and Amazon S3 are optional integrations.
 
@@ -225,15 +225,19 @@ CloudInsightAI/
 │   ├── paths.py           # Safe path handling, format parsing, and limits
 │   ├── privacy.py         # Sensitive column screening and PII detection
 │   ├── quality.py         # Data hygiene index and completeness/uniqueness scoring
+│   ├── sampling.py        # Centralized analytical and visualization sampling policy
 │   ├── secrets.py         # Ephemeral in-memory credential management
 │   └── theme.py           # UI styling and CSS tokens
 ├── tests/                 # Unit, security, and regression test suites
 ├── App.py                 # Application entry point and navigation
 ├── bug_hunt.py            # Headless page execution sanity check
+├── CHANGELOG.md           # Product release notes and remediation history
 ├── CONTRIBUTING.md        # Contribution guidelines and development checks
+├── pyproject.toml         # Ruff, pytest, and project metadata configuration
 ├── README.md              # Project documentation and setup guide
 ├── requirements.txt       # Base application dependencies
-└── requirements-lock.txt  # Pinned dependency lockfile
+├── requirements-lock.txt  # Pinned dependency lockfile
+└── SECURITY.md            # Security policy and vulnerability disclosure
 ```
 
 ## Development

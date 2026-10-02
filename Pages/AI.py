@@ -4,6 +4,7 @@ import streamlit as st
 from Utils.Gemini import (
     generate_executive_insights, chat_with_gemini_dataset,
     GEMINI_MODELS, DEFAULT_GEMINI_MODEL, GeminiError, MAX_CHAT_HISTORY,
+    prune_ai_contexts,
 )
 from Utils.privacy import apply_exclusions, detect_sensitive_columns
 from Utils.secrets import ask, value_of, keep_box, release, drop
@@ -91,6 +92,8 @@ ctx_hash = hashlib.sha256(ctx_str.encode("utf-8")).hexdigest()[:16]
 
 insights_key = f"insights_{ctx_hash}"
 chat_key = f"chat_messages_{ctx_hash}"
+
+prune_ai_contexts(st.session_state, ctx_hash)
 
 with tab_insights:
     st.markdown("Generate a data health audit, pattern discovery, and business recommendations.")

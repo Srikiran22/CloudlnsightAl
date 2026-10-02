@@ -2,15 +2,16 @@ import streamlit as st
 import pandas as pd
 
 from Utils.compare_logic import column_drift_rows, schema_diff
-from Utils.paths import list_dataset_files
+from Utils.paths import list_ready_datasets
 from Utils.dataset_ui import render_sidebar, load_dataset_cached
+from Utils.sampling import sample_for_analysis
 
 st.title("Compare datasets")
 st.markdown("Schema differences, missing-value drift, and summary metric shifts between two files.")
 
-available = list_dataset_files()
+available = list_ready_datasets()
 if len(available) < 2:
-    st.warning("Need at least two datasets in the `Datasets/` folder to compare. Ingest more data first.")
+    st.warning("Need at least two ready tabular datasets in the `Datasets/` folder to compare. Ingest more data first.")
     st.stop()
 
 col_a, col_b = st.columns(2)
@@ -69,9 +70,20 @@ if not common:
 
 st.subheader("Column-level metric comparison & shifts")
 
+if len(df_a) > 50_000 or len(df_b) > 50_000:
+    st.info(
+        f"Analytical scope: Column metric comparison and statistical drift tests are evaluated on a representative sample of "
+        f"{min(len(df_a), 50_000):,} rows for A and {min(len(df_b), 50_000):,} rows for B."
+    )
+
 drift_df = pd.DataFrame(column_drift_rows(df_a, df_b))
 flagged_count = int((drift_df["Flags"] != "OK").sum())
 st.dataframe(drift_df, width="stretch", hide_index=True)
+st.caption(
+    "Statistical methodology: Numeric distribution drift evaluated via two-sample Kolmogorov-Smirnov tests with "
+    "Benjamini-Hochberg False Discovery Rate (FDR) correction (exploratory multi-column screening). "
+    "Categorical drift evaluated via Total Variation Distance (TVD >= 0.20)."
+)
 
 if flagged_count:
     st.warning(f"{flagged_count} of {len(common)} common columns show notable metric shifts or statistical drift (dtype, missingness, mean, dispersion, KS distribution drift, or categorical TVD drift).")
@@ -82,8 +94,12 @@ else:
 st.subheader("Duplication profile")
 d1, d2 = st.columns(2)
 with d1:
-    dup_a = int(df_a.duplicated().sum())
-    st.metric("Duplicate Rows — A", f"{dup_a:,}")
+    sample_dup_a, is_a_sampled, _ = sample_for_analysis(df_a)
+    dup_a = int(sample_dup_a.duplicated().sum())
+    lbl_a = f"Duplicate Rows — A (Sample of {len(sample_dup_a):,})" if is_a_sampled else "Duplicate Rows — A"
+    st.metric(lbl_a, f"{dup_a:,}")
 with d2:
-    dup_b = int(df_b.duplicated().sum())
-    st.metric("Duplicate Rows — B", f"{dup_b:,}")
+    sample_dup_b, is_b_sampled, _ = sample_for_analysis(df_b)
+    dup_b = int(sample_dup_b.duplicated().sum())
+    lbl_b = f"Duplicate Rows — B (Sample of {len(sample_dup_b):,})" if is_b_sampled else "Duplicate Rows — B"
+    st.metric(lbl_b, f"{dup_b:,}")

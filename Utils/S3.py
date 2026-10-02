@@ -2,15 +2,19 @@
 # dumps raw botocore traces (which can embed bucket policies or ARNs), and
 # credentials never appear anywhere in this module.
 
+import os
+import tempfile
+import uuid
+from pathlib import Path
+
 import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
-from pathlib import Path
 
 from Utils.logsys import get_logger
 from Utils.paths import (
     AIConversionRequired, MAX_UPLOAD_BYTES, read_tabular,
-    SUPPORTED_DATASET_EXTENSIONS,
+    sanitize_for_csv_export, SUPPORTED_DATASET_EXTENSIONS,
 )
 
 
@@ -96,13 +100,18 @@ def list_s3_datasets(bucket_name, client, return_meta=False):
     return files
 
 
-def download_s3_dataset(bucket_name, file_key, client):
+def download_s3_dataset(bucket_name, file_key, client, destination_path=None):
+    """Download an S3 dataset with strict memory bounding and temporary-file streaming.
+
+    Streams chunks into a temporary file on disk rather than holding duplicate
+    byte copies in memory. If destination_path is provided, atomically places
+    the file at that location.
+    """
     obj = client.get_object(Bucket=bucket_name, Key=file_key)
     stream = obj.get("Body")
+    tmp_path = None
     try:
         content_length = obj.get("ContentLength")
-        # same resource guard as local uploads: never stream an unbounded object
-        # into memory just because the bucket holds it
         if content_length and content_length > MAX_UPLOAD_BYTES:
             raise ValueError(
                 f"S3 object is about {content_length / (1024 * 1024):.0f} MB; the "
@@ -110,39 +119,81 @@ def download_s3_dataset(bucket_name, file_key, client):
                 "it manually and trim the file first."
             )
 
-        # Stream with a hard byte limit -- remains bounded even if ContentLength is missing
-        chunks = []
+        # Stream into a bounded temporary file to prevent multiple in-memory payload duplicates
+        if destination_path is not None:
+            dest = Path(destination_path)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            tmp_target = dest.with_name(f"{dest.name}.tmp.{uuid.uuid4().hex}")
+        else:
+            fd, tmp_name = tempfile.mkstemp(prefix="s3_download_", suffix=".tmp")
+            os.close(fd)
+            tmp_target = Path(tmp_name)
+        tmp_path = tmp_target
+
         bytes_read = 0
         chunk_size = 64 * 1024
+        with tmp_path.open("wb") as f:
+            while True:
+                chunk = stream.read(chunk_size)
+                if not chunk:
+                    break
+                bytes_read += len(chunk)
+                if bytes_read > MAX_UPLOAD_BYTES:
+                    raise ValueError(
+                        f"S3 download exceeded the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit while streaming."
+                    )
+                f.write(chunk)
 
-        while True:
-            chunk = stream.read(chunk_size)
-            if not chunk:
-                break
-            bytes_read += len(chunk)
-            if bytes_read > MAX_UPLOAD_BYTES:
-                raise ValueError(
-                    f"S3 download exceeded the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit while streaming."
-                )
-            chunks.append(chunk)
+        filename = Path(file_key).name
+        if destination_path is not None:
+            dest = Path(destination_path)
+            os.replace(tmp_path, dest)
+            tmp_path = None  # target now safely owns the file
+            try:
+                with dest.open("rb") as f:
+                    df = read_tabular(f, filename=filename)
+                return df, dest
+            except AIConversionRequired:
+                return None, dest
 
-        body = b"".join(chunks)
-        try:
-            df = read_tabular(body, filename=Path(file_key).name)
-        except AIConversionRequired:
-            # unparseable formats still return the raw bytes so callers can save the file
-            return None, body
-        return df, body
+        # When caller did not pass destination_path (backwards compatibility for tests and callers):
+        with tmp_path.open("rb") as f:
+            try:
+                df = read_tabular(f, filename=filename)
+            except AIConversionRequired:
+                df = None
+            f.seek(0)
+            raw_bytes = f.read()
+
+        return df, raw_bytes
     finally:
         if stream is not None and hasattr(stream, "close"):
             try:
                 stream.close()
             except Exception:
                 pass
+        if tmp_path is not None and tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
 
 
-def upload_s3_dataset(df, bucket_name, file_key, client):
-    csv_bytes = df.to_csv(index=False).encode("utf-8")
+def upload_s3_dataset(df, bucket_name, file_key, client, max_bytes=MAX_UPLOAD_BYTES, sanitize=False):
+    """Upload dataset to S3, enforcing output size limit and distinguishing canonical vs export boundaries.
+
+    When sanitize=False (default), canonical internal analytical values are preserved.
+    When sanitize=True, external spreadsheet formula-injection neutralization is applied.
+    Raises ValueError if serialized dataset exceeds max_bytes.
+    """
+    target_df = sanitize_for_csv_export(df) if sanitize else df
+    csv_bytes = target_df.to_csv(index=False).encode("utf-8")
+
+    if len(csv_bytes) > max_bytes:
+        raise ValueError(
+            f"Dataset export size ({len(csv_bytes) / (1024 * 1024):.1f} MB) exceeds "
+            f"the maximum allowed upload limit of {max_bytes // (1024 * 1024)} MB."
+        )
 
     client.put_object(
         Bucket=bucket_name,

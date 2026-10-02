@@ -1,12 +1,12 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 
 from Utils.dataset_ui import render_sidebar, select_working_dataset
 from Utils.quality import quality_metrics
-from Utils.theme import plot_template
+from Utils.Charts import create_histogram_plot, create_box_violin_plot
+from Utils.sampling import sample_for_visualization
 
 st.title("Dashboard")
 st.markdown("Data health indicators, live filtering, and quick distributions.")
@@ -127,16 +127,19 @@ st.subheader("Quick distributions")
 num_cols = filtered_df.select_dtypes(include="number").columns.tolist()
 
 if num_cols:
+    chart_sample_df, was_sampled, sample_note = sample_for_visualization(filtered_df)
+    if was_sampled:
+        st.caption(sample_note)
     c_pick1, c_pick2 = st.columns(2)
     with c_pick1:
         q_col1 = st.selectbox("Metric 1:", num_cols, index=0, key="q1")
-        fig1 = px.histogram(filtered_df, x=q_col1, title=f"Distribution of {q_col1}", template=plot_template(), color_discrete_sequence=["#3B82F6"])
+        fig1 = create_histogram_plot(chart_sample_df, x_col=q_col1, color_discrete_sequence=["#3B82F6"])
         st.plotly_chart(fig1, width="stretch")
 
     with c_pick2:
         if len(num_cols) > 1:
             q_col2 = st.selectbox("Metric 2:", num_cols, index=1, key="q2")
-            fig2 = px.box(filtered_df, y=q_col2, title=f"Box Plot of {q_col2}", template=plot_template(), color_discrete_sequence=["#10B981"])
+            fig2 = create_box_violin_plot(chart_sample_df, y_col=q_col2)
             st.plotly_chart(fig2, width="stretch")
 else:
     st.info("No numeric columns available for distribution charts.")

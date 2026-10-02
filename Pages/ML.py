@@ -15,6 +15,9 @@ from Utils.dataset_ui import (
     dataframe_fingerprint, dataset_fingerprint, render_sidebar, results_match_active,
     select_working_dataset,
 )
+from Utils.logsys import get_logger
+
+logger = get_logger("ML_Page")
 
 st.title("Machine learning")
 st.markdown("Train, evaluate, and persist classification or regression models with automatic preprocessing.")
@@ -69,6 +72,15 @@ with col_split1:
 with col_split2:
     random_seed = st.number_input("Random State (Seed):", min_value=0, max_value=999, value=42)
 
+has_temporal_col = any(pd.api.types.is_datetime64_any_dtype(df[c]) for c in df.columns) or isinstance(df.index, pd.DatetimeIndex)
+use_time_series_cv = False
+if has_temporal_col:
+    use_time_series_cv = st.checkbox(
+        "Use TimeSeriesSplit for cross-validation (preserves sequential order)",
+        value=False,
+        help="Evaluates folds forward in time without shuffling to avoid lookahead leakage."
+    )
+
 if not selected_features:
     st.warning("Select at least one feature to train the model.")
     st.stop()
@@ -83,7 +95,8 @@ if st.button("Train & evaluate", type="primary"):
                 model_name=chosen_algo,
                 problem_type=problem_type,
                 test_size=test_pct / 100.0,
-                random_state=int(random_seed)
+                random_state=int(random_seed),
+                time_series_cv=use_time_series_cv,
             )
             results["dataset_name"] = selected_file
             is_file_backed = False
@@ -99,13 +112,20 @@ if st.button("Train & evaluate", type="primary"):
                 f"Trained **{chosen_algo}** on {results['train_size']:,} samples "
                 f"and evaluated on {results['test_size']:,} test samples."
             )
+        except ValueError as e:
+            logger.warning("ML training validation error: %s", e)
+            st.error(f"Training could not proceed: {e}")
         except Exception as e:
-            st.error(f"Training failed: {str(e)}")
+            logger.error("ML training unexpected error: %s", e, exc_info=True)
+            st.error(f"Training failed: {type(e).__name__}. Check application logs for technical details.")
 
 results = st.session_state.get("ml_results")
 if results_match_active(results, selected_file, df=df):
     st.markdown("---")
     st.subheader("Evaluation metrics")
+
+    if results.get("temporal_warning"):
+        st.warning(results["temporal_warning"])
 
     if results["problem_type"] == "Classification":
         if results.get("stratified_warning"):
@@ -305,21 +325,32 @@ with tab_load:
         "To prevent arbitrary code execution, only models cryptographically signed with "
         "HMAC-SHA256 by this application instance are permitted to load."
     )
-    saved_models = list_saved_models()
-    if not saved_models:
+    models_with_status = list_saved_models(include_trust_status=True)
+    if not models_with_status:
         st.info("No saved models yet. Train and save one first.")
     else:
-        chosen_model_file = st.selectbox("Select Saved Model:", saved_models)
+        # Build human-readable selector displaying trust state
+        display_map = {f"{name} [{status}]": (name, status) for name, status in models_with_status}
+        chosen_display = st.selectbox("Select Saved Model:", list(display_map.keys()))
+        chosen_model_file, chosen_status = display_map[chosen_display]
+
+        if chosen_status != "Trusted":
+            st.warning(f"Artifact trust status: **{chosen_status}**. Untrusted or unsigned models will be blocked.")
 
         if st.button("Load model & predict"):
             try:
-                bundle = load_trained_model(MODELS_DIR / chosen_model_file, require_signature=True)
+                bundle = load_trained_model(MODELS_DIR / chosen_model_file)
                 if bundle.get("sklearn_version_mismatch"):
                     st.warning(
                         "This model was saved with a different scikit-learn version; "
                         "loading may fail or behave unexpectedly."
                     )
                 predictions_df = predict_with_model(bundle, df)
+
+                if "category_drift" in predictions_df.attrs:
+                    drift_info = predictions_df.attrs["category_drift"]
+                    drift_desc = ", ".join(f"`{col}` ({len(vals)} unseen)" for col, vals in drift_info.items())
+                    st.warning(f"Category drift detected during inference: {drift_desc}. Unseen categories were ignored per encoding policy.")
 
                 st.success(
                     f"Loaded **{bundle.get('algorithm', 'model')}** "
@@ -347,5 +378,9 @@ with tab_load:
                     key="download_predictions"
                 )
                 st.caption(f"Prediction column(s): {', '.join(pred_cols)}")
+            except ValueError as e:
+                logger.warning("Prediction validation error: %s", e)
+                st.error(f"Prediction could not proceed: {e}")
             except Exception as e:
-                st.error(f"Prediction failed: {str(e)}")
+                logger.error("Prediction unexpected failure: %s", e, exc_info=True)
+                st.error("Prediction failed. Check application logs for technical details.")

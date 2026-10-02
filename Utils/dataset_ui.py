@@ -220,12 +220,8 @@ def get_cache_memory_stats():
     return _DATASET_MEMORY_CACHE.stats()
 
 
-def _clear_cache_stubs():
+def clear_dataset_memory_cache():
     _DATASET_MEMORY_CACHE.clear()
-
-
-_load_cached_dataset = type("CacheStub", (), {"clear": staticmethod(_clear_cache_stubs)})()
-_load_cached_dataset_bounded = type("CacheStub", (), {"clear": staticmethod(_clear_cache_stubs)})()
 
 
 def load_dataset_cached(dataset, max_rows=None):
@@ -266,7 +262,7 @@ def render_sidebar():
 
 
 def select_working_dataset(selectbox_label, max_rows=None):
-    files = list_dataset_files()
+    files = list_dataset_files(tabular_only=True)
     df_session = st.session_state.get("current_df")
     name_session = st.session_state.get("dataset_name")
 

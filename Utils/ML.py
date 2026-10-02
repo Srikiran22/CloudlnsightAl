@@ -1,18 +1,20 @@
 import datetime
-import os
-import re
-import time
-import uuid
-
-import numpy as np
-import pandas as pd
-from math import ceil
-from pathlib import Path
 import hashlib
 import hmac
 import json
+import os
+import re
+import sys
+import threading
+import time
+import uuid
+from math import ceil
+from pathlib import Path
+
 import joblib
-from sklearn.model_selection import train_test_split, StratifiedKFold, KFold, cross_val_score
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split, StratifiedKFold, KFold, TimeSeriesSplit, cross_val_score
 from sklearn.dummy import DummyClassifier, DummyRegressor
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
@@ -47,33 +49,81 @@ MAX_MODEL_FILE_SIZE = 100 * 1024 * 1024  # 100MB safety ceiling against decompre
 
 
 _MODEL_KEY_PATH = MODELS_DIR / ".model_signing_key"
+_MODEL_KEY_LOCK = threading.Lock()
+_CACHED_MODEL_KEY = None
 
 
-def _get_or_create_model_signing_key() -> bytes:
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    if _MODEL_KEY_PATH.is_file():
+def _get_or_create_model_signing_key(directory=None) -> bytes:
+    """Thread-safe and cross-process atomic acquisition of the HMAC model signing key.
+
+    Uses O_CREAT | O_EXCL kernel semantics so concurrent initialization attempts
+    converge deterministically on the first created key without overwrite races.
+    """
+    global _CACHED_MODEL_KEY
+    key_dir = Path(directory) if directory is not None else MODELS_DIR
+    key_path = key_dir / ".model_signing_key"
+
+    if directory is None and _CACHED_MODEL_KEY is not None and key_path.is_file():
+        return _CACHED_MODEL_KEY
+
+    key_dir.mkdir(parents=True, exist_ok=True)
+    if key_path.is_file() and key_path.stat().st_size == 32:
         try:
-            return _MODEL_KEY_PATH.read_bytes()
+            key = key_path.read_bytes()
+            if len(key) == 32:
+                if directory is None:
+                    with _MODEL_KEY_LOCK:
+                        _CACHED_MODEL_KEY = key
+                return key
         except OSError:
             pass
+
     import secrets
-    key = secrets.token_bytes(32)
-    tmp_key = _MODEL_KEY_PATH.with_suffix(f".tmp.{uuid.uuid4().hex}")
-    tmp_key.write_bytes(key)
+    new_key = secrets.token_bytes(32)
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+
     try:
-        os.chmod(tmp_key, 0o600)
-    except OSError:
-        pass
-    os.replace(tmp_key, _MODEL_KEY_PATH)
-    return key
+        fd = os.open(str(key_path), flags, 0o600)
+        try:
+            os.write(fd, new_key)
+        finally:
+            os.close(fd)
+        try:
+            os.chmod(key_path, 0o600)
+        except OSError:
+            pass
+        if directory is None:
+            with _MODEL_KEY_LOCK:
+                _CACHED_MODEL_KEY = new_key
+        return new_key
+    except (FileExistsError, OSError):
+        # A concurrent worker created the key first; wait for bytes to flush
+        for attempt in range(25):
+            if key_path.is_file() and key_path.stat().st_size == 32:
+                try:
+                    key = key_path.read_bytes()
+                    if len(key) == 32:
+                        if directory is None:
+                            with _MODEL_KEY_LOCK:
+                                _CACHED_MODEL_KEY = key
+                        return key
+                except OSError:
+                    pass
+            time.sleep(0.005 * (1.5 ** min(attempt, 8)))
+        if key_path.is_file():
+            return key_path.read_bytes()
+        raise RuntimeError(f"Failed to initialize or read model signing key at {key_path}")
 
 
 def sign_model_artifact(model_path: Path) -> Path:
     """Compute and store a cryptographic HMAC-SHA256 signature for a saved model file."""
-    p = Path(model_path)
+    p = Path(model_path).resolve()
     if not p.is_file():
         raise ValueError(f"Model file not found to sign: {model_path}")
-    key = _get_or_create_model_signing_key()
+    key_dir = p.parent if (p.parent / ".model_signing_key").is_file() else MODELS_DIR
+    key = _get_or_create_model_signing_key(directory=key_dir)
     content = p.read_bytes()
     sig = hmac.new(key, content, hashlib.sha256).hexdigest()
     sig_path = p.with_suffix(".joblib.sig")
@@ -89,14 +139,15 @@ def sign_model_artifact(model_path: Path) -> Path:
 
 def verify_model_artifact_signature(model_path: Path) -> bool:
     """Verify cryptographic authenticity and integrity of a model file before deserialization."""
-    p = Path(model_path)
+    p = Path(model_path).resolve()
     sig_path = p.with_suffix(".joblib.sig")
     if not sig_path.is_file():
         return False
     try:
         sig_data = json.loads(sig_path.read_text(encoding="utf-8"))
         expected_sig = sig_data.get("signature", "")
-        key = _get_or_create_model_signing_key()
+        key_dir = p.parent if (p.parent / ".model_signing_key").is_file() else MODELS_DIR
+        key = _get_or_create_model_signing_key(directory=key_dir)
         content = p.read_bytes()
         actual_sig = hmac.new(key, content, hashlib.sha256).hexdigest()
         return hmac.compare_digest(actual_sig, expected_sig)
@@ -119,6 +170,13 @@ def save_trained_model(res, model_name, directory=None):
         "bundle_version": MODEL_BUNDLE_VERSION,
         "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "sklearn_version": _sklearn_version(),
+        "python_version": sys.version.split()[0],
+        "pandas_version": str(pd.__version__),
+        "numpy_version": str(np.__version__),
+        "random_state": res.get("random_state"),
+        "test_size": res.get("test_size"),
+        "train_rows": res.get("train_size") or res.get("train_rows"),
+        "test_rows": res.get("test_size") or res.get("test_rows"),
         "pipeline": res["pipeline"],
         "problem_type": res.get("problem_type"),
         "algorithm": res.get("model_name"),
@@ -133,6 +191,15 @@ def save_trained_model(res, model_name, directory=None):
         "grouped_feature_importances": res.get("grouped_feature_importances", {}),
         "dataset_name": res.get("dataset_name"),
         "dataset_fingerprint": res.get("dataset_fingerprint"),
+        "hyperparameters": res.get("hyperparameters", {}),
+        "training_config": {
+            "problem_type": res.get("problem_type"),
+            "algorithm": res.get("model_name"),
+            "target_col": res.get("target_col"),
+            "feature_cols": res.get("feature_cols", []),
+            "random_state": res.get("random_state"),
+            "test_size": res.get("test_size"),
+        },
         "metrics": {
             key: res[key]
             for key in (
@@ -167,17 +234,37 @@ def save_trained_model(res, model_name, directory=None):
     return path
 
 
-def load_trained_model(path, require_signature=False, trusted=False):
+def load_trained_model(path, require_signature=True, allowed_dir=None, trusted=False):
     """Load a saved model bundle from disk with cryptographic authenticity checks.
 
-    Security & Trust Notice:
-    Joblib serializes arbitrary Python bytecode via pickle. A file-size limit only
-    protects against memory exhaustion, NOT arbitrary code execution. To prevent
-    code execution vulnerabilities, all application-generated models are cryptographically
-    signed with HMAC-SHA256 upon saving. Loading untrusted or tampered .joblib files
-    is blocked.
+    Security & Trust Boundary:
+    Joblib serializes arbitrary Python bytecode via pickle. To prevent arbitrary
+    code execution, the default path requires a valid HMAC-SHA256 signature generated
+    by this application and enforces that the target file resides within the allowed
+    model directory (defaulting to MODELS_DIR). Loading untrusted, tampered, or
+    directory-escaping .joblib files is blocked before deserialization occurs.
     """
-    p = Path(path)
+    raw_p = Path(path)
+    if ".." in raw_p.parts:
+        raise ValueError(f"Security boundary rejection: Path traversal detected in model path: {path}")
+    if ":" in raw_p.name:
+        raise ValueError(f"Security boundary rejection: Invalid character ':' in model filename: {path}")
+
+    effective_allowed = (Path(allowed_dir) if allowed_dir is not None else MODELS_DIR).resolve()
+    p = raw_p.resolve()
+
+    # Directory containment: verify path does not escape allowed directory (guards traversal & symlink escape)
+    if not p.is_relative_to(effective_allowed):
+        if not trusted:
+            raise ValueError(
+                f"Security boundary rejection: Model path '{raw_p}' escapes allowed directory '{effective_allowed}'."
+            )
+        logger.warning(
+            "AUDIT OVERRIDE: Loading model bundle '%s' outside allowed directory '%s' with explicit trusted override",
+            raw_p.name,
+            effective_allowed,
+        )
+
     if not p.exists() or not p.is_file():
         raise ValueError(f"Model file not found: {path}")
     size = p.stat().st_size
@@ -208,10 +295,10 @@ def load_trained_model(path, require_signature=False, trusted=False):
                     "The file has been modified, tampered with, or signed with an untrusted key. Deserialization blocked."
                 )
     else:
-        logger.warning("Loading model bundle '%s' with explicit trusted override", p.name)
+        logger.warning("AUDIT OVERRIDE: Loading model bundle '%s' with explicit trusted override", p.name)
 
-    # trust requirement: this deserializes pickle code from the verified file
-    bundle = joblib.load(path)
+    # Trust boundary enforced: only verified, contained files reach joblib.load
+    bundle = joblib.load(p)
     if not isinstance(bundle, dict) or "pipeline" not in bundle:
         raise ValueError("The selected file is not a valid CloudInsight model bundle.")
     bundle_ver = bundle.get("bundle_version", 1)
@@ -226,7 +313,7 @@ def load_trained_model(path, require_signature=False, trusted=False):
         bundle["sklearn_version_mismatch"] = True
         logger.warning(
             "model %s saved with scikit-learn %s, running %s",
-            Path(path).name, saved_version, _sklearn_version(),
+            p.name, saved_version, _sklearn_version(),
         )
     return bundle
 
@@ -239,23 +326,44 @@ def _sklearn_version():
         return None
 
 
-def list_saved_models():
+def list_saved_models(include_trust_status=False):
     if not MODELS_DIR.exists():
         return []
-    return sorted(
+    models = sorted(
         (p.name for p in MODELS_DIR.glob("*.joblib")),
         key=lambda name: -(MODELS_DIR / name).stat().st_mtime,
     )
+    if not include_trust_status:
+        return models
+    results = []
+    for name in models:
+        p = MODELS_DIR / name
+        sig_p = p.with_suffix(".joblib.sig")
+        if not sig_p.is_file():
+            status = "Unsigned"
+        elif verify_model_artifact_signature(p):
+            status = "Trusted"
+        else:
+            status = "Invalid signature"
+        results.append((name, status))
+    return results
 
 
 def _datetime_to_epoch(df):
     # models can't handle datetime64 directly; epoch floats behave better than strings.
-    # normalize to Unix seconds to ensure invariant scale across datetime resolutions (s, ms, us, ns).
+    # normalize to Unix seconds to ensure invariant scale across datetime resolutions (s, ms, us, ns)
+    # and convert timezone-aware series to UTC before localization.
     for column in df.columns:
         if pd.api.types.is_datetime64_any_dtype(df[column]):
-            ts = pd.to_datetime(df[column], errors="coerce")
-            df[column] = ts.astype("datetime64[s]").astype("int64").astype("float64")
-            df.loc[ts.isna(), column] = np.nan
+            try:
+                ts = pd.to_datetime(df[column], errors="coerce")
+            except (ValueError, TypeError):
+                ts = pd.to_datetime(df[column], errors="coerce", utc=True)
+            if hasattr(ts.dt, "tz") and ts.dt.tz is not None:
+                ts = ts.dt.tz_convert("UTC").dt.tz_localize(None)
+            epoch = ts.astype("datetime64[s]").astype("int64").astype("float64")
+            epoch.loc[ts.isna()] = np.nan
+            df[column] = epoch
 
 
 def predict_with_model(bundle, df, feature_cols=None):
@@ -290,6 +398,22 @@ def predict_with_model(bundle, df, feature_cols=None):
 
     predictions = bundle["pipeline"].predict(X)
     output = df.copy()
+
+    # Category drift detection: report unseen categorical levels during inference
+    known_categories = bundle.get("categories") or {}
+    category_drift = {}
+    for col, known_vals in known_categories.items():
+        if col in X.columns:
+            observed_vals = set(X[col].dropna().astype(str).unique())
+            unseen = sorted(list(observed_vals - set(str(v) for v in known_vals)))
+            if unseen:
+                category_drift[col] = unseen
+
+    if category_drift:
+        summary_drift = "; ".join(f"{col} ({len(vals)} unseen)" for col, vals in category_drift.items())
+        logger.warning("Category drift detected during inference: %s", summary_drift)
+        output.attrs["category_drift"] = category_drift
+
     label = "prediction"
     suffix = 2
     while label in output.columns:
@@ -351,7 +475,8 @@ def train_and_evaluate_model(
     model_name,
     problem_type,
     test_size=0.2,
-    random_state=42
+    random_state=42,
+    time_series_cv=False,
 ):
     if problem_type not in {"Classification", "Regression"}:
         raise ValueError("Problem type must be either Classification or Regression.")
@@ -372,6 +497,19 @@ def train_and_evaluate_model(
     clean_df = df.dropna(subset=[target_col]).copy()
     if len(clean_df) < 4:
         raise ValueError("At least 4 rows with a non-missing target are required for model training and evaluation.")
+
+    has_temporal = (
+        isinstance(df.index, pd.DatetimeIndex)
+        or any(pd.api.types.is_datetime64_any_dtype(df[col]) for col in df.columns)
+    )
+    temporal_warning = None
+    if has_temporal and not time_series_cv:
+        temporal_warning = (
+            "Temporal data detected: The dataset contains datetime features or a DatetimeIndex. "
+            "Standard shuffled cross-validation assumes independent and identically distributed (I.I.D.) "
+            "observations and may produce overly optimistic estimates due to temporal autocorrelation. "
+            "Consider enabling TimeSeriesSplit."
+        )
 
     if problem_type == "Regression":
         y = pd.to_numeric(clean_df[target_col], errors="coerce")
@@ -524,16 +662,31 @@ def train_and_evaluate_model(
         base_acc = round(accuracy_score(y_test, dummy_pred), 4)
         base_f1_macro = round(f1_score(y_test, dummy_pred, average="macro", zero_division=0), 4)
 
-        # Cross-validation: StratifiedKFold or KFold
+        # Cross-validation: TimeSeriesSplit, StratifiedKFold, or KFold
         class_counts = pd.Series(y).value_counts()
         min_class = class_counts.min() if len(class_counts) > 0 else 0
         cv_folds = min(5, int(min_class)) if min_class >= 2 else min(5, len(X))
         cv_acc_mean, cv_acc_std, cv_f1_mean, cv_f1_std = None, None, None, None
+        cv_sampled = False
         if cv_folds >= 2:
             try:
-                cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state) if min_class >= 2 else KFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
-                cv_acc = cross_val_score(pipe, X, y, cv=cv, scoring="accuracy")
-                cv_f1 = cross_val_score(pipe, X, y, cv=cv, scoring="f1_macro")
+                if time_series_cv:
+                    cv = TimeSeriesSplit(n_splits=cv_folds)
+                elif min_class >= 2:
+                    cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
+                else:
+                    cv = KFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
+
+                X_cv, y_cv = X, y
+                if len(X) > 10_000 and model_name in ("Random Forest", "Gradient Boosting"):
+                    cv_sample_idx = np.random.RandomState(random_state).choice(len(X), size=10_000, replace=False)
+                    if time_series_cv:
+                        cv_sample_idx = np.sort(cv_sample_idx)
+                    X_cv, y_cv = X.iloc[cv_sample_idx], y.iloc[cv_sample_idx]
+                    cv_sampled = True
+
+                cv_acc = cross_val_score(pipe, X_cv, y_cv, cv=cv, scoring="accuracy")
+                cv_f1 = cross_val_score(pipe, X_cv, y_cv, cv=cv, scoring="f1_macro")
                 cv_acc_mean = round(float(np.mean(cv_acc)), 4)
                 cv_acc_std = round(float(np.std(cv_acc)), 4)
                 cv_f1_mean = round(float(np.mean(cv_f1)), 4)
@@ -553,10 +706,13 @@ def train_and_evaluate_model(
             "f1_score": round(f1, 4),
             "f1_macro": round(f1_macro, 4),
             "cv_folds": cv_folds if cv_acc_mean is not None else None,
+            "cv_strategy": "TimeSeriesSplit" if time_series_cv else ("StratifiedKFold" if min_class >= 2 else "KFold"),
+            "cv_sampled": cv_sampled,
             "cv_accuracy_mean": cv_acc_mean,
             "cv_accuracy_std": cv_acc_std,
             "cv_f1_macro_mean": cv_f1_mean,
             "cv_f1_macro_std": cv_f1_std,
+            "temporal_warning": temporal_warning,
             "baseline_accuracy": base_acc,
             "baseline_f1_macro": base_f1_macro,
             "confusion_matrix": cm,
@@ -610,15 +766,27 @@ def train_and_evaluate_model(
         base_rmse = round(float(np.sqrt(mean_squared_error(y_test, dummy_pred))), 4)
         base_mae = round(mean_absolute_error(y_test, dummy_pred), 4)
 
-        # Cross-validation: KFold
+        # Cross-validation: TimeSeriesSplit or KFold
         cv_folds = min(5, len(X))
         cv_r2_mean, cv_r2_std, cv_rmse_mean, cv_rmse_std = None, None, None, None
+        cv_sampled = False
         if cv_folds >= 2:
             try:
-                cv = KFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
+                if time_series_cv:
+                    cv = TimeSeriesSplit(n_splits=cv_folds)
+                else:
+                    cv = KFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
                 y_num_all = pd.to_numeric(y, errors="coerce")
-                cv_r2 = cross_val_score(pipe, X, y_num_all, cv=cv, scoring="r2")
-                cv_mse = -cross_val_score(pipe, X, y_num_all, cv=cv, scoring="neg_mean_squared_error")
+                X_cv, y_cv = X, y_num_all
+                if len(X) > 10_000 and model_name in ("Random Forest", "Gradient Boosting"):
+                    cv_sample_idx = np.random.RandomState(random_state).choice(len(X), size=10_000, replace=False)
+                    if time_series_cv:
+                        cv_sample_idx = np.sort(cv_sample_idx)
+                    X_cv, y_cv = X.iloc[cv_sample_idx], y_num_all.iloc[cv_sample_idx]
+                    cv_sampled = True
+
+                cv_r2 = cross_val_score(pipe, X_cv, y_cv, cv=cv, scoring="r2")
+                cv_mse = -cross_val_score(pipe, X_cv, y_cv, cv=cv, scoring="neg_mean_squared_error")
                 cv_r2_mean = round(float(np.mean(cv_r2)), 4)
                 cv_r2_std = round(float(np.std(cv_r2)), 4)
                 cv_rmse_mean = round(float(np.mean(np.sqrt(np.maximum(0, cv_mse)))), 4)
@@ -637,10 +805,13 @@ def train_and_evaluate_model(
             "mse": round(mse, 4),
             "rmse": round(rmse, 4),
             "cv_folds": cv_folds if cv_r2_mean is not None else None,
+            "cv_strategy": "TimeSeriesSplit" if time_series_cv else "KFold",
+            "cv_sampled": cv_sampled,
             "cv_r2_mean": cv_r2_mean,
             "cv_r2_std": cv_r2_std,
             "cv_rmse_mean": cv_rmse_mean,
             "cv_rmse_std": cv_rmse_std,
+            "temporal_warning": temporal_warning,
             "baseline_r2": base_r2,
             "baseline_rmse": base_rmse,
             "baseline_mae": base_mae,
@@ -751,6 +922,19 @@ def train_and_evaluate_model(
         logger.warning("feature importance extraction failed: %s: %s", type(error).__name__, error)
         res["feature_importances"] = {}
         res["grouped_feature_importances"] = {}
+
+    try:
+        estimator = pipe.named_steps.get("classifier") or pipe.named_steps.get("regressor")
+        if estimator is not None and hasattr(estimator, "get_params"):
+            params = {}
+            for k, v in estimator.get_params().items():
+                if isinstance(v, (int, float, str, bool)) or v is None:
+                    params[k] = v
+            res["hyperparameters"] = params
+        else:
+            res["hyperparameters"] = {}
+    except Exception:
+        res["hyperparameters"] = {}
 
     # provenance so stale results can be told apart from fresh ones
     res["created_at"] = datetime.datetime.now().isoformat(timespec="seconds")

@@ -1,5 +1,4 @@
 import streamlit as st
-import hashlib
 from pathlib import Path
 
 from Utils.secrets import ask, value_of, keep_box, release
@@ -21,6 +20,8 @@ from Utils.paths import (
     MAX_AGGREGATE_UPLOAD_BYTES,
     MAX_COMBINED_ROWS,
     MAX_INGESTION_COLUMNS,
+    MAX_INGESTION_CELLS,
+    compute_upload_signature,
 )
 from Utils.AIConvert import convert_to_dataframe
 from Utils.batch import merge_frames
@@ -47,25 +48,7 @@ df = None
 file_name = None
 fresh_ingest = False
 
-def _compute_upload_signature(files):
-    sigs = []
-    for f in files:
-        f.seek(0)
-        hasher = hashlib.sha256()
-        total_size = 0
-        while True:
-            chunk = f.read(64 * 1024)
-            if not chunk:
-                break
-            if isinstance(chunk, str):
-                chunk = chunk.encode("utf-8", errors="replace")
-            hasher.update(chunk)
-            total_size += len(chunk)
-        f.seek(0)
-        size = getattr(f, "size", total_size)
-        content_hash = hasher.hexdigest()
-        sigs.append((getattr(f, "name", "file"), size, content_hash))
-    return tuple(sigs)
+_compute_upload_signature = compute_upload_signature
 
 
 if upload_mode == "Local file":
@@ -163,6 +146,13 @@ if upload_mode == "Local file":
                                     merge_error = (
                                         f"Combined column count ({combined.shape[1]:,}) exceeds the maximum supported limit of "
                                         f"{MAX_INGESTION_COLUMNS:,} columns. Merge was aborted."
+                                    )
+                                    st.error(merge_error)
+                                    file_name, df = None, None
+                                elif combined.shape[0] * combined.shape[1] > MAX_INGESTION_CELLS:
+                                    merge_error = (
+                                        f"Combined dataset cell count ({combined.shape[0] * combined.shape[1]:,}) exceeds the maximum "
+                                        f"limit of {MAX_INGESTION_CELLS:,} cells. Merge was aborted."
                                     )
                                     st.error(merge_error)
                                     file_name, df = None, None
@@ -410,13 +400,12 @@ else:
                 else:
                     try:
                         s3_client = get_s3_client(value_of("aws_access"), value_of("aws_secret"), region)
-                        df, raw_bytes = download_s3_dataset(bucket, chosen_s3_file, s3_client)
                         s3_stem = chosen_s3_file.replace("/", "_").replace("\\", "_")
                         file_name = get_unique_filename(s3_stem, directory=DATASETS_DIR)
 
                         DATASETS_DIR.mkdir(parents=True, exist_ok=True)
                         local_s3_path = DATASETS_DIR / file_name
-                        atomic_write(local_s3_path, raw_bytes, mode="wb")
+                        df, _ = download_s3_dataset(bucket, chosen_s3_file, s3_client, destination_path=local_s3_path)
                         invalidate_dataset_cache(file_name)
                         if df is None:
                             st.warning(
@@ -444,7 +433,7 @@ render_sidebar()
 active_df = st.session_state.get("current_df")
 active_name = st.session_state.get("dataset_name")
 if active_df is not None and active_name:
-    st.success(f"Active dataset: `{active_name}`")
+    st.caption(f"Active dataset: `{active_name}` ({active_df.shape[0]:,} rows × {active_df.shape[1]} columns)")
 
     st.subheader("Overview")
     col1, col2, col3, col4 = st.columns(4)

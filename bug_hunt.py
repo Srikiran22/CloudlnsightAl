@@ -2,6 +2,7 @@ import sys
 from streamlit.testing.v1 import AppTest
 
 pages = [
+    "App.py",
     "Pages/Upload.py",
     "Pages/Cleaning.py",
     "Pages/Compare.py",

@@ -3,6 +3,7 @@ import pandas as pd
 
 from Utils.dataset_ui import render_sidebar, select_working_dataset
 from Utils.logsys import get_logger
+from Utils.sampling import sample_for_analysis
 
 logger = get_logger("EDA")
 
@@ -12,7 +13,7 @@ st.markdown("Distributions, missing data, correlations, and outliers for the act
 df, selected_file = select_working_dataset("Select Dataset for EDA:")
 render_sidebar()
 
-st.success(f"Loaded: `{selected_file}`")
+st.caption(f"Active dataset: `{selected_file}` ({df.shape[0]:,} rows × {df.shape[1]} columns)")
 
 st.subheader("Overview")
 rows, columns = df.shape
@@ -27,16 +28,21 @@ with col4:
     st.metric("Categorical Features", len(df.select_dtypes(exclude="number").columns))
 
 st.subheader("Column structure & missing values")
-missing_counts = df.isnull().sum()
-missing_pcts = (missing_counts / max(rows, 1)) * 100
+
+analysis_df, is_sampled, scope_note = sample_for_analysis(df)
+if is_sampled:
+    st.info(scope_note)
+
+missing_counts = analysis_df.isnull().sum()
+missing_pcts = (missing_counts / max(len(analysis_df), 1)) * 100
 
 col_info = pd.DataFrame({
-    "Column": df.columns,
-    "Data Type": df.dtypes.astype(str).values,
-    "Non-Null Count": df.notnull().sum().values,
+    "Column": analysis_df.columns,
+    "Data Type": analysis_df.dtypes.astype(str).values,
+    "Non-Null Count": analysis_df.notnull().sum().values,
     "Missing Count": missing_counts.values,
     "Missing %": [f"{p:.2f}%" for p in missing_pcts.values],
-    "Unique Values": df.nunique().values
+    "Unique Values": analysis_df.nunique().values
 })
 st.dataframe(col_info, width="stretch")
 
@@ -44,21 +50,21 @@ st.subheader("Descriptive statistics")
 tab_num, tab_cat = st.tabs(["Numerical", "Categorical"])
 
 with tab_num:
-    num_df = df.select_dtypes(include="number")
+    num_df = analysis_df.select_dtypes(include="number")
     if not num_df.empty:
         st.dataframe(num_df.describe().transpose(), width="stretch")
     else:
         st.info("No numerical columns found in this dataset.")
 
 with tab_cat:
-    cat_df = df.select_dtypes(exclude="number")
+    cat_df = analysis_df.select_dtypes(exclude="number")
     if not cat_df.empty:
         st.dataframe(cat_df.describe().transpose(), width="stretch")
     else:
         st.info("No categorical columns found in this dataset.")
 
 st.subheader("Correlation matrix")
-numeric_df = df.select_dtypes(include="number")
+numeric_df = analysis_df.select_dtypes(include="number")
 
 if numeric_df.shape[1] >= 2:
     corr_df = numeric_df
@@ -85,7 +91,7 @@ else:
     outlier_results = []
 
     for column in numeric_columns:
-        series = df[column].dropna()
+        series = analysis_df[column].dropna()
         if len(series) == 0:
             continue
 

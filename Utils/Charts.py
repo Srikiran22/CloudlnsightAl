@@ -1,8 +1,10 @@
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from html import escape
 
 from Utils.theme import plot_template
+from Utils.sampling import sample_for_visualization
 
 
 MAX_HUE_CATEGORIES = 20
@@ -23,7 +25,8 @@ def _cap_hue_column(df, hue_col, max_categories=MAX_HUE_CATEGORIES):
 
 def create_histogram_plot(df, x_col, hue_col=None, nbins=30, marginal="box",
                           color_discrete_sequence=None):
-    plot_df = _cap_hue_column(df, hue_col)
+    df_sample, is_sampled, _ = sample_for_visualization(df)
+    plot_df = _cap_hue_column(df_sample, hue_col)
     fig = px.histogram(
         plot_df,
         x=x_col,
@@ -35,9 +38,14 @@ def create_histogram_plot(df, x_col, hue_col=None, nbins=30, marginal="box",
         color_discrete_sequence=color_discrete_sequence or px.colors.qualitative.Plotly,
         template=plot_template()
     )
+    safe_x = escape(str(x_col))
+    safe_hue = escape(str(hue_col)) if hue_col else ""
+    title_text = f"Distribution of <b>{safe_x}</b>" + (f" by {safe_hue}" if hue_col else "")
+    if is_sampled:
+        title_text += f" (sampled {len(df_sample):,}/{len(df):,} rows)"
     fig.update_layout(
-        title=f"Distribution of <b>{x_col}</b>" + (f" by {hue_col}" if hue_col else ""),
-        xaxis_title=x_col,
+        title=title_text,
+        xaxis_title=str(x_col),
         yaxis_title="Count / Frequency",
         bargap=0.05
     )
@@ -46,10 +54,14 @@ def create_histogram_plot(df, x_col, hue_col=None, nbins=30, marginal="box",
 
 def create_box_violin_plot(df, y_col, x_col=None, hue_col=None, plot_type="Box",
                            points="outliers"):
-    plot_df = _cap_hue_column(df, hue_col)
+    df_sample, is_sampled, _ = sample_for_visualization(df)
+    plot_df = _cap_hue_column(df_sample, hue_col)
     if x_col and x_col in plot_df.columns:
         plot_df = _cap_hue_column(plot_df, x_col, max_categories=MAX_HUE_CATEGORIES)
 
+    safe_y = escape(str(y_col))
+    safe_x = escape(str(x_col)) if x_col else ""
+    sample_suffix = f" (sampled {len(df_sample):,}/{len(df):,} rows)" if is_sampled else ""
     if plot_type == "Violin":
         fig = px.violin(
             plot_df,
@@ -60,7 +72,7 @@ def create_box_violin_plot(df, y_col, x_col=None, hue_col=None, plot_type="Box",
             points=points,
             template=plot_template()
         )
-        fig.update_layout(title=f"Violin Plot of <b>{y_col}</b>" + (f" across {x_col}" if x_col else ""))
+        fig.update_layout(title=f"Violin Plot of <b>{safe_y}</b>" + (f" across {safe_x}" if x_col else "") + sample_suffix)
     else:
         fig = px.box(
             plot_df,
@@ -71,9 +83,9 @@ def create_box_violin_plot(df, y_col, x_col=None, hue_col=None, plot_type="Box",
             notched=False,
             template=plot_template()
         )
-        fig.update_layout(title=f"Box Plot of <b>{y_col}</b>" + (f" across {x_col}" if x_col else ""))
+        fig.update_layout(title=f"Box Plot of <b>{safe_y}</b>" + (f" across {safe_x}" if x_col else "") + sample_suffix)
 
-    fig.update_layout(yaxis_title=y_col, xaxis_title=x_col or "")
+    fig.update_layout(yaxis_title=str(y_col), xaxis_title=str(x_col or ""))
     return fig
 
 
@@ -138,10 +150,12 @@ def create_scatter_plot(df, x_col, y_col, hue_col=None, size_col=None,
             template=plot_template(),
             hover_data=plot_df.columns[:5].tolist()
         )
+    safe_x = escape(str(x_col))
+    safe_y = escape(str(y_col))
     fig.update_layout(
-        title=f"Relationship: <b>{x_col}</b> vs <b>{y_col}</b>",
-        xaxis_title=x_col,
-        yaxis_title=y_col
+        title=f"Relationship: <b>{safe_x}</b> vs <b>{safe_y}</b>",
+        xaxis_title=str(x_col),
+        yaxis_title=str(y_col)
     )
     return fig
 
@@ -275,10 +289,12 @@ def create_line_chart(df, x_col, y_col, hue_col=None, markers=True):
         markers=markers,
         template=plot_template()
     )
+    safe_x = escape(str(x_col))
+    safe_y = escape(str(y_col))
     fig.update_layout(
-        title=f"Trend: <b>{y_col}</b> over <b>{x_col}</b>",
-        xaxis_title=x_col,
-        yaxis_title=y_col
+        title=f"Trend: <b>{safe_y}</b> over <b>{safe_x}</b>",
+        xaxis_title=str(x_col),
+        yaxis_title=str(y_col)
     )
     return fig
 
@@ -317,6 +333,7 @@ def create_pie_treemap_plot(df, names_col, values_col=None, plot_type="Pie"):
         else:
             grouped = top30
 
+    safe_names = escape(str(names_col))
     if plot_type == "Treemap":
         fig = px.treemap(
             grouped,
@@ -324,7 +341,7 @@ def create_pie_treemap_plot(df, names_col, values_col=None, plot_type="Pie"):
             values=value_name,
             template=plot_template()
         )
-        fig.update_layout(title=f"Treemap Distribution of <b>{names_col}</b>")
+        fig.update_layout(title=f"Treemap Distribution of <b>{safe_names}</b>")
     elif plot_type == "Donut":
         fig = px.pie(
             grouped,
@@ -333,7 +350,7 @@ def create_pie_treemap_plot(df, names_col, values_col=None, plot_type="Pie"):
             hole=0.45,
             template=plot_template()
         )
-        fig.update_layout(title=f"Donut Chart of <b>{names_col}</b>")
+        fig.update_layout(title=f"Donut Chart of <b>{safe_names}</b>")
     else:
         fig = px.pie(
             grouped,
@@ -341,7 +358,7 @@ def create_pie_treemap_plot(df, names_col, values_col=None, plot_type="Pie"):
             values=value_name,
             template=plot_template()
         )
-        fig.update_layout(title=f"Pie Chart of <b>{names_col}</b>")
+        fig.update_layout(title=f"Pie Chart of <b>{safe_names}</b>")
     return fig
 
 

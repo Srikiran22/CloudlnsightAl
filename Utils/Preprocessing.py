@@ -11,19 +11,27 @@ def remove_duplicates(df):
 
 _NUMERIC_STRATEGIES = {"mean", "median", "zero"}
 _CATEGORICAL_STRATEGIES = {"mode", "unknown"}
+_DATETIME_STRATEGIES = {"ffill", "ffill_bfill", "none"}
 
 
-def fill_missing_values(df, numeric_strategy="mean", categorical_strategy="mode"):
+def fill_missing_values(df, numeric_strategy="mean", categorical_strategy="mode", datetime_strategy="ffill"):
     """Impute missing values column by column.
 
     numeric_strategy: mean / median / zero (an all-null numeric column gets 0).
-    categorical_strategy: mode / unknown. Datetime columns forward/back-fill.
-    Invalid strategy names raise instead of silently imputing the wrong way.
+    categorical_strategy: mode / unknown.
+    datetime_strategy:
+        - "ffill" (default): Forward-fill only. Prevents future observations from leaking
+          backward into past timestamps (avoids temporal lookahead bias).
+        - "ffill_bfill": Forward-fill then back-fill.
+        - "none": Leave missing datetime values untouched.
+    Invalid strategy names raise ValueError instead of silently imputing the wrong way.
     """
     if numeric_strategy not in _NUMERIC_STRATEGIES:
         raise ValueError(f"Unknown numeric strategy: {numeric_strategy!r}")
     if categorical_strategy not in _CATEGORICAL_STRATEGIES:
         raise ValueError(f"Unknown categorical strategy: {categorical_strategy!r}")
+    if datetime_strategy not in _DATETIME_STRATEGIES:
+        raise ValueError(f"Unknown datetime strategy: {datetime_strategy!r}")
 
     if df is None or df.empty:
         return df
@@ -48,7 +56,12 @@ def fill_missing_values(df, numeric_strategy="mean", categorical_strategy="mode"
             cleaned_df[column] = cleaned_df[column].fillna(fill_val)
 
         elif is_datetime64_any_dtype(cleaned_df[column]):
-            cleaned_df[column] = cleaned_df[column].ffill().bfill()
+            if datetime_strategy == "ffill":
+                cleaned_df[column] = cleaned_df[column].ffill()
+            elif datetime_strategy == "ffill_bfill":
+                cleaned_df[column] = cleaned_df[column].ffill().bfill()
+            elif datetime_strategy == "none":
+                pass
 
         else:
             if categorical_strategy == "mode":

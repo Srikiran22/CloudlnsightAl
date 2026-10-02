@@ -280,7 +280,7 @@ class TestF23ModelDeserializationTrustBoundary(unittest.TestCase):
             self.assertTrue(sig_file.exists(), "Model signature file must be generated")
 
             # Load with require_signature=True must succeed
-            loaded = load_trained_model(tmp_path / "trusted_model.joblib", require_signature=True)
+            loaded = load_trained_model(tmp_path / "trusted_model.joblib", allowed_dir=tmp_path)
             self.assertEqual(loaded["problem_type"], "Classification")
             self.assertIn("pipeline", loaded)
 
@@ -305,7 +305,7 @@ class TestF23ModelDeserializationTrustBoundary(unittest.TestCase):
 
             # Loading must be blocked before joblib.load
             with self.assertRaisesRegex(ValueError, r"(?i)signature verification failed"):
-                load_trained_model(tmp_path / "tampered.joblib", require_signature=True)
+                load_trained_model(tmp_path / "tampered.joblib", allowed_dir=tmp_path)
 
     def test_unsigned_model_rejected_when_signature_required(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -314,7 +314,7 @@ class TestF23ModelDeserializationTrustBoundary(unittest.TestCase):
             model_file.write_bytes(b"some_joblib_bytes")
 
             with self.assertRaisesRegex(ValueError, r"(?i)lacks a cryptographic authenticity signature"):
-                load_trained_model(tmp_path / "unsigned.joblib", require_signature=True)
+                load_trained_model(tmp_path / "unsigned.joblib", allowed_dir=tmp_path)
 
 
 class TestF03AtomicFilenameReservation(unittest.TestCase):
@@ -400,7 +400,7 @@ class TestF13AndF15MLFeatureContractAndSemantics(unittest.TestCase):
             self.assertEqual(res["importance_type"], "Absolute Standardized Coefficient Magnitude (|β|)")
 
             mpath = save_trained_model(res, "contract_model", directory=tmp_path)
-            bundle = load_trained_model(mpath, require_signature=True)
+            bundle = load_trained_model(mpath, allowed_dir=tmp_path)
             self.assertIn("feature_dtypes", bundle)
             self.assertEqual(bundle["importance_type"], "Absolute Standardized Coefficient Magnitude (|β|)")
 

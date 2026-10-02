@@ -43,10 +43,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-lock.txt
 
-      - name: Static checks (serious errors only)
+      - name: Static checks
         run: |
           pip install ruff==0.16.4
-          ruff check --select=E9,F63,F7,F82,F821 --preview .
+          ruff check .
 
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
@@ -56,5 +56,5 @@ jobs:
 
       - name: Dependency vulnerability scan
         run: |
-          pip install pip-audit
+          pip install pip-audit==2.10.1
           pip-audit --desc on

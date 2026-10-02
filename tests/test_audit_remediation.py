@@ -749,7 +749,7 @@ class MLBundleVersionTests(unittest.TestCase):
             import joblib
             joblib.dump({"bundle_version": 999, "pipeline": "mock_pipeline"}, m_path)
             with self.assertRaisesRegex(ValueError, "newer than supported version"):
-                load_trained_model(m_path)
+                load_trained_model(m_path, allowed_dir=tmp_path, trusted=True)
 
     def test_legacy_bundle_without_version_defaults_to_v1_and_succeeds(self):
         from Utils.ML import load_trained_model
@@ -758,7 +758,7 @@ class MLBundleVersionTests(unittest.TestCase):
             m_path = tmp_path / "legacy_v1_model.joblib"
             import joblib
             joblib.dump({"pipeline": "mock_pipeline"}, m_path)
-            bundle = load_trained_model(m_path)
+            bundle = load_trained_model(m_path, allowed_dir=tmp_path, trusted=True)
             self.assertIn("pipeline", bundle)
 
     def test_invalid_bundle_version_rejected(self):
@@ -770,7 +770,7 @@ class MLBundleVersionTests(unittest.TestCase):
             for bad_ver in [0, -1, "v1", 2.5]:
                 joblib.dump({"bundle_version": bad_ver, "pipeline": "mock_pipeline"}, m_path)
                 with self.assertRaises(ValueError):
-                    load_trained_model(m_path)
+                    load_trained_model(m_path, allowed_dir=tmp_path, trusted=True)
 
 
 class S3TruncationNoticeTests(unittest.TestCase):

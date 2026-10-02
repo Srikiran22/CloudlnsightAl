@@ -13,6 +13,7 @@ from xml.sax.saxutils import escape
 
 from Utils.logsys import get_logger
 from Utils.quality import quality_metrics
+from Utils.sampling import sample_for_visualization
 
 
 logger = get_logger("PDF")
@@ -39,6 +40,47 @@ def _fmt(value, decimals=2):
         return f"{float(value):,.{decimals}f}"
     except (TypeError, ValueError):
         return str(value)
+
+
+def validate_report_template(config: dict) -> dict:
+    """Validate and sanitize report template schema to prevent configuration bugs."""
+    if not isinstance(config, dict):
+        raise ValueError("Report template must be a valid dictionary/JSON object.")
+
+    title = str(config.get("title") or "CloudInsight AI Executive Analytics Report").strip()
+    if len(title) > 200:
+        title = title[:200]
+
+    author = str(config.get("author") or "CloudInsight AI Platform").strip()
+    if len(author) > 200:
+        author = author[:200]
+
+    def _parse_bool(val, default=True):
+        if val is None:
+            return default
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, (int, float)):
+            return bool(val)
+        if isinstance(val, str):
+            v = val.strip().lower()
+            if v in ("true", "1", "yes", "on"):
+                return True
+            if v in ("false", "0", "no", "off"):
+                return False
+        return default
+
+    include_charts = _parse_bool(config.get("include_charts"), default=True)
+    include_ai = _parse_bool(config.get("include_ai"), default=True)
+
+    return {
+        "template_version": 1,
+        "title": title or "CloudInsight AI Executive Analytics Report",
+        "author": author or "CloudInsight AI Platform",
+        "include_charts": include_charts,
+        "include_ai": include_ai,
+        "saved_at": config.get("saved_at"),
+    }
 
 
 _UNICODE_FONTS_RESOLVED = False
@@ -341,6 +383,13 @@ def generate_pdf_report(
         subtitle_style
     ))
 
+    from Utils.sampling import sample_for_analysis
+    if source_rows is None:
+        source_rows = len(df)
+    df, is_sampled, _ = sample_for_analysis(df, max_rows=50_000, random_state=42)
+    if is_sampled and analyzed_rows is None:
+        analyzed_rows = len(df)
+
     rows, cols = df.shape
     num_df = df.select_dtypes(include="number")
     cat_df = df.select_dtypes(exclude="number")
@@ -624,10 +673,8 @@ def generate_pdf_report(
     charts_shown = False
     safe_chart_cols = [c for c in num_df.columns if c not in sensitive_cols]
     if include_charts and safe_chart_cols:
-        MAX_CHART_ROWS = 25_000
-        chart_sampled = len(df) > MAX_CHART_ROWS
         base_chart_df = df[safe_chart_cols]
-        chart_df = base_chart_df.head(MAX_CHART_ROWS) if chart_sampled else base_chart_df
+        chart_df, chart_sampled, _ = sample_for_visualization(base_chart_df, max_rows=25_000, random_state=42)
         chart_rows = len(chart_df)
 
         chart_images = _safe_chart(_render_histograms, chart_df, max_charts=4, default=[])
