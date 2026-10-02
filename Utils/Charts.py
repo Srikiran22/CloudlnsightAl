@@ -5,10 +5,27 @@ import plotly.graph_objects as go
 from Utils.theme import plot_template
 
 
+MAX_HUE_CATEGORIES = 20
+
+
+def _cap_hue_column(df, hue_col, max_categories=MAX_HUE_CATEGORIES):
+    """Cap high-cardinality hue column to top N categories plus 'Other' to prevent browser freeze."""
+    if not hue_col or hue_col not in df.columns:
+        return df
+    counts = df[hue_col].value_counts(dropna=False)
+    if len(counts) > max_categories:
+        top_cats = set(counts.head(max_categories).index)
+        df_copy = df.copy()
+        df_copy[hue_col] = df_copy[hue_col].apply(lambda v: v if v in top_cats else "Other")
+        return df_copy
+    return df
+
+
 def create_histogram_plot(df, x_col, hue_col=None, nbins=30, marginal="box",
                           color_discrete_sequence=None):
+    plot_df = _cap_hue_column(df, hue_col)
     fig = px.histogram(
-        df,
+        plot_df,
         x=x_col,
         color=hue_col,
         nbins=nbins,
@@ -29,9 +46,13 @@ def create_histogram_plot(df, x_col, hue_col=None, nbins=30, marginal="box",
 
 def create_box_violin_plot(df, y_col, x_col=None, hue_col=None, plot_type="Box",
                            points="outliers"):
+    plot_df = _cap_hue_column(df, hue_col)
+    if x_col and x_col in plot_df.columns:
+        plot_df = _cap_hue_column(plot_df, x_col, max_categories=MAX_HUE_CATEGORIES)
+
     if plot_type == "Violin":
         fig = px.violin(
-            df,
+            plot_df,
             y=y_col,
             x=x_col,
             color=hue_col or x_col,
@@ -42,7 +63,7 @@ def create_box_violin_plot(df, y_col, x_col=None, hue_col=None, plot_type="Box",
         fig.update_layout(title=f"Violin Plot of <b>{y_col}</b>" + (f" across {x_col}" if x_col else ""))
     else:
         fig = px.box(
-            df,
+            plot_df,
             y=y_col,
             x=x_col,
             color=hue_col or x_col,
@@ -63,10 +84,11 @@ def create_scatter_plot(df, x_col, y_col, hue_col=None, size_col=None,
         pd.api.types.is_numeric_dtype(df[x_col])
         and pd.api.types.is_numeric_dtype(df[y_col])
     )
-    plot_df = df
+    plot_df = _cap_hue_column(df, hue_col)
     if add_trendline and can_fit_trendline:
         try:
-            import statsmodels.api as _sm
+            import importlib
+            importlib.import_module("statsmodels.api")
             has_statsmodels = True
         except ImportError:
             has_statsmodels = False
@@ -77,7 +99,7 @@ def create_scatter_plot(df, x_col, y_col, hue_col=None, size_col=None,
             y_num = pd.to_numeric(df[y_col], errors="coerce")
             finite_mask = np.isfinite(x_num) & np.isfinite(y_num)
             if finite_mask.sum() >= 2:
-                plot_df = df[finite_mask]
+                plot_df = plot_df[finite_mask]
                 trendline = "ols"
             else:
                 trendline = None
@@ -106,7 +128,7 @@ def create_scatter_plot(df, x_col, y_col, hue_col=None, size_col=None,
         )
     except Exception:
         fig = px.scatter(
-            df,
+            plot_df,
             x=x_col,
             y=y_col,
             color=hue_col,
@@ -114,7 +136,7 @@ def create_scatter_plot(df, x_col, y_col, hue_col=None, size_col=None,
             trendline=None,
             opacity=0.8,
             template=plot_template(),
-            hover_data=df.columns[:5].tolist()
+            hover_data=plot_df.columns[:5].tolist()
         )
     fig.update_layout(
         title=f"Relationship: <b>{x_col}</b> vs <b>{y_col}</b>",
@@ -127,10 +149,10 @@ def create_scatter_plot(df, x_col, y_col, hue_col=None, size_col=None,
 def create_bar_count_plot(df, x_col, y_col=None, agg_func="Count", hue_col=None,
                           orientation="v"):
     # Defend against unhashable elements (e.g. lists/dicts in cells)
-    plot_df = df
+    plot_df = _cap_hue_column(df, hue_col)
     if x_col in df.columns:
         if df[x_col].apply(lambda v: isinstance(v, (list, dict, set))).any():
-            plot_df = df.copy()
+            plot_df = plot_df.copy()
             plot_df[x_col] = plot_df[x_col].astype(str)
         # Cap high-cardinality x_col to top 30 categories plus "Other"
         x_counts = plot_df[x_col].value_counts(dropna=False)
@@ -172,25 +194,78 @@ def create_bar_count_plot(df, x_col, y_col=None, agg_func="Count", hue_col=None,
     return fig
 
 
+def downsample_timeseries(df: pd.DataFrame, x_col: str, y_col: str, max_points: int = 25000, hue_col: str = None) -> pd.DataFrame:
+    """Time-preserving downsampling using min-max peak and envelope bucketing.
+
+    Guarantees that extreme spikes, periodic troughs/crests, and temporal bounds
+    are preserved without the aliasing and data loss caused by random sampling.
+    """
+    if df is None or len(df) <= max_points:
+        return df
+
+    def _downsample_single_series(sub_df: pd.DataFrame, target_n: int) -> pd.DataFrame:
+        if len(sub_df) <= target_n:
+            return sub_df
+
+        s_df = sub_df.sort_values(by=x_col).reset_index(drop=True)
+        num_buckets = max(1, target_n // 4)
+        bucket_size = len(s_df) / num_buckets
+
+        selected_indices = set()
+        y_vals = pd.to_numeric(s_df[y_col], errors="coerce").fillna(0).to_numpy()
+
+        for b in range(num_buckets):
+            start_idx = int(b * bucket_size)
+            end_idx = int((b + 1) * bucket_size) if b < num_buckets - 1 else len(s_df)
+            if start_idx >= end_idx:
+                continue
+
+            selected_indices.add(start_idx)
+            selected_indices.add(end_idx - 1)
+
+            bucket_slice = y_vals[start_idx:end_idx]
+            if len(bucket_slice) > 0:
+                import numpy as np
+                min_offset = int(np.argmin(bucket_slice))
+                max_offset = int(np.argmax(bucket_slice))
+                selected_indices.add(start_idx + min_offset)
+                selected_indices.add(start_idx + max_offset)
+
+        return s_df.iloc[sorted(selected_indices)].reset_index(drop=True)
+
+    if hue_col and hue_col in df.columns:
+        groups = []
+        unique_hues = df[hue_col].dropna().unique()
+        if len(unique_hues) > 0:
+            points_per_group = max(100, max_points // len(unique_hues))
+            for _, grp in df.groupby(hue_col):
+                groups.append(_downsample_single_series(grp, points_per_group))
+            return pd.concat(groups, ignore_index=True)
+
+    return _downsample_single_series(df, max_points)
+
+
 def create_line_chart(df, x_col, y_col, hue_col=None, markers=True):
-    if x_col in df.columns:
-        if pd.api.types.is_datetime64_any_dtype(df[x_col]):
-            sorted_df = df.sort_values(by=x_col)
+    sorted_df = _cap_hue_column(df, hue_col)
+    if x_col in sorted_df.columns:
+        if pd.api.types.is_datetime64_any_dtype(sorted_df[x_col]):
+            sorted_df = sorted_df.sort_values(by=x_col)
         else:
             # Check if date-like strings should be chronologically ordered
             try:
-                converted_dt = pd.to_datetime(df[x_col], errors="coerce")
-                non_null_count = df[x_col].dropna().shape[0]
+                converted_dt = pd.to_datetime(sorted_df[x_col], errors="coerce")
+                non_null_count = sorted_df[x_col].dropna().shape[0]
                 if non_null_count > 0 and (converted_dt.notna().sum() / non_null_count) >= 0.8:
-                    temp_df = df.copy()
+                    temp_df = sorted_df.copy()
                     temp_df["_sort_key_dt"] = converted_dt
                     sorted_df = temp_df.sort_values(by="_sort_key_dt").drop(columns=["_sort_key_dt"])
                 else:
-                    sorted_df = df.sort_values(by=x_col)
+                    sorted_df = sorted_df.sort_values(by=x_col)
             except Exception:
-                sorted_df = df.sort_values(by=x_col)
-    else:
-        sorted_df = df
+                sorted_df = sorted_df.sort_values(by=x_col)
+
+    if len(sorted_df) > 25_000 and y_col in sorted_df.columns and x_col in sorted_df.columns:
+        sorted_df = downsample_timeseries(sorted_df, x_col=x_col, y_col=y_col, max_points=25_000, hue_col=hue_col)
 
     fig = px.line(
         sorted_df,

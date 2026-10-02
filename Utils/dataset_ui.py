@@ -45,16 +45,15 @@ _CONTENT_HASH_CACHE = {}
 
 
 def invalidate_dataset_cache(dataset=None):
-    """Clear cached content fingerprints.
+    """Clear cached content fingerprints and memory-cached DataFrames.
 
     If dataset is provided, clears entries for that specific dataset path.
-    If None, clears the entire fingerprint cache. Also clears Streamlit data cache.
+    If None, clears the entire fingerprint cache and bounded memory cache.
     """
     if dataset is None:
         _CONTENT_HASH_CACHE.clear()
         try:
-            _load_cached_dataset.clear()
-            _load_cached_dataset_bounded.clear()
+            _DATASET_MEMORY_CACHE.clear()
         except Exception:
             pass
     else:
@@ -63,11 +62,7 @@ def invalidate_dataset_cache(dataset=None):
             for key in list(_CONTENT_HASH_CACHE.keys()):
                 if key[0] == target_path_str:
                     _CONTENT_HASH_CACHE.pop(key, None)
-            try:
-                _load_cached_dataset.clear()
-                _load_cached_dataset_bounded.clear()
-            except Exception:
-                pass
+            _DATASET_MEMORY_CACHE.invalidate(target_path_str)
         except Exception:
             pass
 
@@ -154,22 +149,96 @@ def results_match_active(results, selected_file, df=None):
     return False
 
 
-@st.cache_data(show_spinner="Loading dataset...", max_entries=64)
-def _load_cached_dataset(path_str, fingerprint):
-    return read_dataset(path_str)
+MAX_DATASET_CACHE_BYTES = 256 * 1024 * 1024  # 256 MB hard RAM budget for cached datasets
 
 
-@st.cache_data(show_spinner="Loading dataset subset...", max_entries=64)
-def _load_cached_dataset_bounded(path_str, fingerprint, max_rows):
-    return read_dataset(path_str, max_rows=max_rows)
+class BoundedDatasetMemoryCache:
+    """LRU dataset cache enforcing a hard total byte memory budget.
+
+    Tracks deep in-memory DataFrame size via memory_usage(deep=True) and evicts
+    oldest datasets when total memory exceeds the budget. Single datasets that
+    exceed the budget are not cached to prevent memory exhaustion.
+    """
+
+    def __init__(self, max_bytes=MAX_DATASET_CACHE_BYTES):
+        import collections
+        self.max_bytes = max_bytes
+        self.current_bytes = 0
+        self._cache = collections.OrderedDict()
+
+    def _estimate_size(self, df: pd.DataFrame) -> int:
+        try:
+            return int(df.memory_usage(index=True, deep=True).sum())
+        except Exception:
+            return int(df.shape[0] * df.shape[1] * 8)
+
+    def get(self, key):
+        if key in self._cache:
+            df, size = self._cache.pop(key)
+            self._cache[key] = (df, size)
+            return df
+        return None
+
+    def put(self, key, df: pd.DataFrame):
+        size = self._estimate_size(df)
+        if size > self.max_bytes:
+            return
+
+        if key in self._cache:
+            _, old_size = self._cache.pop(key)
+            self.current_bytes -= old_size
+
+        while self.current_bytes + size > self.max_bytes and self._cache:
+            _, (_, evicted_size) = self._cache.popitem(last=False)
+            self.current_bytes -= evicted_size
+
+        self._cache[key] = (df, size)
+        self.current_bytes += size
+
+    def invalidate(self, path_str):
+        for key in list(self._cache.keys()):
+            if key[0] == path_str:
+                _, size = self._cache.pop(key)
+                self.current_bytes -= size
+
+    def clear(self):
+        self._cache.clear()
+        self.current_bytes = 0
+
+    def stats(self):
+        return {
+            "current_bytes": self.current_bytes,
+            "max_bytes": self.max_bytes,
+            "entry_count": len(self._cache),
+        }
+
+
+_DATASET_MEMORY_CACHE = BoundedDatasetMemoryCache()
+
+
+def get_cache_memory_stats():
+    return _DATASET_MEMORY_CACHE.stats()
+
+
+def _clear_cache_stubs():
+    _DATASET_MEMORY_CACHE.clear()
+
+
+_load_cached_dataset = type("CacheStub", (), {"clear": staticmethod(_clear_cache_stubs)})()
+_load_cached_dataset_bounded = type("CacheStub", (), {"clear": staticmethod(_clear_cache_stubs)})()
 
 
 def load_dataset_cached(dataset, max_rows=None):
     path = resolve_dataset_path(dataset)
     fp = dataset_fingerprint(dataset)
-    if max_rows is None:
-        return _load_cached_dataset(str(path), fp)
-    return _load_cached_dataset_bounded(str(path), fp, max_rows)
+    cache_key = (str(path), fp, max_rows)
+    cached = _DATASET_MEMORY_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    loaded = read_dataset(path, max_rows=max_rows)
+    _DATASET_MEMORY_CACHE.put(cache_key, loaded)
+    return loaded
+
 
 
 def render_sidebar():

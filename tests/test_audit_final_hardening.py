@@ -218,8 +218,8 @@ class SecretStateResetTests(unittest.TestCase):
     def test_release_rotates_widget_version(self):
         state = {"gemini_secret": "my-secret-key", "gemini_ver": 0, "gemini_keep": False}
         with patch("Utils.secrets.st", SimpleNamespace(session_state=state)):
-            wiped = release("gemini")
-            self.assertIn("gemini", wiped)
+            cleared = release("gemini")
+            self.assertIn("gemini", cleared)
             self.assertNotIn("gemini_secret", state)
             # Widget version must be bumped to force Streamlit widget reset
             self.assertEqual(state.get("gemini_ver"), 1)
@@ -420,6 +420,169 @@ class AuditAdversarialFindingsTests(unittest.TestCase):
         # NumPy arrays: [1, 2] duplicated in A -> 2 unique; 4 in B
         self.assertEqual(row_map["arrays"]["Unique A"], 2)
         self.assertEqual(row_map["arrays"]["Unique B"], 4)
+
+
+class ConcurrencyAndManifestHardeningTests(unittest.TestCase):
+    def test_concurrent_get_unique_filename_reservations(self):
+        import concurrent.futures
+        import tempfile
+        from pathlib import Path
+        from Utils.paths import get_unique_filename
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target_dir = Path(tmpdir)
+            num_threads = 10
+            names = []
+
+            def worker():
+                return get_unique_filename("data.csv", directory=target_dir)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+                futures = [executor.submit(worker) for _ in range(num_threads)]
+                for f in concurrent.futures.as_completed(futures):
+                    names.append(f.result())
+
+            self.assertEqual(len(names), num_threads)
+            self.assertEqual(len(set(names)), num_threads, "Concurrent reservations produced duplicate names!")
+
+    def test_concurrent_manifest_record_conversion(self):
+        import concurrent.futures
+        import json
+        import tempfile
+        from pathlib import Path
+        from Utils.paths import record_conversion
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manifest_path = Path(tmpdir) / ".conversions.json"
+            num_threads = 10
+
+            def worker(i):
+                record_conversion(
+                    f"dataset_{i}.csv", f"source_{i}.txt", "raw text", model_name="test", manifest_path=manifest_path
+                )
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+                futures = [executor.submit(worker, i) for i in range(num_threads)]
+                concurrent.futures.wait(futures)
+
+            self.assertTrue(manifest_path.exists())
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.assertEqual(len(data), num_threads, f"Expected {num_threads} entries in manifest, got {len(data)}")
+
+
+class StorageCleanupAndRetentionTests(unittest.TestCase):
+    def test_cleanup_storage_prunes_orphans_and_exceeding_files(self):
+        import tempfile
+        import time
+        from pathlib import Path
+        from Utils.paths import cleanup_storage
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target_dir = Path(tmpdir)
+            # Create a tmp file
+            tmp_file = target_dir / "test.csv.tmp.12345"
+            tmp_file.write_text("orphan", encoding="utf-8")
+
+            # Create 5 old files
+            for i in range(5):
+                f = target_dir / f"dataset_{i}.csv"
+                f.write_text(f"val_{i}", encoding="utf-8")
+
+            time.sleep(0.01)
+            # Run cleanup with max_files=3
+            pruned = cleanup_storage(directory=target_dir, max_files=3, max_age_days=30)
+            self.assertIn(str(tmp_file), pruned)
+            # Check remaining regular files <= 3
+            csvs = list(target_dir.glob("*.csv"))
+            self.assertLessEqual(len(csvs), 3)
+
+    def test_delete_dataset_traversal_protection(self):
+        from Utils.paths import delete_dataset
+        with self.assertRaises(ValueError):
+            delete_dataset("../../etc/passwd")
+
+
+class PDFPIIRedactionTests(unittest.TestCase):
+    def test_pdf_report_redacts_sensitive_modal_values(self):
+        from Utils.PDF import generate_pdf_report
+        # Create dataset with sensitive SSN column
+        df = pd.DataFrame({
+            "user_ssn": ["123-45-6789", "123-45-6789", "987-65-4321"],
+            "normal_cat": ["A", "B", "A"],
+            "normal_num": [10, 20, 30]
+        })
+        pdf_bytes = generate_pdf_report(df, dataset_name="pii_test.csv")
+        self.assertGreater(len(pdf_bytes), 0)
+        # Extract text from generated PDF and verify real SSN is redacted
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        full_text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        self.assertNotIn("123-45-6789", full_text)
+        self.assertIn("[REDACTED SENSITIVE]", full_text)
+
+
+class MLInputValidationAndFeatureImportanceTests(unittest.TestCase):
+    def test_predict_with_model_validates_numeric_features(self):
+        from Utils.ML import train_and_evaluate_model, predict_with_model
+
+        train_df = pd.DataFrame({
+            "age": [25, 30, 35, 40, 45, 50],
+            "salary": [50000, 60000, 70000, 80000, 90000, 100000],
+            "target": [0, 0, 0, 1, 1, 1]
+        })
+        res = train_and_evaluate_model(
+            train_df, "target", ["age", "salary"], "Logistic Regression", "Classification"
+        )
+        # Inference with invalid string data in numeric feature
+        bad_df = pd.DataFrame({
+            "age": ["twenty-five", "thirty"],
+            "salary": [50000, 60000]
+        })
+        with self.assertRaisesRegex(ValueError, "was trained as a numeric feature"):
+            predict_with_model(res, bad_df)
+
+    def test_grouped_feature_importances_aggregates_encoded_levels(self):
+        from Utils.ML import train_and_evaluate_model
+
+        train_df = pd.DataFrame({
+            "country": ["US", "UK", "DE", "FR", "US", "DE", "UK", "FR"],
+            "age": [20, 30, 40, 50, 25, 35, 45, 55],
+            "target": [100, 200, 300, 400, 150, 250, 350, 450]
+        })
+        res = train_and_evaluate_model(
+            train_df, "target", ["country", "age"], "Linear Regression", "Regression"
+        )
+        self.assertIn("grouped_feature_importances", res)
+        grouped = res["grouped_feature_importances"]
+        self.assertIn("country", grouped)
+        self.assertIn("age", grouped)
+        # Grouped should not have one-hot encoded suffixes like country_US
+        for key in grouped.keys():
+            self.assertIn(key, ["country", "age"])
+
+
+class AIConversionHardeningTests(unittest.TestCase):
+    def test_ai_continuation_prompt_includes_preceding_context(self):
+        from Utils.AIConvert import build_continuation_prompt
+
+        prompt = build_continuation_prompt(
+            "chunk 2 text", "test.txt", ["col1", "col2"], 2, 2,
+            preceding_context="trailing data from chunk 1"
+        )
+        self.assertIn("<preceding_context_for_continuity>", prompt)
+        self.assertIn("trailing data from chunk 1", prompt)
+
+
+class DataHygieneReframingTests(unittest.TestCase):
+    def test_hygiene_metrics_returns_heuristic_scores(self):
+        from Utils.quality import hygiene_metrics, hygiene_index, quality_metrics
+
+        df = pd.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]})
+        m = hygiene_metrics(df)
+        self.assertEqual(m["index"], 100.0)
+        self.assertEqual(hygiene_index(df), 100.0)
+        self.assertEqual(m["index"], quality_metrics(df)["index"])
 
 
 if __name__ == "__main__":

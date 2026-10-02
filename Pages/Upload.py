@@ -17,8 +17,10 @@ from Utils.paths import (
     read_tabular,
     SUPPORTED_DATASET_EXTENSIONS,
     MAX_UPLOAD_FILES,
+    MAX_UPLOAD_BYTES,
     MAX_AGGREGATE_UPLOAD_BYTES,
     MAX_COMBINED_ROWS,
+    MAX_INGESTION_COLUMNS,
 )
 from Utils.AIConvert import convert_to_dataframe
 from Utils.batch import merge_frames
@@ -151,12 +153,33 @@ if upload_mode == "Local file":
                                 file_name, df = None, None
                             else:
                                 combined = merge_frames(parsed)
-                                file_name = get_unique_filename("combined_dataset.csv", directory=DATASETS_DIR)
-                                DATASETS_DIR.mkdir(parents=True, exist_ok=True)
-                                atomic_write(DATASETS_DIR / file_name, combined.to_csv(index=False), mode="w", encoding="utf-8")
-                                invalidate_dataset_cache(file_name)
-                                df = combined
-                                fresh_ingest = True
+                                csv_text = combined.to_csv(index=False)
+                                csv_bytes = csv_text.encode("utf-8")
+                                if combined.empty:
+                                    merge_error = "Combined dataset has no records or columns. Merge was aborted."
+                                    st.error(merge_error)
+                                    file_name, df = None, None
+                                elif combined.shape[1] > MAX_INGESTION_COLUMNS:
+                                    merge_error = (
+                                        f"Combined column count ({combined.shape[1]:,}) exceeds the maximum supported limit of "
+                                        f"{MAX_INGESTION_COLUMNS:,} columns. Merge was aborted."
+                                    )
+                                    st.error(merge_error)
+                                    file_name, df = None, None
+                                elif len(csv_bytes) > MAX_UPLOAD_BYTES:
+                                    merge_error = (
+                                        f"Combined dataset byte size ({len(csv_bytes)/(1024*1024):.1f} MB) exceeds the maximum "
+                                        f"limit of {MAX_UPLOAD_BYTES/(1024*1024):.0f} MB. Merge was aborted."
+                                    )
+                                    st.error(merge_error)
+                                    file_name, df = None, None
+                                else:
+                                    file_name = get_unique_filename("combined_dataset.csv", directory=DATASETS_DIR)
+                                    DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+                                    atomic_write(DATASETS_DIR / file_name, csv_text, mode="w", encoding="utf-8")
+                                    invalidate_dataset_cache(file_name)
+                                    df = combined
+                                    fresh_ingest = True
 
                     st.session_state["last_upload_signature"] = current_sig
                     st.session_state["last_upload_state"] = {
@@ -278,7 +301,7 @@ if upload_mode == "Local file":
                                 st.error(f"`{fname}` conversion failed: {conv_error}")
                     finally:
                         if release("gemini", keep_key="gemini_keep"):
-                            st.toast("Gemini key cleared from memory.")
+                            st.toast("Gemini key released from session state.")
                     pending = still_pending
 
                     if newly_converted:
@@ -297,12 +320,33 @@ if upload_mode == "Local file":
                                 file_name, df = None, None
                             else:
                                 combined = merge_frames(parsed)
-                                file_name = get_unique_filename("combined_dataset.csv", directory=DATASETS_DIR)
-                                DATASETS_DIR.mkdir(parents=True, exist_ok=True)
-                                combined.to_csv(DATASETS_DIR / file_name, index=False)
-                                invalidate_dataset_cache(file_name)
-                                df = combined
-                                fresh_ingest = True
+                                csv_text = combined.to_csv(index=False)
+                                csv_bytes = csv_text.encode("utf-8")
+                                if combined.empty:
+                                    merge_error = "Combined dataset has no records or columns. Merge was aborted."
+                                    st.error(merge_error)
+                                    file_name, df = None, None
+                                elif combined.shape[1] > MAX_INGESTION_COLUMNS:
+                                    merge_error = (
+                                        f"Combined column count ({combined.shape[1]:,}) exceeds the maximum supported limit of "
+                                        f"{MAX_INGESTION_COLUMNS:,} columns. Merge was aborted."
+                                    )
+                                    st.error(merge_error)
+                                    file_name, df = None, None
+                                elif len(csv_bytes) > MAX_UPLOAD_BYTES:
+                                    merge_error = (
+                                        f"Combined dataset byte size ({len(csv_bytes)/(1024*1024):.1f} MB) exceeds the maximum "
+                                        f"limit of {MAX_UPLOAD_BYTES/(1024*1024):.0f} MB. Merge was aborted."
+                                    )
+                                    st.error(merge_error)
+                                    file_name, df = None, None
+                                else:
+                                    file_name = get_unique_filename("combined_dataset.csv", directory=DATASETS_DIR)
+                                    DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+                                    atomic_write(DATASETS_DIR / file_name, csv_text, mode="w", encoding="utf-8")
+                                    invalidate_dataset_cache(file_name)
+                                    df = combined
+                                    fresh_ingest = True
 
                         if "last_upload_state" in st.session_state:
                             st.session_state["last_upload_state"]["parsed"] = parsed
@@ -355,7 +399,7 @@ else:
                 st.error(f"S3 connection error: {describe_s3_error(e)}")
             finally:
                 if release("aws_access", "aws_secret", keep_key="aws_keep"):
-                    st.toast("AWS credentials cleared from memory.")
+                    st.toast("AWS credentials released from session state.")
 
         s3_files_avail = st.session_state.get("s3_files", [])
         if s3_files_avail:
@@ -390,7 +434,7 @@ else:
                         st.error(f"S3 download failed: {describe_s3_error(e)}")
                     finally:
                         if release("aws_access", "aws_secret", keep_key="aws_keep"):
-                            st.toast("AWS credentials cleared from memory.")
+                            st.toast("AWS credentials released from session state.")
 
 if df is not None and file_name is not None and (fresh_ingest or not st.session_state.get("dataset_name")):
     set_active_dataset(df, file_name)

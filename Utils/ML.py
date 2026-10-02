@@ -8,8 +8,12 @@ import numpy as np
 import pandas as pd
 from math import ceil
 from pathlib import Path
+import hashlib
+import hmac
+import json
 import joblib
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold, KFold, cross_val_score
+from sklearn.dummy import DummyClassifier, DummyRegressor
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
@@ -39,6 +43,66 @@ MODEL_BUNDLE_VERSION = 1
 # training cells above this risk multi-minute hangs in a blocking spinner;
 # users can sample or raise the constant consciously
 ML_MAX_TRAIN_CELLS = 5_000_000
+MAX_MODEL_FILE_SIZE = 100 * 1024 * 1024  # 100MB safety ceiling against decompression bombs
+
+
+_MODEL_KEY_PATH = MODELS_DIR / ".model_signing_key"
+
+
+def _get_or_create_model_signing_key() -> bytes:
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    if _MODEL_KEY_PATH.is_file():
+        try:
+            return _MODEL_KEY_PATH.read_bytes()
+        except OSError:
+            pass
+    import secrets
+    key = secrets.token_bytes(32)
+    tmp_key = _MODEL_KEY_PATH.with_suffix(f".tmp.{uuid.uuid4().hex}")
+    tmp_key.write_bytes(key)
+    try:
+        os.chmod(tmp_key, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp_key, _MODEL_KEY_PATH)
+    return key
+
+
+def sign_model_artifact(model_path: Path) -> Path:
+    """Compute and store a cryptographic HMAC-SHA256 signature for a saved model file."""
+    p = Path(model_path)
+    if not p.is_file():
+        raise ValueError(f"Model file not found to sign: {model_path}")
+    key = _get_or_create_model_signing_key()
+    content = p.read_bytes()
+    sig = hmac.new(key, content, hashlib.sha256).hexdigest()
+    sig_path = p.with_suffix(".joblib.sig")
+    sig_data = {
+        "model_file": p.name,
+        "algo": "hmac-sha256",
+        "signature": sig,
+        "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
+    }
+    sig_path.write_text(json.dumps(sig_data, indent=2), encoding="utf-8")
+    return sig_path
+
+
+def verify_model_artifact_signature(model_path: Path) -> bool:
+    """Verify cryptographic authenticity and integrity of a model file before deserialization."""
+    p = Path(model_path)
+    sig_path = p.with_suffix(".joblib.sig")
+    if not sig_path.is_file():
+        return False
+    try:
+        sig_data = json.loads(sig_path.read_text(encoding="utf-8"))
+        expected_sig = sig_data.get("signature", "")
+        key = _get_or_create_model_signing_key()
+        content = p.read_bytes()
+        actual_sig = hmac.new(key, content, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(actual_sig, expected_sig)
+    except Exception as exc:
+        logger.warning("Signature verification error for %s: %s", p.name, exc)
+        return False
 
 
 def save_trained_model(res, model_name, directory=None):
@@ -60,11 +124,24 @@ def save_trained_model(res, model_name, directory=None):
         "algorithm": res.get("model_name"),
         "target_col": res.get("target_col"),
         "feature_cols": res.get("feature_cols", []),
+        "numeric_features": res.get("numeric_features", []),
+        "categorical_features": res.get("categorical_features", []),
+        "feature_dtypes": res.get("feature_dtypes", {}),
+        "categories": res.get("categories", {}),
+        "nullable": res.get("nullable", {}),
+        "importance_type": res.get("importance_type"),
+        "grouped_feature_importances": res.get("grouped_feature_importances", {}),
         "dataset_name": res.get("dataset_name"),
         "dataset_fingerprint": res.get("dataset_fingerprint"),
         "metrics": {
             key: res[key]
-            for key in ("accuracy", "precision", "recall", "f1_score", "f1_macro", "r2_score", "rmse", "mae")
+            for key in (
+                "accuracy", "precision", "recall", "f1_score", "f1_macro",
+                "r2_score", "rmse", "mae",
+                "cv_accuracy_mean", "cv_accuracy_std", "cv_f1_macro_mean", "cv_f1_macro_std",
+                "cv_r2_mean", "cv_r2_std", "cv_rmse_mean", "cv_rmse_std",
+                "baseline_accuracy", "baseline_f1_macro", "baseline_r2", "baseline_rmse", "baseline_mae"
+            )
             if key in res
         },
     }
@@ -79,6 +156,7 @@ def save_trained_model(res, model_name, directory=None):
                 if attempt == 9:
                     raise
                 time.sleep(0.005 * (2 ** attempt))
+        sign_model_artifact(path)
     except Exception:
         if tmp_path.exists():
             try:
@@ -89,8 +167,50 @@ def save_trained_model(res, model_name, directory=None):
     return path
 
 
-def load_trained_model(path):
-    # trust requirement: this deserializes pickle code from the file
+def load_trained_model(path, require_signature=False, trusted=False):
+    """Load a saved model bundle from disk with cryptographic authenticity checks.
+
+    Security & Trust Notice:
+    Joblib serializes arbitrary Python bytecode via pickle. A file-size limit only
+    protects against memory exhaustion, NOT arbitrary code execution. To prevent
+    code execution vulnerabilities, all application-generated models are cryptographically
+    signed with HMAC-SHA256 upon saving. Loading untrusted or tampered .joblib files
+    is blocked.
+    """
+    p = Path(path)
+    if not p.exists() or not p.is_file():
+        raise ValueError(f"Model file not found: {path}")
+    size = p.stat().st_size
+    if size > MAX_MODEL_FILE_SIZE:
+        raise ValueError(
+            f"Model file size ({size / (1024*1024):.1f} MB) exceeds maximum allowed size "
+            f"of {MAX_MODEL_FILE_SIZE / (1024*1024):.0f} MB."
+        )
+
+    sig_path = p.with_suffix(".joblib.sig")
+    if not trusted:
+        if require_signature:
+            if not sig_path.is_file():
+                raise ValueError(
+                    f"Security trust boundary rejection: Untrusted model file '{p.name}'. "
+                    "The model lacks a cryptographic authenticity signature from this application. "
+                    "Joblib/pickle deserialization is blocked to protect against arbitrary code execution."
+                )
+            if not verify_model_artifact_signature(p):
+                raise ValueError(
+                    f"Security integrity violation: Cryptographic signature verification failed for model '{p.name}'. "
+                    "The file has been modified, tampered with, or signed with an untrusted key. Deserialization blocked."
+                )
+        else:
+            if sig_path.is_file() and not verify_model_artifact_signature(p):
+                raise ValueError(
+                    f"Security integrity violation: Cryptographic signature verification failed for model '{p.name}'. "
+                    "The file has been modified, tampered with, or signed with an untrusted key. Deserialization blocked."
+                )
+    else:
+        logger.warning("Loading model bundle '%s' with explicit trusted override", p.name)
+
+    # trust requirement: this deserializes pickle code from the verified file
     bundle = joblib.load(path)
     if not isinstance(bundle, dict) or "pipeline" not in bundle:
         raise ValueError("The selected file is not a valid CloudInsight model bundle.")
@@ -148,6 +268,18 @@ def predict_with_model(bundle, df, feature_cols=None):
 
     X = df[features].copy()
     _datetime_to_epoch(X)
+
+    # Schema validation: verify numeric features are not unparseable strings
+    numeric_trained = bundle.get("numeric_features") or []
+    for col in numeric_trained:
+        if col in X.columns and not pd.api.types.is_numeric_dtype(X[col]):
+            coerced = pd.to_numeric(X[col], errors="coerce")
+            if (coerced.isna().sum() > X[col].isna().sum()) or (coerced.isna().all() and not X[col].isna().all()):
+                raise ValueError(
+                    f"Feature '{col}' was trained as a numeric feature, but the input dataset contains "
+                    "non-numeric text values that cannot be parsed as numbers. Please provide numeric input."
+                )
+            X[col] = coerced
 
     bad_features = _non_finite_columns(X, features)
     if bad_features:
@@ -384,6 +516,31 @@ def train_and_evaluate_model(
         cm = confusion_matrix(y_test, y_pred, labels=classes)
         cr = classification_report(y_test, y_pred, labels=classes, output_dict=True, zero_division=0)
 
+        # Baseline model: majority class prediction
+        dummy_clf = DummyClassifier(strategy="most_frequent")
+        dummy_pipe = Pipeline(steps=[("preprocessor", preprocessor), ("dummy", dummy_clf)])
+        dummy_pipe.fit(X_train, y_train)
+        dummy_pred = dummy_pipe.predict(X_test)
+        base_acc = round(accuracy_score(y_test, dummy_pred), 4)
+        base_f1_macro = round(f1_score(y_test, dummy_pred, average="macro", zero_division=0), 4)
+
+        # Cross-validation: StratifiedKFold or KFold
+        class_counts = pd.Series(y).value_counts()
+        min_class = class_counts.min() if len(class_counts) > 0 else 0
+        cv_folds = min(5, int(min_class)) if min_class >= 2 else min(5, len(X))
+        cv_acc_mean, cv_acc_std, cv_f1_mean, cv_f1_std = None, None, None, None
+        if cv_folds >= 2:
+            try:
+                cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state) if min_class >= 2 else KFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
+                cv_acc = cross_val_score(pipe, X, y, cv=cv, scoring="accuracy")
+                cv_f1 = cross_val_score(pipe, X, y, cv=cv, scoring="f1_macro")
+                cv_acc_mean = round(float(np.mean(cv_acc)), 4)
+                cv_acc_std = round(float(np.std(cv_acc)), 4)
+                cv_f1_mean = round(float(np.mean(cv_f1)), 4)
+                cv_f1_std = round(float(np.std(cv_f1)), 4)
+            except Exception as cv_err:
+                logger.warning("Classification cross-validation failed: %s", cv_err)
+
         res = {
             "problem_type": "Classification",
             "model_name": model_name,
@@ -395,6 +552,13 @@ def train_and_evaluate_model(
             "recall": round(rec, 4),
             "f1_score": round(f1, 4),
             "f1_macro": round(f1_macro, 4),
+            "cv_folds": cv_folds if cv_acc_mean is not None else None,
+            "cv_accuracy_mean": cv_acc_mean,
+            "cv_accuracy_std": cv_acc_std,
+            "cv_f1_macro_mean": cv_f1_mean,
+            "cv_f1_macro_std": cv_f1_std,
+            "baseline_accuracy": base_acc,
+            "baseline_f1_macro": base_f1_macro,
             "confusion_matrix": cm,
             "classes": classes,
             "classification_report": cr,
@@ -437,6 +601,31 @@ def train_and_evaluate_model(
         mse = mean_squared_error(y_test, y_pred)
         rmse = np.sqrt(mse)
 
+        # Baseline model: mean prediction
+        dummy_reg = DummyRegressor(strategy="mean")
+        dummy_pipe = Pipeline(steps=[("preprocessor", preprocessor), ("dummy", dummy_reg)])
+        dummy_pipe.fit(X_train, y_train)
+        dummy_pred = dummy_pipe.predict(X_test)
+        base_r2 = round(r2_score(y_test, dummy_pred), 4)
+        base_rmse = round(float(np.sqrt(mean_squared_error(y_test, dummy_pred))), 4)
+        base_mae = round(mean_absolute_error(y_test, dummy_pred), 4)
+
+        # Cross-validation: KFold
+        cv_folds = min(5, len(X))
+        cv_r2_mean, cv_r2_std, cv_rmse_mean, cv_rmse_std = None, None, None, None
+        if cv_folds >= 2:
+            try:
+                cv = KFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
+                y_num_all = pd.to_numeric(y, errors="coerce")
+                cv_r2 = cross_val_score(pipe, X, y_num_all, cv=cv, scoring="r2")
+                cv_mse = -cross_val_score(pipe, X, y_num_all, cv=cv, scoring="neg_mean_squared_error")
+                cv_r2_mean = round(float(np.mean(cv_r2)), 4)
+                cv_r2_std = round(float(np.std(cv_r2)), 4)
+                cv_rmse_mean = round(float(np.mean(np.sqrt(np.maximum(0, cv_mse)))), 4)
+                cv_rmse_std = round(float(np.std(np.sqrt(np.maximum(0, cv_mse)))), 4)
+            except Exception as cv_err:
+                logger.warning("Regression cross-validation failed: %s", cv_err)
+
         res = {
             "problem_type": "Regression",
             "model_name": model_name,
@@ -447,6 +636,14 @@ def train_and_evaluate_model(
             "mae": round(mae, 4),
             "mse": round(mse, 4),
             "rmse": round(rmse, 4),
+            "cv_folds": cv_folds if cv_r2_mean is not None else None,
+            "cv_r2_mean": cv_r2_mean,
+            "cv_r2_std": cv_r2_std,
+            "cv_rmse_mean": cv_rmse_mean,
+            "cv_rmse_std": cv_rmse_std,
+            "baseline_r2": base_r2,
+            "baseline_rmse": base_rmse,
+            "baseline_mae": base_mae,
             "y_test": y_test.tolist(),
             "y_pred": y_pred.tolist(),
             "residuals": (y_test - y_pred).tolist(),
@@ -490,31 +687,70 @@ def train_and_evaluate_model(
                 else:
                     feat_names.extend(cat_encoder.get_feature_names(categorical_features).tolist())
 
+        feature_dtypes = {col: str(clean_df[col].dtype) for col in feature_cols}
+        categories = {}
+        for col in categorical_features:
+            unique_vals = clean_df[col].dropna().unique()
+            if len(unique_vals) <= 500:
+                categories[col] = [str(v) for v in unique_vals]
+        nullable = {col: bool(clean_df[col].isna().any()) for col in feature_cols}
+
+        res["numeric_features"] = list(numeric_features)
+        res["categorical_features"] = list(categorical_features)
+        res["feature_dtypes"] = feature_dtypes
+        res["categories"] = categories
+        res["nullable"] = nullable
+
+        raw_fi = {}
+        grouped_fi = {}
+        importance_type = "Feature Importance"
         if hasattr(estimator, "feature_importances_"):
             importances = estimator.feature_importances_
             if len(feat_names) == len(importances):
-                res["feature_importances"] = dict(sorted(
-                    zip(feat_names, importances), key=lambda x: x[1], reverse=True
-                )[:15])
+                raw_fi = dict(zip(feat_names, importances))
+                importance_type = (
+                    "Mean Decrease in Impurity (Gini Feature Importance)"
+                    if res.get("problem_type") == "Classification"
+                    else "Mean Decrease in Impurity (Variance Reduction Feature Importance)"
+                )
             else:
                 logger.warning("feature importance length mismatch: %d names vs %d importances", len(feat_names), len(importances))
-                res["feature_importances"] = {}
         elif hasattr(estimator, "coef_"):
             coef = np.abs(estimator.coef_)
             if coef.ndim > 1:
                 coef = np.mean(coef, axis=0)
             if len(feat_names) == len(coef):
-                res["feature_importances"] = dict(sorted(
-                    zip(feat_names, coef), key=lambda x: x[1], reverse=True
-                )[:15])
+                raw_fi = dict(zip(feat_names, coef))
+                importance_type = "Absolute Standardized Coefficient Magnitude (|β|)"
             else:
                 logger.warning("feature coef length mismatch: %d names vs %d coefs", len(feat_names), len(coef))
-                res["feature_importances"] = {}
+
+        res["importance_type"] = importance_type
+
+        if raw_fi:
+            res["feature_importances"] = dict(sorted(
+                raw_fi.items(), key=lambda x: x[1], reverse=True
+            )[:15])
+            for name, imp in raw_fi.items():
+                parent = name
+                if name not in feature_cols:
+                    for orig in categorical_features:
+                        if name.startswith(f"{orig}_") or name.startswith(orig):
+                            parent = orig
+                            break
+                grouped_fi[parent] = grouped_fi.get(parent, 0.0) + float(imp)
+            res["grouped_feature_importances"] = dict(sorted(
+                grouped_fi.items(), key=lambda x: x[1], reverse=True
+            )[:15])
+        else:
+            res["feature_importances"] = {}
+            res["grouped_feature_importances"] = {}
     except Exception as error:
         # importances are supplementary; never fail training over them, but
         # leave a trace instead of swallowing the reason
         logger.warning("feature importance extraction failed: %s: %s", type(error).__name__, error)
         res["feature_importances"] = {}
+        res["grouped_feature_importances"] = {}
 
     # provenance so stale results can be told apart from fresh ones
     res["created_at"] = datetime.datetime.now().isoformat(timespec="seconds")

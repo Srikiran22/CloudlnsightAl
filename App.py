@@ -51,7 +51,7 @@ def render_home():
             the active dataset shown in the sidebar.
 
             A Gemini API key is only needed for AI conversion, insights,
-            and chat; it is entered at runtime and wiped from memory after
+            and chat; it is entered at runtime and cleared from session state after
             each task unless you choose to keep it for the session.
             """
         )

@@ -1,8 +1,11 @@
+import codecs
 import csv
 import hashlib
 import io
 import json
 import os
+import re
+import threading
 import time
 import uuid
 from html.parser import HTMLParser
@@ -68,24 +71,86 @@ def safe_stem(value, fallback="model"):
     return cleaned or fallback
 
 
-def get_unique_filename(filename, directory=DATASETS_DIR, extra_names=None):
-    """Ensure a filename does not collide with existing files on disk or extra names in memory.
+_FILENAME_LOCK = threading.Lock()
+_RESERVED_FILENAMES = {}  # (dir_str, name): expire_time
 
+
+def release_filename_reservation(filename, directory=DATASETS_DIR):
+    """Explicitly release an in-flight reservation."""
+    with _FILENAME_LOCK:
+        target_dir = Path(directory)
+        dir_key = str(target_dir.resolve()) if target_dir.exists() else str(target_dir)
+        safe_name = Path(filename).name
+        _RESERVED_FILENAMES.pop((dir_key, safe_name), None)
+        try:
+            (target_dir / f".{safe_name}.reserve").unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def get_unique_filename(filename, directory=DATASETS_DIR, extra_names=None):
+    """Ensure a filename does not collide with existing files on disk, extra names, or concurrent allocations.
+
+    Guarantees cross-thread AND cross-process safety via atomic filesystem reservations (O_CREAT | O_EXCL).
     Generates deterministic names:
       data.csv -> data_1.csv -> data_2.csv
     """
-    target_dir = Path(directory)
-    extra = set(extra_names or [])
-    name = Path(filename).name
-    stem = Path(name).stem
-    suffix = Path(name).suffix
+    with _FILENAME_LOCK:
+        now = time.monotonic()
+        epoch_now = time.time()
+        # Clean expired in-memory reservations older than 60s
+        expired = [k for k, exp in list(_RESERVED_FILENAMES.items()) if now > exp]
+        for k in expired:
+            _RESERVED_FILENAMES.pop(k, None)
 
-    candidate = name
-    counter = 1
-    while (target_dir / candidate).exists() or candidate in extra:
-        candidate = f"{stem}_{counter}{suffix}"
-        counter += 1
-    return candidate
+        target_dir = Path(directory)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        dir_key = str(target_dir.resolve()) if target_dir.exists() else str(target_dir)
+        extra = set(extra_names or [])
+        name = Path(filename).name
+        stem = Path(name).stem
+        suffix = Path(name).suffix
+
+        candidate = name
+        counter = 1
+        while True:
+            # Check disk, extra names, in-memory registry
+            if (
+                (target_dir / candidate).exists()
+                or candidate in extra
+                or (dir_key, candidate) in _RESERVED_FILENAMES
+            ):
+                candidate = f"{stem}_{counter}{suffix}"
+                counter += 1
+                continue
+
+            # Atomic cross-process reservation check via .reserve marker file
+            res_file = target_dir / f".{candidate}.reserve"
+            if res_file.exists():
+                try:
+                    if (epoch_now - res_file.stat().st_mtime) > 60.0:
+                        res_file.unlink(missing_ok=True)
+                    else:
+                        candidate = f"{stem}_{counter}{suffix}"
+                        counter += 1
+                        continue
+                except OSError:
+                    candidate = f"{stem}_{counter}{suffix}"
+                    counter += 1
+                    continue
+
+            try:
+                fd = os.open(str(res_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                try:
+                    os.write(fd, str(epoch_now).encode("ascii"))
+                finally:
+                    os.close(fd)
+                _RESERVED_FILENAMES[(dir_key, candidate)] = now + 60.0
+                return candidate
+            except (FileExistsError, PermissionError):
+                candidate = f"{stem}_{counter}{suffix}"
+                counter += 1
+                continue
 
 
 def enforce_size_limit(size_in_bytes, label="File"):
@@ -140,6 +205,13 @@ def atomic_write(target_path, content, mode="w", encoding="utf-8"):
         for attempt in range(10):
             try:
                 os.replace(tmp_path, p)
+                with _FILENAME_LOCK:
+                    dir_key = str(p.parent.resolve()) if p.parent.exists() else str(p.parent)
+                    _RESERVED_FILENAMES.pop((dir_key, p.name), None)
+                    try:
+                        (p.parent / f".{p.name}.reserve").unlink(missing_ok=True)
+                    except OSError:
+                        pass
                 break
             except PermissionError:
                 if attempt == 9:
@@ -172,6 +244,9 @@ def compute_conversion_provenance(raw_text, model_name=None, extra_instructions=
     return hasher.hexdigest()[:32]
 
 
+_MANIFEST_LOCK = threading.Lock()
+
+
 def record_conversion(
     converted_name,
     source_name,
@@ -184,14 +259,6 @@ def record_conversion(
     """Record provenance metadata for an AI-converted file in the manifest."""
     ensure_project_directories()
     manifest_file = Path(manifest_path) if manifest_path is not None else CONVERSIONS_MANIFEST
-    manifest = {}
-    if manifest_file.exists():
-        try:
-            loaded = json.loads(manifest_file.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                manifest = loaded
-        except Exception:
-            manifest = {}
     prov_hash = compute_conversion_provenance(raw_text, model_name=model_name, extra_instructions=extra_instructions)
     target_dir = Path(datasets_dir) if datasets_dir is not None else (
         manifest_file.parent if (manifest_file.parent / converted_name).is_file()
@@ -206,32 +273,48 @@ def record_conversion(
                 hasher.update(chunk)
         output_hash = hasher.hexdigest()
 
-    manifest[converted_name] = {
-        "source_name": source_name,
-        "provenance_hash": prov_hash,
-        "model_name": (model_name or "").strip(),
-        "extra_instructions": (extra_instructions or "").strip(),
-        "extra_instructions_hash": (
-            hashlib.sha256((extra_instructions or "").strip().encode("utf-8")).hexdigest()[:16]
-            if extra_instructions
-            else ""
-        ),
-        "output_hash": output_hash,
-        "version": CONVERSION_MANIFEST_VERSION,
-        "source_length": len(raw_text),
-    }
-    manifest_file.parent.mkdir(parents=True, exist_ok=True)
-    tmp_manifest = manifest_file.with_name(f"{manifest_file.name}.tmp.{os.getpid()}")
-    try:
-        tmp_manifest.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        os.replace(tmp_manifest, manifest_file)
-    except Exception:
-        if tmp_manifest.exists():
+    with _MANIFEST_LOCK:
+        manifest = {}
+        if manifest_file.exists():
             try:
-                tmp_manifest.unlink()
-            except OSError:
-                pass
-        raise
+                loaded = json.loads(manifest_file.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    manifest = loaded
+            except Exception:
+                manifest = {}
+
+        manifest[converted_name] = {
+            "source_name": source_name,
+            "provenance_hash": prov_hash,
+            "model_name": (model_name or "").strip(),
+            "extra_instructions": (extra_instructions or "").strip(),
+            "extra_instructions_hash": (
+                hashlib.sha256((extra_instructions or "").strip().encode("utf-8")).hexdigest()[:16]
+                if extra_instructions
+                else ""
+            ),
+            "output_hash": output_hash,
+            "version": CONVERSION_MANIFEST_VERSION,
+            "source_length": len(raw_text),
+        }
+        manifest_file.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            for stale in manifest_file.parent.glob(f"{manifest_file.name}.tmp.*"):
+                if stale.is_file() and (time.time() - stale.stat().st_mtime) > 60:
+                    stale.unlink(missing_ok=True)
+        except OSError:
+            pass
+        tmp_manifest = manifest_file.with_name(f"{manifest_file.name}.tmp.{uuid.uuid4().hex}")
+        try:
+            tmp_manifest.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            os.replace(tmp_manifest, manifest_file)
+        except Exception:
+            if tmp_manifest.exists():
+                try:
+                    tmp_manifest.unlink()
+                except OSError:
+                    pass
+            raise
 
 
 def get_valid_conversion(
@@ -295,6 +378,113 @@ def get_valid_conversion(
     return None
 
 
+def cleanup_storage(
+    directory=DATASETS_DIR,
+    max_age_seconds=None,
+    max_age_days=None,
+    max_files=None,
+    preserve_names=None,
+    include_temp_only=False,
+):
+    """Safely prune old or temporary files from a managed directory (retention control)."""
+    target_dir = Path(directory).resolve()
+    if not target_dir.exists():
+        return []
+
+    if max_age_days is not None and max_age_seconds is None:
+        max_age_seconds = max_age_days * 86400
+
+    preserve = set(preserve_names or [])
+    preserve.add(".conversions.json")
+    preserve.add(".gitkeep")
+
+    removed_files = []
+    now = time.time()
+    try:
+        files = [p for p in target_dir.iterdir() if p.is_file() and p.name not in preserve]
+    except OSError:
+        return []
+
+    # Clean orphaned temporary files
+    for p in files:
+        if ".tmp." in p.name:
+            try:
+                p.unlink(missing_ok=True)
+                removed_files.append(str(p))
+            except OSError:
+                pass
+
+    if include_temp_only:
+        return removed_files
+
+    try:
+        remaining_files = [p for p in target_dir.iterdir() if p.is_file() and p.name not in preserve and ".tmp." not in p.name]
+    except OSError:
+        return removed_files
+
+    if max_age_seconds is not None:
+        for p in remaining_files:
+            try:
+                if (now - p.stat().st_mtime) > max_age_seconds:
+                    p.unlink(missing_ok=True)
+                    removed_files.append(str(p))
+            except OSError:
+                pass
+
+    if max_files is not None and max_files > 0:
+        try:
+            valid = [p for p in target_dir.iterdir() if p.is_file() and p.name not in preserve and ".tmp." not in p.name]
+            if len(valid) > max_files:
+                valid.sort(key=lambda p: p.stat().st_mtime)
+                excess = len(valid) - max_files
+                for p in valid[:excess]:
+                    try:
+                        p.unlink(missing_ok=True)
+                        removed_files.append(str(p))
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+
+    return removed_files
+
+
+def delete_dataset(filename, directory=DATASETS_DIR):
+    """Safely delete a dataset file and remove any manifest/provenance records."""
+    target_dir = Path(directory).resolve()
+    fn_path = Path(filename)
+    if ".." in fn_path.parts or fn_path.is_absolute():
+        raise ValueError(f"Path traversal detected in filename: {filename}")
+    safe_name = fn_path.name
+    target_path = (target_dir / safe_name).resolve()
+    if not target_path.is_relative_to(target_dir):
+        raise ValueError(f"Filename {filename} escapes target directory {target_dir}.")
+    if target_path.is_file():
+        target_path.unlink()
+        manifest_file = target_dir / ".conversions.json"
+        if manifest_file.exists():
+            with _MANIFEST_LOCK:
+                try:
+                    data = json.loads(manifest_file.read_text(encoding="utf-8"))
+                    if isinstance(data, dict) and safe_name in data:
+                        del data[safe_name]
+                        tmp_manifest = manifest_file.with_name(f"{manifest_file.name}.tmp.{uuid.uuid4().hex}")
+                        try:
+                            tmp_manifest.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                            os.replace(tmp_manifest, manifest_file)
+                        except Exception:
+                            if tmp_manifest.exists():
+                                try:
+                                    tmp_manifest.unlink()
+                                except OSError:
+                                    pass
+                            raise
+                except Exception:
+                    pass
+        return True
+    return False
+
+
 def get_dataset_row_count(dataset):
     """Lightweight determination of exact source row count without full dataset materialization."""
     path = resolve_dataset_path(dataset)
@@ -347,18 +537,21 @@ def get_dataset_row_count(dataset):
 
 
 def list_dataset_files(directory=DATASETS_DIR):
-    target_dir = Path(directory)
-    if target_dir == DATASETS_DIR:
+    if directory is None or directory == DATASETS_DIR:
         ensure_project_directories()
+        target_dir = DATASETS_DIR
+    else:
+        target_dir = Path(directory)
     datasets_root = target_dir.resolve()
     valid_files = []
-    for path in target_dir.iterdir():
-        if path.is_file() and not path.name.startswith(".") and path.suffix.lower() in SUPPORTED_DATASET_EXTENSIONS:
-            try:
-                if path.resolve().parent == datasets_root:
-                    valid_files.append(path.name)
-            except OSError:
-                continue
+    if target_dir.exists():
+        for path in target_dir.iterdir():
+            if path.is_file() and not path.name.startswith(".") and path.suffix.lower() in SUPPORTED_DATASET_EXTENSIONS:
+                try:
+                    if path.resolve().parent == datasets_root:
+                        valid_files.append(path.name)
+                except OSError:
+                    continue
     return sorted(valid_files)
 
 
@@ -549,36 +742,301 @@ def _read_delimited_text(text, nrows=None):
     return df
 
 
-def _stream_json_array(text, nrows):
-    """Incremental decoder for JSON root arrays so only nrows objects are materialized."""
-    s_text = text.lstrip()
-    if not s_text.startswith("["):
-        return None
-    decoder = json.JSONDecoder()
-    idx = text.find("[") + 1
-    length = len(text)
-    records = []
-    while idx < length and len(records) < nrows:
-        while idx < length and text[idx] in " \t\r\n,":
-            idx += 1
-        if idx >= length or text[idx] == "]":
-            break
+def _stream_json_from_buffer(buffer, nrows):
+    """Incremental row-bounded stream decoder for JSON structures directly from a file-like buffer.
+
+    Reads chunk by chunk (64KB) without materializing the full payload into memory as a string.
+    Supports root arrays, keyed record arrays, and columnar tables. Stops reading the underlying
+    stream immediately once nrows objects/values are parsed, guaranteeing that malformed data
+    or gigabytes of unrequested rows after the boundary are never read, decoded, or materialized.
+    """
+    buffer.seek(0)
+    pos = buffer.tell() if hasattr(buffer, "tell") else 0
+    raw_head = buffer.read(4)
+    if hasattr(buffer, "seek"):
+        buffer.seek(pos)
+
+    enc = "utf-8"
+    if raw_head.startswith(codecs.BOM_UTF8):
+        enc = "utf-8-sig"
+    elif raw_head.startswith(codecs.BOM_UTF16_LE):
+        enc = "utf-16-le"
+    elif raw_head.startswith(codecs.BOM_UTF16_BE):
+        enc = "utf-16-be"
+    elif raw_head.startswith(codecs.BOM_UTF32_LE):
+        enc = "utf-32-le"
+    elif raw_head.startswith(codecs.BOM_UTF32_BE):
+        enc = "utf-32-be"
+
+    inc_dec = codecs.getincrementaldecoder(enc)(errors="replace")
+
+    def _chunk_gen():
+        while chunk := buffer.read(65536):
+            text = inc_dec.decode(chunk, False)
+            if text:
+                yield text
+        tail = inc_dec.decode(b"", True)
+        if tail:
+            yield tail
+
+    it = _chunk_gen()
+    buf = ""
+
+    def _need_more():
+        nonlocal buf
         try:
-            obj, next_idx = decoder.raw_decode(text, idx)
-            records.append(obj)
-            idx = next_idx
-        except ValueError:
-            return None
-    return records
+            buf += next(it)
+            return True
+        except StopIteration:
+            return False
+
+    while not buf.strip() and _need_more():
+        pass
+    buf = buf.lstrip()
+    if not buf:
+        return None
+
+    decoder = json.JSONDecoder()
+
+    # 1. Root-level array
+    if buf[0] == "[":
+        buf = buf[1:]
+        records = []
+        while len(records) < nrows:
+            while True:
+                buf = buf.lstrip(" \t\r\n,")
+                if buf:
+                    break
+                if not _need_more():
+                    break
+            if not buf or buf[0] == "]":
+                break
+            while True:
+                try:
+                    obj, end_idx = decoder.raw_decode(buf)
+                    records.append(obj)
+                    buf = buf[end_idx:]
+                    break
+                except json.JSONDecodeError as err:
+                    if not _need_more():
+                        if buf.strip() and not buf.strip().startswith("]"):
+                            raise ValueError(f"Malformed JSON dataset: {err}") from err
+                        return records if records else None
+                    if len(buf) > 10 * 1024 * 1024:
+                        raise ValueError("Individual JSON row object exceeds maximum size limit (10MB).")
+        return records
+
+    # 2. Outer dict (keyed record array or columnar)
+    if buf[0] == "{":
+        while "[" not in buf and _need_more():
+            if len(buf) > 5 * 1024 * 1024:
+                break
+
+        if "[" in buf:
+            key_matches = list(re.finditer(r'"((?:\\.|[^"\\])*)"\s*:\s*\[', buf))
+            record_array_matches = []
+            columnar_matches = []
+            for m in key_matches:
+                col_name = m.group(1)
+                start_bracket = buf.find("[", m.start())
+                idx_after = start_bracket + 1
+                while idx_after < len(buf) and buf[idx_after] in " \t\r\n":
+                    idx_after += 1
+                if idx_after >= len(buf) and _need_more():
+                    while idx_after < len(buf) and buf[idx_after] in " \t\r\n":
+                        idx_after += 1
+                if idx_after < len(buf) and buf[idx_after] == "{":
+                    record_array_matches.append((col_name, start_bracket + 1))
+                else:
+                    columnar_matches.append((col_name, start_bracket + 1))
+
+            if len(record_array_matches) > 1:
+                keys = sorted([k for k, _ in record_array_matches])
+                raise ValueError(f"Ambiguous JSON structure: multiple top-level record lists found ({', '.join(keys)}). Extract the target list before ingestion.")
+
+            if len(record_array_matches) == 1:
+                idx = record_array_matches[0][1]
+                records = []
+                while len(records) < nrows:
+                    while idx < len(buf) and buf[idx] in " \t\r\n,":
+                        idx += 1
+                    if idx >= len(buf) and _need_more():
+                        while idx < len(buf) and buf[idx] in " \t\r\n,":
+                            idx += 1
+                    if idx >= len(buf) or buf[idx] == "]":
+                        break
+                    while True:
+                        try:
+                            obj, next_idx = decoder.raw_decode(buf, idx)
+                            records.append(obj)
+                            idx = next_idx
+                            break
+                        except json.JSONDecodeError as err:
+                            if not _need_more():
+                                if buf.strip() and not buf.strip().startswith("]"):
+                                    raise ValueError(f"Malformed JSON dataset: {err}") from err
+                                return records if records else None
+                return records
+
+            has_scalar_keys = bool(re.search(r'"(?:\\.|[^"\\])*"\s*:\s*(?:true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|"(?:\\.|[^"\\])*")\s*(?:,|})', buf))
+            if columnar_matches and not record_array_matches and not has_scalar_keys:
+                columns_data = {}
+                for col_name, start_idx in columnar_matches:
+                    idx = start_idx
+                    col_vals = []
+                    while len(col_vals) < nrows:
+                        while idx < len(buf) and buf[idx] in " \t\r\n,":
+                            idx += 1
+                        if idx >= len(buf) and _need_more():
+                            while idx < len(buf) and buf[idx] in " \t\r\n,":
+                                idx += 1
+                        if idx >= len(buf) or buf[idx] == "]":
+                            break
+                        try:
+                            val, next_idx = decoder.raw_decode(buf, idx)
+                            if isinstance(val, (dict, list)):
+                                col_vals = None
+                                break
+                            col_vals.append(val)
+                            idx = next_idx
+                        except json.JSONDecodeError:
+                            if not _need_more():
+                                break
+                            try:
+                                val, next_idx = decoder.raw_decode(buf, idx)
+                                if isinstance(val, (dict, list)):
+                                    col_vals = None
+                                    break
+                                col_vals.append(val)
+                                idx = next_idx
+                            except json.JSONDecodeError:
+                                col_vals = None
+                                break
+                    if col_vals is not None and len(col_vals) > 0:
+                        columns_data[col_name] = col_vals
+                if columns_data:
+                    lens = {len(v) for v in columns_data.values()}
+                    if len(lens) == 1:
+                        return columns_data
+
+    return None
+
+
+def _stream_json_array(text, nrows):
+    """Incremental row-bounded decoder for JSON structures:
+    - Root arrays: [ {...}, ... ]
+    - Keyed record arrays in dicts: {"status": 200, "records": [ {...}, ... ]}
+    - Columnar tables in dicts: {"colA": [1, 2, ...], "colB": [3, 4, ...]}
+    Streams only nrows objects/values without parsing or materializing full graphs or malformed tails.
+    """
+    s_text = text.lstrip()
+    decoder = json.JSONDecoder()
+    length = len(text)
+
+    # 1. Root-level array of objects or scalars
+    if s_text.startswith("["):
+        idx = text.find("[") + 1
+        records = []
+        while idx < length and len(records) < nrows:
+            while idx < length and text[idx] in " \t\r\n,":
+                idx += 1
+            if idx >= length or text[idx] == "]":
+                break
+            try:
+                obj, next_idx = decoder.raw_decode(text, idx)
+                records.append(obj)
+                idx = next_idx
+            except ValueError:
+                return None
+        return records
+
+    # 2. Outer dict: could be wrapped record array or columnar table
+    if s_text.startswith("{"):
+        key_matches = list(re.finditer(r'"((?:\\.|[^"\\])*)"\s*:\s*\[', text))
+        record_array_matches = []
+        columnar_matches = []
+        for m in key_matches:
+            col_name = m.group(1)
+            start_bracket = text.find("[", m.start())
+            idx_after = start_bracket + 1
+            while idx_after < length and text[idx_after] in " \t\r\n":
+                idx_after += 1
+            if idx_after < length and text[idx_after] == "{":
+                record_array_matches.append((col_name, start_bracket + 1))
+            else:
+                columnar_matches.append((col_name, start_bracket + 1))
+
+        if len(record_array_matches) > 1:
+            keys = sorted([k for k, _ in record_array_matches])
+            raise ValueError(
+                f"Ambiguous JSON structure: multiple top-level record lists found ({', '.join(keys)}). "
+                "Extract the target list before ingestion."
+            )
+
+        if len(record_array_matches) == 1:
+            idx = record_array_matches[0][1]
+            records = []
+            while idx < length and len(records) < nrows:
+                while idx < length and text[idx] in " \t\r\n,":
+                    idx += 1
+                if idx >= length or text[idx] == "]":
+                    break
+                try:
+                    obj, next_idx = decoder.raw_decode(text, idx)
+                    records.append(obj)
+                    idx = next_idx
+                except ValueError:
+                    return None
+            return records
+
+        # 3. Columnar JSON: all keys map to arrays of scalars (no scalar keys)
+        has_scalar_keys = bool(re.search(r'"(?:\\.|[^"\\])*"\s*:\s*(?:true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|"(?:\\.|[^"\\])*")\s*(?:,|})', text))
+        if columnar_matches and not record_array_matches and not has_scalar_keys:
+            columns_data = {}
+            for col_name, start_idx in columnar_matches:
+                idx = start_idx
+                col_vals = []
+                while idx < length and len(col_vals) < nrows:
+                    while idx < length and text[idx] in " \t\r\n,":
+                        idx += 1
+                    if idx >= length or text[idx] == "]":
+                        break
+                    try:
+                        val, next_idx = decoder.raw_decode(text, idx)
+                        if isinstance(val, (dict, list)):
+                            col_vals = None
+                            break
+                        col_vals.append(val)
+                        idx = next_idx
+                    except ValueError:
+                        col_vals = None
+                        break
+                if col_vals is None or len(col_vals) == 0:
+                    columns_data = None
+                    break
+                columns_data[col_name] = col_vals
+            if columns_data and len(columns_data) > 0:
+                lens = {len(v) for v in columns_data.values()}
+                if len(lens) == 1:
+                    return columns_data
+
+    return None
 
 
 def _read_json_from_buffer(buffer, nrows=None):
     buffer.seek(0)
     try:
-        text = _decode_text_buffer(buffer)
         if nrows is not None and nrows > 0:
-            streamed = _stream_json_array(text, nrows)
+            streamed = _stream_json_from_buffer(buffer, nrows)
             if streamed is not None:
+                if isinstance(streamed, dict):
+                    if len(streamed) > MAX_INGESTION_COLUMNS:
+                        raise ValueError(
+                            f"JSON dataset has {len(streamed):,} columns, "
+                            f"exceeding the maximum limit of {MAX_INGESTION_COLUMNS} columns."
+                        )
+                    df = pd.DataFrame(streamed)
+                    return _sanitize_unhashable_cells(df)
                 if isinstance(streamed, list):
                     unique_keys = set()
                     for item in streamed:
@@ -589,13 +1047,43 @@ def _read_json_from_buffer(buffer, nrows=None):
                                     f"JSON dataset has {len(unique_keys):,}+ unique column keys, "
                                     f"exceeding the maximum limit of {MAX_INGESTION_COLUMNS} columns."
                                 )
-                try:
-                    norm_df = pd.json_normalize(streamed)
-                    if len(streamed) > 0 and norm_df.shape[1] == 0:
+                    try:
+                        norm_df = pd.json_normalize(streamed)
+                        if len(streamed) > 0 and norm_df.shape[1] == 0:
+                            norm_df = pd.DataFrame(streamed)
+                    except TypeError:
                         norm_df = pd.DataFrame(streamed)
-                except TypeError:
-                    norm_df = pd.DataFrame(streamed)
-                return _sanitize_unhashable_cells(norm_df)
+                    return _sanitize_unhashable_cells(norm_df)
+
+        text = _decode_text_buffer(buffer)
+        if nrows is not None and nrows > 0:
+            streamed = _stream_json_array(text, nrows)
+            if streamed is not None:
+                if isinstance(streamed, dict):
+                    if len(streamed) > MAX_INGESTION_COLUMNS:
+                        raise ValueError(
+                            f"JSON dataset has {len(streamed):,} columns, "
+                            f"exceeding the maximum limit of {MAX_INGESTION_COLUMNS} columns."
+                        )
+                    df = pd.DataFrame(streamed)
+                    return _sanitize_unhashable_cells(df)
+                if isinstance(streamed, list):
+                    unique_keys = set()
+                    for item in streamed:
+                        if isinstance(item, dict):
+                            unique_keys.update(item.keys())
+                            if len(unique_keys) > MAX_INGESTION_COLUMNS:
+                                raise ValueError(
+                                    f"JSON dataset has {len(unique_keys):,}+ unique column keys, "
+                                    f"exceeding the maximum limit of {MAX_INGESTION_COLUMNS} columns."
+                                )
+                    try:
+                        norm_df = pd.json_normalize(streamed)
+                        if len(streamed) > 0 and norm_df.shape[1] == 0:
+                            norm_df = pd.DataFrame(streamed)
+                    except TypeError:
+                        norm_df = pd.DataFrame(streamed)
+                    return _sanitize_unhashable_cells(norm_df)
 
         data = json.loads(text)
         if isinstance(data, dict):
@@ -611,9 +1099,9 @@ def _read_json_from_buffer(buffer, nrows=None):
                         f"JSON dataset has {len(data):,} columns, "
                         f"exceeding the maximum limit of {MAX_INGESTION_COLUMNS} columns."
                     )
+                if nrows is not None and nrows > 0:
+                    data = {k: v[:nrows] for k, v in data.items()}
                 df = pd.DataFrame(data)
-                if nrows is not None and len(df) > nrows:
-                    df = df.head(nrows)
                 return _sanitize_unhashable_cells(df)
 
             # Check for record lists wrapped inside a dict
@@ -633,6 +1121,8 @@ def _read_json_from_buffer(buffer, nrows=None):
                 data = [data]
 
         if isinstance(data, list):
+            if nrows is not None and len(data) > nrows:
+                data = data[:nrows]
             unique_keys = set()
             for item in data:
                 if isinstance(item, dict):
@@ -642,8 +1132,6 @@ def _read_json_from_buffer(buffer, nrows=None):
                             f"JSON dataset has {len(unique_keys):,}+ unique column keys, "
                             f"exceeding the maximum limit of {MAX_INGESTION_COLUMNS} columns."
                         )
-            if nrows is not None and len(data) > nrows:
-                data = data[:nrows]
             try:
                 norm_df = pd.json_normalize(data)
                 if len(data) > 0 and norm_df.shape[1] == 0:
@@ -751,53 +1239,127 @@ def _flatten_xml_element(element, parent_key="", index=None, depth=1, max_depth=
 # tabular data -- reject it outright before parsing
 
 
+_DTD_BYTE_PATTERNS = [
+    b"<!DOCTYPE",
+    b"<!ENTITY",
+    b"<\x00!\x00D\x00O\x00C\x00T\x00Y\x00P\x00E",
+    b"\x00<\x00!\x00D\x00O\x00C\x00T\x00Y\x00P\x00E",
+    b"<\x00!\x00E\x00N\x00T\x00I\x00T\x00Y",
+    b"\x00<\x00!\x00E\x00N\x00T\x00I\x00T\x00Y",
+    b"<\x00\x00\x00!\x00\x00\x00D\x00\x00\x00O\x00\x00\x00C\x00\x00\x00T\x00\x00\x00Y\x00\x00\x00P\x00\x00\x00E",
+    b"\x00\x00\x00<\x00\x00\x00!\x00\x00\x00D\x00\x00\x00O\x00\x00\x00C\x00\x00\x00T\x00\x00\x00Y\x00\x00\x00P\x00\x00\x00E",
+    b"<\x00\x00\x00!\x00\x00\x00E\x00\x00\x00N\x00\x00\x00T\x00\x00\x00I\x00\x00\x00T\x00\x00\x00Y",
+    b"\x00\x00\x00<\x00\x00\x00!\x00\x00\x00E\x00\x00\x00N\x00\x00\x00T\x00\x00\x00I\x00\x00\x00T\x00\x00\x00Y",
+]
+
+
+def _detect_xml_encoding(stream):
+    pos = stream.tell() if hasattr(stream, "tell") else 0
+    head = stream.read(4)
+    if hasattr(stream, "seek"):
+        stream.seek(pos)
+    if head.startswith(codecs.BOM_UTF32_LE) or head == b"<\x00\x00\x00":
+        return "utf-32-le"
+    if head.startswith(codecs.BOM_UTF32_BE) or head == b"\x00\x00\x00<":
+        return "utf-32-be"
+    if head.startswith(codecs.BOM_UTF16_LE) or head[:2] == b"<\x00":
+        return "utf-16-le"
+    if head.startswith(codecs.BOM_UTF16_BE) or head[:2] == b"\x00<":
+        return "utf-16-be"
+    return "utf-8"
+
+
+class _TranscodingStream:
+    """Wraps a multi-byte binary stream (UTF-16, UTF-32) and exposes a UTF-8 chunked read interface."""
+    def __init__(self, stream, src_encoding):
+        self.stream = stream
+        self.inc_dec = codecs.getincrementaldecoder(src_encoding)(errors="replace")
+        self.buf = b""
+
+    def read(self, size=-1):
+        if size is None or size < 0:
+            size = 65536
+        while len(self.buf) < size:
+            chunk = self.stream.read(65536)
+            if not chunk:
+                tail = self.inc_dec.decode(b"", True)
+                if tail:
+                    self.buf += tail.encode("utf-8")
+                break
+            text = self.inc_dec.decode(chunk, False)
+            if text:
+                self.buf += text.encode("utf-8")
+        out = self.buf[:size]
+        self.buf = self.buf[size:]
+        return out
+
+
 def _reject_dtd(payload):
-    # Fast multi-encoding text and raw-byte scan
-    if b"<!DOCTYPE" in payload or b"<!ENTITY" in payload:
+    def _prohibit(*args, **kwargs):
         raise ValueError(
             "XML datasets must not contain DTD/entity declarations "
             "(they enable resource-exhaustion attacks); export plain elements."
         )
 
-    for enc in ("utf-8", "utf-16", "utf-16-le", "utf-16-be", "utf-32", "utf-32-le", "utf-32-be", "cp1252", "latin1"):
+    stream = io.BytesIO(payload) if isinstance(payload, (bytes, bytearray)) else payload
+    if hasattr(stream, "read"):
+        pos = stream.tell() if hasattr(stream, "tell") else 0
+        enc = _detect_xml_encoding(stream)
         try:
-            decoded = payload.decode(enc)
-            upper = decoded.upper()
-            if "<!DOCTYPE" in upper or "<!ENTITY" in upper:
-                raise ValueError(
-                    "XML datasets must not contain DTD/entity declarations "
-                    "(they enable resource-exhaustion attacks); export plain elements."
-                )
-        except (UnicodeDecodeError, LookupError):
-            pass
+            p = xml.parsers.expat.ParserCreate()
+            p.StartDoctypeDeclHandler = _prohibit
+            p.EntityDeclHandler = _prohibit
+            root_started = False
 
-    # Expat parser-level guard fails on any DTD/entity regardless of encoding or padding
-    try:
-        p = xml.parsers.expat.ParserCreate()
-        def _prohibit(*args, **kwargs):
-            raise ValueError(
-                "XML datasets must not contain DTD/entity declarations "
-                "(they enable resource-exhaustion attacks); export plain elements."
-            )
-        p.StartDoctypeDeclHandler = _prohibit
-        p.EntityDeclHandler = _prohibit
-        p.Parse(payload, True)
-    except ValueError:
-        raise
-    except Exception:
-        pass
+            def _start_element(name, attrs):
+                nonlocal root_started
+                root_started = True
+
+            p.StartElementHandler = _start_element
+
+            overlap = b""
+            while not root_started:
+                chunk = stream.read(65536)
+                if not chunk:
+                    if not enc.startswith("utf-32"):
+                        try:
+                            p.Parse(b"", True)
+                        except ValueError:
+                            raise
+                        except Exception:
+                            pass
+                    break
+                raw_bytes = chunk if isinstance(chunk, bytes) else chunk.encode("utf-8", errors="ignore")
+                data_to_check = overlap + raw_bytes
+                overlap = data_to_check[-64:]
+                upper = data_to_check.upper()
+                for pat in _DTD_BYTE_PATTERNS:
+                    if pat in upper:
+                        _prohibit()
+                if not enc.startswith("utf-32"):
+                    try:
+                        p.Parse(raw_bytes, False)
+                    except ValueError:
+                        raise
+                    except Exception:
+                        pass
+        finally:
+            if hasattr(stream, "seek"):
+                stream.seek(pos)
+        return
 
 
 def _read_xml_from_buffer(buffer, nrows=None):
     buffer.seek(0)
-    payload = buffer.read()
-    _reject_dtd(payload)
+    enc = _detect_xml_encoding(buffer)
+    _reject_dtd(buffer)
+    buffer.seek(0)
 
+    xml_stream = _TranscodingStream(buffer, enc) if enc.startswith("utf-32") else buffer
     records = []
     root = None
     try:
-        stream = io.BytesIO(payload)
-        context = ElementTree.iterparse(stream, events=("start", "end"))
+        context = ElementTree.iterparse(xml_stream, events=("start", "end"))
         depth = 0
         for event, elem in context:
             if event == "start":

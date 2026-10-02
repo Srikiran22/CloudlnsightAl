@@ -35,9 +35,9 @@ def value_of(name):
 
 def keep_box(session_key):
     return st.checkbox(
-        "Keep in memory for this session",
+        "Keep in session state for this session",
         key=session_key,
-        help="Unticked: the secret is wiped from memory as soon as the current task finishes.",
+        help="Unticked: the secret is released from session state as soon as the current task finishes.",
     )
 
 
@@ -46,13 +46,13 @@ def release(*names, **opts):
     if keep_key and st.session_state.get(keep_key):
         return []
 
-    wiped = []
+    cleared = []
     for name in names:
         old = st.session_state.pop(_slot(name), None)
         st.session_state[_ver(name)] = st.session_state.get(_ver(name), 0) + 1
         if old not in (None, ""):
-            wiped.append(name)
-    return wiped
+            cleared.append(name)
+    return cleared
 
 
 def drop(*names):

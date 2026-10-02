@@ -28,24 +28,24 @@ g1, g2, g3 = st.columns(3)
 
 with g1:
     fig_gauge = go.Figure(go.Indicator(
-        mode="gauge+number",
-        value=round(health_index, 1),
-        title={'text': "Data Quality Index", 'font': {'size': 16}},
-        gauge={
-            'axis': {'range': [0, 100]},
-            'bar': {'color': "#2563EB"},
-            'steps': [
-                {'range': [0, 50], 'color': "#FEE2E2"},
-                {'range': [50, 80], 'color': "#FEF3C7"},
-                {'range': [80, 100], 'color': "#D1FAE5"}
-            ],
-            'threshold': {
-                'line': {'color': "green", 'width': 4},
-                'thickness': 0.75,
-                'value': 90
-            }
-        }
-    ))
+         mode="gauge+number",
+         value=round(health_index, 1),
+         title={'text': "Data Hygiene Index", 'font': {'size': 16}},
+         gauge={
+             'axis': {'range': [0, 100]},
+             'bar': {'color': "#2563EB"},
+             'steps': [
+                 {'range': [0, 50], 'color': "#FEE2E2"},
+                 {'range': [50, 80], 'color': "#FEF3C7"},
+                 {'range': [80, 100], 'color': "#D1FAE5"}
+             ],
+             'threshold': {
+                 'line': {'color': "green", 'width': 4},
+                 'thickness': 0.75,
+                 'value': 90
+             }
+         }
+     ))
     fig_gauge.update_layout(height=220, margin={"l": 20, "r": 20, "t": 30, "b": 20})
     st.plotly_chart(fig_gauge, width="stretch")
 
@@ -57,8 +57,8 @@ with g2:
 with g3:
     st.metric(
         "Uniqueness Rate", f"{uniqueness_score:.1f}%",
-        help="Percentage of distinct rows. Quality Index = (completeness + uniqueness) / 2, "
-             "the same formula used in PDF reports.",
+        help="Percentage of distinct rows. Hygiene Index = (completeness + uniqueness) / 2. "
+             "Measures structural completeness and uniqueness; does not verify semantic correctness.",
     )
     st.metric("Missing Cells Count", f"{missing_cells:,}")
     st.metric("Duplicate Rows Count", f"{dup_rows:,}")

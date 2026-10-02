@@ -8,7 +8,6 @@ Includes:
 """
 
 import io
-import json
 import logging
 import os
 import shutil
@@ -37,7 +36,6 @@ from Utils.paths import (
 )
 from Utils.PDF import generate_pdf_report
 from Utils.privacy import (
-    apply_exclusions,
     detect_sensitive_columns,
     detect_sensitive_text,
 )

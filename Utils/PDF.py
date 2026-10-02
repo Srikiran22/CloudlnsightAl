@@ -263,6 +263,7 @@ def generate_pdf_report(
     include_charts=True,
     source_rows=None,
     analyzed_rows=None,
+    excluded_columns=None,
 ):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -343,6 +344,10 @@ def generate_pdf_report(
     rows, cols = df.shape
     num_df = df.select_dtypes(include="number")
     cat_df = df.select_dtypes(exclude="number")
+    from Utils.privacy import detect_sensitive_columns
+    sensitive_cols = set(detect_sensitive_columns(df).keys())
+    if excluded_columns:
+        sensitive_cols.update(c for c in excluded_columns if c in df.columns)
     quality = quality_metrics(df)
     dup_count = quality["duplicate_rows"]
     missing_count = quality["missing_cells"]
@@ -354,7 +359,7 @@ def generate_pdf_report(
     if source_rows is not None and analyzed_rows is not None and source_rows != analyzed_rows:
         summary_data = [
             ["Source Records (Total)", f"{source_rows:,}", "Records Analyzed (Sample)", f"{analyzed_rows:,}"],
-            ["Total Features (Cols)", f"{cols}", "Data Quality Index", f"{quality_index:.1f} / 100"],
+            ["Total Features (Cols)", f"{cols}", "Data Hygiene Index", f"{quality_index:.1f} / 100"],
             ["Duplicate Rows (Sample)", f"{dup_count:,}", "Missing Cells (Sample)", f"{missing_count:,}"],
             ["Numeric Columns", f"{len(num_df.columns)}", "Categorical Columns", f"{len(cat_df.columns)}"],
         ]
@@ -363,7 +368,7 @@ def generate_pdf_report(
             ["Total Records (Rows)", f"{rows:,}", "Total Features (Cols)", f"{cols}"],
             ["Duplicate Rows", f"{dup_count:,}", "Total Missing Cells", f"{missing_count:,}"],
             ["Numeric Columns", f"{len(num_df.columns)}", "Categorical Columns", f"{len(cat_df.columns)}"],
-            ["Memory Footprint", f"{memory_mb:.2f} MB", "Data Quality Index", f"{quality_index:.1f} / 100"],
+            ["Memory Footprint", f"{memory_mb:.2f} MB", "Data Hygiene Index", f"{quality_index:.1f} / 100"],
         ]
     summary_table = Table(summary_data, colWidths=[150, 120, 150, 120])
     summary_table.setStyle(TableStyle([
@@ -418,19 +423,34 @@ def generate_pdf_report(
             s = df[col].dropna()
             if s.empty:
                 continue
-            stats_table_data.append([
-                Paragraph(escape(str(col)), cell_style),
-                _fmt(s.count(), 0),
-                _fmt(s.mean()),
-                _fmt(s.std()),
-                _fmt(s.min()),
-                _fmt(s.quantile(0.25)),
-                _fmt(s.median()),
-                _fmt(s.quantile(0.75)),
-                _fmt(s.max()),
-                _fmt(s.skew()),
-                _fmt(s.kurtosis()),
-            ])
+            if col in sensitive_cols:
+                stats_table_data.append([
+                    Paragraph(escape(str(col)), cell_style),
+                    _fmt(s.count(), 0),
+                    "[REDACTED]",
+                    "[REDACTED]",
+                    "[REDACTED]",
+                    "[REDACTED]",
+                    "[REDACTED]",
+                    "[REDACTED]",
+                    "[REDACTED]",
+                    "-",
+                    "-",
+                ])
+            else:
+                stats_table_data.append([
+                    Paragraph(escape(str(col)), cell_style),
+                    _fmt(s.count(), 0),
+                    _fmt(s.mean()),
+                    _fmt(s.std()),
+                    _fmt(s.min()),
+                    _fmt(s.quantile(0.25)),
+                    _fmt(s.median()),
+                    _fmt(s.quantile(0.75)),
+                    _fmt(s.max()),
+                    _fmt(s.skew()),
+                    _fmt(s.kurtosis()),
+                ])
         story.append(_style_table(
             stats_table_data, SECTION_COLORS["teal"],
             col_widths=[90, 40, 48, 48, 46, 46, 46, 46, 46, 36, 48]
@@ -444,6 +464,13 @@ def generate_pdf_report(
         for col in num_df.columns:
             s = df[col].dropna()
             if s.empty:
+                continue
+            if col in sensitive_cols:
+                outlier_data.append([
+                    Paragraph(escape(str(col)), cell_style),
+                    "[REDACTED]", "[REDACTED]", "[REDACTED]", "[REDACTED]", "[REDACTED]",
+                    "-", "-",
+                ])
                 continue
             q1 = s.quantile(0.25)
             q3 = s.quantile(0.75)
@@ -475,7 +502,10 @@ def generate_pdf_report(
             if s.empty:
                 top_value, top_freq, top_share = "-", 0, 0.0
             else:
-                top_value = str(s.mode().iloc[0])[:38]
+                if col in sensitive_cols:
+                    top_value = "[REDACTED SENSITIVE]"
+                else:
+                    top_value = str(s.mode().iloc[0])[:38]
                 top_freq = int(s.value_counts().iloc[0])
                 top_share = top_freq / len(s) * 100
             cat_data.append([
@@ -493,13 +523,14 @@ def generate_pdf_report(
         story.append(Spacer(1, 12))
 
     # 6 -- strongest correlations
-    if len(num_df.columns) >= 2:
-        corr_num_df = num_df
+    safe_corr_cols = [c for c in num_df.columns if c not in sensitive_cols]
+    if len(safe_corr_cols) >= 2:
+        corr_num_df = num_df[safe_corr_cols]
         capped_note = ""
-        if len(num_df.columns) > 50:
-            variances = num_df.var().sort_values(ascending=False)
-            corr_num_df = num_df[variances.head(50).index]
-            capped_note = " (Top 50 columns by variance)"
+        if len(safe_corr_cols) > 50:
+            variances = corr_num_df.var().sort_values(ascending=False)
+            corr_num_df = corr_num_df[variances.head(50).index]
+            capped_note = " (Top 50 non-sensitive columns by variance)"
         corr_matrix = corr_num_df.corr(numeric_only=True)
         pairs = []
         columns = list(corr_matrix.columns)
@@ -571,9 +602,7 @@ def generate_pdf_report(
         story.append(Paragraph("8. Sample Records (First 8 Rows)", heading2_style))
         sample_cols = list(df.columns[:8])
         sample_data = [[escape(str(c)) for c in sample_cols]]
-        # Mask sensitive columns if any to prevent accidental credential/PII leakage in PDF reports
-        from Utils.privacy import detect_sensitive_columns
-        sensitive_cols = set(detect_sensitive_columns(df[sample_cols]).keys())
+        # Mask sensitive columns to prevent accidental credential/PII leakage in PDF reports
         for _, row in df[sample_cols].head(8).iterrows():
             row_cells = []
             for c in sample_cols:
@@ -593,14 +622,16 @@ def generate_pdf_report(
 
     # 9 -- optional matplotlib charts
     charts_shown = False
-    if include_charts and not num_df.empty:
+    safe_chart_cols = [c for c in num_df.columns if c not in sensitive_cols]
+    if include_charts and safe_chart_cols:
         MAX_CHART_ROWS = 25_000
         chart_sampled = len(df) > MAX_CHART_ROWS
-        chart_df = df.head(MAX_CHART_ROWS) if chart_sampled else df
+        base_chart_df = df[safe_chart_cols]
+        chart_df = base_chart_df.head(MAX_CHART_ROWS) if chart_sampled else base_chart_df
         chart_rows = len(chart_df)
 
         chart_images = _safe_chart(_render_histograms, chart_df, max_charts=4, default=[])
-        heatmap_buffer = _safe_chart(_render_correlation_heatmap, chart_df)
+        heatmap_buffer = _safe_chart(_render_correlation_heatmap, chart_df) if len(safe_chart_cols) >= 2 else None
         box_images = _safe_chart(_render_boxplots, chart_df, max_charts=4, default=[])
 
         if chart_images or heatmap_buffer or box_images:

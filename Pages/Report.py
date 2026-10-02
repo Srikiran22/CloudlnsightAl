@@ -84,6 +84,15 @@ include_charts = st.checkbox(
     help="Skipped automatically if matplotlib is not installed."
 )
 
+from Utils.privacy import detect_sensitive_columns
+sensitive_detected = list(detect_sensitive_columns(df).keys())
+excluded_cols = st.multiselect(
+    "Exclude columns from PDF statistics, correlations & charts (PII/confidential):",
+    options=list(df.columns),
+    default=[c for c in sensitive_detected if c in df.columns],
+    help="Selected columns will be redacted in summaries and omitted from correlations and visualization charts.",
+)
+
 template_name = st.text_input("Save current settings as template (name):", value="")
 overwrite_template = st.checkbox("Overwrite existing template with same name", value=False)
 if template_name and st.button("Save Template"):
@@ -117,7 +126,7 @@ if template_name and st.button("Save Template"):
 st.markdown("---")
 
 
-def _build_report(dataset_name, dataframe, title, prepared_by, with_charts, ai_insights=None, source_rows=None, analyzed_rows=None):
+def _build_report(dataset_name, dataframe, title, prepared_by, with_charts, ai_insights=None, source_rows=None, analyzed_rows=None, excluded_columns=None):
     pdf_bytes = generate_pdf_report(
         df=dataframe,
         dataset_name=dataset_name,
@@ -127,6 +136,7 @@ def _build_report(dataset_name, dataframe, title, prepared_by, with_charts, ai_i
         include_charts=with_charts,
         source_rows=source_rows,
         analyzed_rows=analyzed_rows,
+        excluded_columns=excluded_columns,
     )
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     base_name, _ = os.path.splitext(dataset_name)
@@ -151,6 +161,7 @@ if st.button("Generate PDF report", type="primary"):
                 ai_insights=(ai_saved if include_ai else None),
                 source_rows=total_source or df.shape[0],
                 analyzed_rows=df.shape[0],
+                excluded_columns=excluded_cols,
             )
             st.session_state["last_pdf_report"] = {
                 "dataset": selected_file,

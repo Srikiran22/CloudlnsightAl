@@ -125,13 +125,38 @@ if results_match_active(results, selected_file, df=df):
         else:
             m1, m2, m3, m4 = st.columns(4)
             with m1:
-                st.metric("Accuracy", f"{results['accuracy'] * 100:.2f}%")
+                st.metric("Test Accuracy", f"{results['accuracy'] * 100:.2f}%")
             with m2:
                 st.metric("Precision (Weighted)", f"{results['precision'] * 100:.2f}%")
             with m3:
                 st.metric("Recall (Weighted)", f"{results['recall'] * 100:.2f}%")
             with m4:
                 st.metric("F1-Score (Weighted)", f"{results['f1_score'] * 100:.2f}%")
+
+        if results.get("cv_folds"):
+            st.markdown("##### Cross-Validation Performance & Baseline Benchmark")
+            cv1, cv2, cv3 = st.columns(3)
+            with cv1:
+                st.metric(
+                    f"{results['cv_folds']}-Fold CV Accuracy",
+                    f"{results['cv_accuracy_mean'] * 100:.2f}%",
+                    help=f"Mean across {results['cv_folds']} folds with ±{results['cv_accuracy_std'] * 100:.2f}% standard deviation."
+                )
+                st.caption(f"Range: {(results['cv_accuracy_mean'] - results['cv_accuracy_std']) * 100:.1f}% – {(results['cv_accuracy_mean'] + results['cv_accuracy_std']) * 100:.1f}%")
+            with cv2:
+                st.metric(
+                    f"{results['cv_folds']}-Fold CV Macro F1",
+                    f"{results['cv_f1_macro_mean']:.4f}",
+                    help=f"Mean Macro F1 across {results['cv_folds']} folds with ±{results['cv_f1_macro_std']:.4f} standard deviation."
+                )
+                st.caption(f"Range: {results['cv_f1_macro_mean'] - results['cv_f1_macro_std']:.4f} – {results['cv_f1_macro_mean'] + results['cv_f1_macro_std']:.4f}")
+            with cv3:
+                st.metric(
+                    "Dummy Baseline Accuracy",
+                    f"{results.get('baseline_accuracy', 0) * 100:.2f}%",
+                    help="Majority-class baseline without feature learning."
+                )
+                st.caption(f"Baseline Macro F1: {results.get('baseline_f1_macro', 0):.4f}")
 
         st.subheader("Confusion Matrix")
         cm = results["confusion_matrix"]
@@ -151,13 +176,38 @@ if results_match_active(results, selected_file, df=df):
     else:
         m1, m2, m3, m4 = st.columns(4)
         with m1:
-            st.metric("R² Score (Variance Explained)", f"{results['r2_score']:.4f}")
+            st.metric("Test R² Score", f"{results['r2_score']:.4f}")
         with m2:
-            st.metric("RMSE (Root Mean Sq Error)", f"{results['rmse']:.4f}")
+            st.metric("Test RMSE", f"{results['rmse']:.4f}")
         with m3:
-            st.metric("MAE (Mean Absolute Error)", f"{results['mae']:.4f}")
+            st.metric("Test MAE", f"{results['mae']:.4f}")
         with m4:
-            st.metric("MSE", f"{results['mse']:.4f}")
+            st.metric("Test MSE", f"{results['mse']:.4f}")
+
+        if results.get("cv_folds"):
+            st.markdown("##### Cross-Validation Performance & Baseline Benchmark")
+            cv1, cv2, cv3 = st.columns(3)
+            with cv1:
+                st.metric(
+                    f"{results['cv_folds']}-Fold CV R² Score",
+                    f"{results['cv_r2_mean']:.4f}",
+                    help=f"Mean across {results['cv_folds']} folds with ±{results['cv_r2_std']:.4f} standard deviation."
+                )
+                st.caption(f"Range: {results['cv_r2_mean'] - results['cv_r2_std']:.4f} – {results['cv_r2_mean'] + results['cv_r2_std']:.4f}")
+            with cv2:
+                st.metric(
+                    f"{results['cv_folds']}-Fold CV RMSE",
+                    f"{results['cv_rmse_mean']:.4f}",
+                    help=f"Mean across {results['cv_folds']} folds with ±{results['cv_rmse_std']:.4f} standard deviation."
+                )
+                st.caption(f"Range: {results['cv_rmse_mean'] - results['cv_rmse_std']:.4f} – {results['cv_rmse_mean'] + results['cv_rmse_std']:.4f}")
+            with cv3:
+                st.metric(
+                    "Dummy Baseline R²",
+                    f"{results.get('baseline_r2', 0):.4f}",
+                    help="Mean-target baseline without feature learning."
+                )
+                st.caption(f"Baseline RMSE: {results.get('baseline_rmse', 0):.4f}")
 
         pred_df = pd.DataFrame({
             "Actual": results["y_test"],
@@ -190,24 +240,43 @@ if results_match_active(results, selected_file, df=df):
             ))
         st.plotly_chart(fig_pred, width="stretch")
 
-    if results.get("feature_importances"):
+    raw_fi = results.get("feature_importances")
+    grouped_fi = results.get("grouped_feature_importances")
+    if raw_fi or grouped_fi:
         st.subheader("Feature importance")
-        fi_df = pd.DataFrame(
-            list(results["feature_importances"].items()),
-            columns=["Feature", "Importance / Relative Weight"]
-        ).sort_values(by="Importance / Relative Weight", ascending=True)
-
-        fig_fi = px.bar(
-            fi_df,
-            x="Importance / Relative Weight",
-            y="Feature",
-            orientation="h",
-            color="Importance / Relative Weight",
-            color_continuous_scale="Viridis",
-            template=plot_template(),
-            title="Top Influential Features in Model"
+        imp_metric = results.get("importance_type", "Feature Importance / Relative Weight")
+        st.caption(
+            f"**Metric:** {imp_metric}. "
+            "⚠️ *Note: Feature importance reflects statistical associations within the trained model, "
+            "NOT real-world causal drivers.*"
         )
-        st.plotly_chart(fig_fi, width="stretch")
+
+        def _render_fi_chart(fi_dict, title):
+            fi_df = pd.DataFrame(
+                list(fi_dict.items()),
+                columns=["Feature", imp_metric]
+            ).sort_values(by=imp_metric, ascending=True)
+
+            fig_fi = px.bar(
+                fi_df,
+                x=imp_metric,
+                y="Feature",
+                orientation="h",
+                color=imp_metric,
+                color_continuous_scale="Viridis",
+                template=plot_template(),
+                title=title
+            )
+            st.plotly_chart(fig_fi, width="stretch")
+
+        if grouped_fi and raw_fi and grouped_fi != raw_fi:
+            tab_orig, tab_encoded = st.tabs(["Original features (aggregated)", "Encoded levels"])
+            with tab_orig:
+                _render_fi_chart(grouped_fi, "Top Influential Features (Aggregated)")
+            with tab_encoded:
+                _render_fi_chart(raw_fi, "Top Influential Encoded Levels")
+        else:
+            _render_fi_chart(grouped_fi or raw_fi, "Top Influential Features in Model")
 
 st.markdown("---")
 st.subheader("Model persistence")
@@ -232,8 +301,9 @@ with tab_save:
 
 with tab_load:
     st.caption(
-        "Only load `.joblib` bundles you trained yourself or received from a trusted source — "
-        "model files contain executable code."
+        "Joblib model bundles execute arbitrary Python bytecode upon deserialization. "
+        "To prevent arbitrary code execution, only models cryptographically signed with "
+        "HMAC-SHA256 by this application instance are permitted to load."
     )
     saved_models = list_saved_models()
     if not saved_models:
@@ -243,7 +313,7 @@ with tab_load:
 
         if st.button("Load model & predict"):
             try:
-                bundle = load_trained_model(MODELS_DIR / chosen_model_file)
+                bundle = load_trained_model(MODELS_DIR / chosen_model_file, require_signature=True)
                 if bundle.get("sklearn_version_mismatch"):
                     st.warning(
                         "This model was saved with a different scikit-learn version; "

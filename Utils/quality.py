@@ -1,19 +1,19 @@
-# Single authoritative implementation of the Data Quality Index.
+# Single authoritative implementation of the Data Hygiene Index (formerly Data Quality Index).
+# Computes a structural completeness and uniqueness heuristic.
 # Dashboard gauge and PDF report must always agree -- both import from here.
 
 import pandas as pd
 
 
 def quality_metrics(df):
-    """Compute the composite Data Quality Index for a DataFrame.
+    """Compute the structural Data Hygiene Index for a DataFrame.
 
         index = (completeness + uniqueness) / 2
 
     where completeness is the share of non-missing cells (%) and uniqueness is
-    the share of distinct rows (%). Weights are equal on purpose: the blend is
-    symmetric, needs no hidden assumptions, and matches the explanation shown
-    in generated PDF reports ("blends column completeness and row uniqueness
-    equally"). Any future reweighting must update that note and the tests.
+    the share of distinct rows (%). Note: This heuristic measures structural
+    hygiene (absence of nulls and duplicate rows), not semantic correctness,
+    domain validity, or data integrity.
 
     Returns a dict of the underlying counts plus percentage scores.
     """
@@ -50,3 +50,7 @@ def quality_metrics(df):
 def quality_index(df):
     """The 0-100 composite score alone."""
     return quality_metrics(df)["index"]
+
+
+hygiene_metrics = quality_metrics
+hygiene_index = quality_index

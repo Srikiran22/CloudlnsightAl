@@ -1,11 +1,10 @@
 import io
 import json
 import os
-import shutil
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -32,7 +31,6 @@ from Utils.paths import (
     _read_parquet_from_buffer,
     _read_xml_from_buffer,
     atomic_write,
-    get_dataset_row_count,
     list_dataset_files,
     read_tabular,
 )

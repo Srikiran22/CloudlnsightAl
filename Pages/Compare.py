@@ -74,9 +74,9 @@ flagged_count = int((drift_df["Flags"] != "OK").sum())
 st.dataframe(drift_df, width="stretch", hide_index=True)
 
 if flagged_count:
-    st.warning(f"{flagged_count} of {len(common)} common columns show notable metric shifts (dtype change, ≥10% missingness change, or ≥10% mean shift).")
+    st.warning(f"{flagged_count} of {len(common)} common columns show notable metric shifts or statistical drift (dtype, missingness, mean, dispersion, KS distribution drift, or categorical TVD drift).")
 else:
-    st.success("No significant metric shifts detected across common columns.")
+    st.success("No significant metric shifts or statistical distribution drift detected across common columns.")
 
 # duplication profile
 st.subheader("Duplication profile")

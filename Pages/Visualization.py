@@ -7,6 +7,7 @@ from Utils.Charts import (
     create_scatter_plot,
     create_bar_count_plot,
     create_line_chart,
+    downsample_timeseries,
     create_pie_treemap_plot,
     create_correlation_heatmap
 )
@@ -120,8 +121,8 @@ with tab_rel:
             show_markers = st.checkbox("Show Data Markers", value=True)
             line_df = df
             if len(df) > 25_000:
-                st.info(f"Plotting a representative sample of 25,000 rows (from {len(df):,} total) to maintain browser responsiveness.")
-                line_df = df.sample(n=25_000, random_state=42)
+                st.info(f"Applying time-preserving decimation to {len(df):,} rows (capped to 25,000 points) to preserve peaks, troughs, and signal envelope.")
+                line_df = downsample_timeseries(df, x_col=x_axis, y_col=y_axis, max_points=25_000, hue_col=color_by)
             fig = create_line_chart(
                 line_df,
                 x_col=x_axis,

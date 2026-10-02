@@ -31,7 +31,7 @@ with st.sidebar:
         help_text="Get your key at https://aistudio.google.com/"
     )
     keep_box("gemini_keep")
-    if st.button("Clear key from memory"):
+    if st.button("Clear key from session state"):
         drop("gemini")
         st.rerun()
 
@@ -60,16 +60,18 @@ st.caption(
 )
 
 sensitive = detect_sensitive_columns(df)
-excluded_cols = []
 if sensitive:
     reasons = ", ".join(f"`{col}` ({reason})" for col, reason in sorted(sensitive.items()))
     st.warning(f"Possible sensitive columns detected: {reasons}.")
-    excluded_cols = st.multiselect(
-        "Columns to EXCLUDE from AI context:",
-        options=sorted(sensitive),
-        default=sorted(sensitive),
-        help="Excluded columns are removed from everything sent to Gemini.",
-    )
+
+all_cols = list(df.columns)
+default_exclusions = [c for c in all_cols if c in sensitive]
+excluded_cols = st.multiselect(
+    "Columns to EXCLUDE from AI context:",
+    options=all_cols,
+    default=default_exclusions,
+    help="Excluded columns are removed from everything sent to Gemini. Detected sensitive columns are preselected automatically.",
+)
 ai_df, exclusions_applied = apply_exclusions(df, excluded_cols)
 if not exclusions_applied and excluded_cols:
     st.error(
@@ -122,7 +124,7 @@ with tab_insights:
                     st.error(f"Gemini error: {str(e)}")
                 finally:
                     if release("gemini", keep_key="gemini_keep"):
-                        st.toast("Gemini key cleared from memory.")
+                        st.toast("Gemini key released from session state.")
 
     saved_insights = st.session_state.get(insights_key)
     if saved_insights:
@@ -176,4 +178,4 @@ with tab_chat:
                         st.error(f"Error: {str(e)}")
                     finally:
                         if release("gemini", keep_key="gemini_keep"):
-                            st.toast("Gemini key cleared from memory.")
+                            st.toast("Gemini key released from session state.")

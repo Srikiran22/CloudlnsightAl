@@ -105,6 +105,21 @@ tmp/
 .serena/
 .rememex/
 .codegraph/
+.cursor/
+.cline/
+.roo/
 
-# Agent/session material (local only)
+# Local agent workflows, scratch files, and audit records (local only)
 AI/
+AGENTS.md
+CLAUDE.md
+scratch/
+audit_reports/
+*.audit
+TASK.md
+PLAN.md
+STATE.md
+HANDOFF.md
+SESSIONS.md
+MODEL.md
+

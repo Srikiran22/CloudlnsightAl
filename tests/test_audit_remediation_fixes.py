@@ -1,14 +1,14 @@
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 import io
 import pandas as pd
 import numpy as np
 
 from Utils.AIConvert import (
     MAX_SAMPLE_CHARS, MAX_CONVERSION_CHARS, _split_into_chunks,
-    build_continuation_prompt, convert_to_dataframe
+    convert_to_dataframe
 )
-from Utils.paths import read_tabular, atomic_write
+from Utils.paths import read_tabular
 from Utils.privacy import detect_sensitive_columns
 from Utils.ML import predict_with_model, train_and_evaluate_model
 from Utils.Charts import create_bar_count_plot

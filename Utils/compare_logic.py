@@ -4,6 +4,7 @@
 import json
 import numpy as np
 import pandas as pd
+import scipy.stats as stats
 
 
 MISSINGNESS_DRIFT_PCT = 10.0
@@ -31,6 +32,11 @@ def _missing_pct(series):
 def _numeric_mean(series):
     numeric = pd.to_numeric(series, errors="coerce").dropna()
     return float(numeric.mean()) if not numeric.empty else None
+
+
+def _numeric_std(series):
+    numeric = pd.to_numeric(series, errors="coerce").dropna()
+    return float(numeric.std()) if len(numeric) > 1 else None
 
 
 def _safe_nunique(series):
@@ -105,6 +111,50 @@ def column_drift_rows(df_a, df_b):
         elif is_near_zero_baseline and delta_mean is not None and abs(delta_mean) >= 1e-6:
             flags.append(f"mean shift Δ{delta_mean:+.3f} (baseline ≈ 0)")
 
+        std_a, std_b = _numeric_std(sa), _numeric_std(sb)
+        if std_a is not None and std_b is not None:
+            if std_a > 1e-12:
+                std_ratio = std_b / std_a
+                if std_ratio >= 1.5 or std_ratio <= 0.67:
+                    flags.append(f"dispersion shift (std {std_a:.2f}→{std_b:.2f})")
+            elif std_b > 0.01:
+                flags.append(f"dispersion shift (std {std_a:.2f}→{std_b:.2f})")
+
+        ks_stat = None
+        ks_pval = None
+        tvd_val = None
+
+        # Statistical distributional drift for numeric columns (two-sample KS test)
+        if mean_a is not None and mean_b is not None:
+            num_a = pd.to_numeric(sa, errors="coerce").dropna()
+            num_b = pd.to_numeric(sb, errors="coerce").dropna()
+            num_a = num_a[np.isfinite(num_a)]
+            num_b = num_b[np.isfinite(num_b)]
+            if len(num_a) >= 10 and len(num_b) >= 10:
+                try:
+                    ks_res = stats.ks_2samp(num_a, num_b)
+                    ks_stat = round(float(ks_res.statistic), 4)
+                    ks_pval = round(float(ks_res.pvalue), 4)
+                    if ks_res.pvalue < 0.01:
+                        flags.append(f"distribution drift (KS stat={ks_stat:.3f}, p={ks_pval:.4f})")
+                except Exception:
+                    pass
+        else:
+            # Statistical frequency drift for categorical columns (Total Variation Distance)
+            cat_a = sa.dropna().astype(str)
+            cat_b = sb.dropna().astype(str)
+            if len(cat_a) >= 10 and len(cat_b) >= 10:
+                try:
+                    pa = cat_a.value_counts(normalize=True)
+                    pb = cat_b.value_counts(normalize=True)
+                    all_cats = pa.index.union(pb.index)
+                    tvd = float(0.5 * (pa.reindex(all_cats, fill_value=0) - pb.reindex(all_cats, fill_value=0)).abs().sum())
+                    tvd_val = round(tvd, 4)
+                    if tvd >= 0.20:
+                        flags.append(f"categorical drift (TVD={tvd_val:.3f})")
+                except Exception:
+                    pass
+
         rows.append({
             "Column": col,
             "Dtype Match": "yes" if dtype_match else "no",
@@ -113,6 +163,9 @@ def column_drift_rows(df_a, df_b):
             "Mean A": round(mean_a, 3) if mean_a is not None else None,
             "Mean B": round(mean_b, 3) if mean_b is not None else None,
             "Mean Shift %": round(mean_drift, 1) if mean_drift is not None else ("N/A (baseline ≈ 0)" if is_near_zero_baseline else None),
+            "KS Stat": ks_stat,
+            "KS p-val": ks_pval,
+            "Categorical TVD": tvd_val,
             "Unique A": _safe_nunique(sa),
             "Unique B": _safe_nunique(sb),
             "Flags": "; ".join(flags) if flags else "OK",

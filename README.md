@@ -42,7 +42,8 @@ The Compare page compares two datasets at the schema and column level, including
 - Row and column counts
 - Common and missing columns
 - Missing-value changes
-- Summary metric shifts (mean, std, min, median, max)
+- Summary metric shifts (mean and dispersion / std)
+- Distribution drift detection via two-sample Kolmogorov-Smirnov tests (numeric) and Total Variation Distance (categorical)
 - Duplicate profiles
 
 ### Exploratory analysis and visualization
@@ -50,7 +51,7 @@ The Compare page compares two datasets at the schema and column level, including
 The EDA and Visualization pages provide:
 
 - Column and data-type summaries
-- Descriptive statistics (quartiles, skewness, kurtosis)
+- Descriptive statistics (mean, std, min, quartiles, max)
 - Pearson correlations with column caps to prevent layout freeze
 - Tukey IQR outlier analysis
 - Interactive charts: histograms, box/violin plots, scatter/bubble (with 25k sampling for responsiveness), bar/pie/treemap, heatmaps
@@ -71,7 +72,7 @@ The current implementation includes:
 - Gradient Boosting Classifier
 - Gradient Boosting Regressor
 
-Features include automatic classification/regression detection, leak-free preprocessing inside pipelines, high-dimension guards against dense one-hot encoding explosions, model persistence with Joblib, prediction from saved models, and model provenance metadata with SHA-256 dataset fingerprinting.
+Features include automatic classification/regression detection, 5-fold cross-validation with metric variability (mean ± std), dummy baseline comparison, leak-free preprocessing inside pipelines, high-dimension guards against dense one-hot encoding explosions, model persistence with Joblib and HMAC-SHA256 signature verification, prediction from saved models, and model provenance metadata with SHA-256 dataset fingerprinting.
 
 A training-cell limit is enforced to prevent oversized jobs from blocking the Streamlit process.
 
@@ -79,7 +80,7 @@ A training-cell limit is enforced to prevent oversized jobs from blocking the St
 
 Reports are generated with ReportLab and can include:
 
-1. Dataset summary and Data Quality Index
+1. Dataset summary and Data Hygiene Index
 2. Column structure and missing-value counts
 3. Numerical statistics
 4. IQR outlier analysis
@@ -104,11 +105,11 @@ The platform defaults to `gemini-3.8-flash` via the primary `google-genai` SDK, 
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.12+ (tested and CI-validated on Ubuntu, Windows, and macOS across Python 3.12 and 3.13)
 - Streamlit 1.52.0+
-- Windows, macOS, or Linux
+- Linux, Windows, or macOS
 
-A database is not required. Dependencies are defined in `requirements.txt`.
+A database is not required. Production dependencies are locked in `requirements-lock.txt` for exact CI-matched reproducibility, with loose ranges in `requirements.txt`.
 
 Optional runtime capabilities:
 
@@ -139,7 +140,13 @@ Activate it:
 source venv/bin/activate
 ```
 
-Install dependencies:
+Install dependencies (tested lockfile recommended for exact reproducibility matching CI):
+
+```bash
+pip install -r requirements-lock.txt
+```
+
+Alternatively, to install with unpinned ranges:
 
 ```bash
 pip install -r requirements.txt
@@ -163,7 +170,7 @@ http://localhost:8501
 
 Enter the Gemini API key in the application when using AI conversion, insights, or chat.
 
-The application keeps credentials in Streamlit session memory only and releases them after an operation unless they are explicitly kept for the current session. Nothing touches disk.
+The application keeps credentials in Streamlit session state only and clears them after an operation unless they are explicitly kept for the current session. Nothing touches disk.
 
 Before Gemini analysis, the privacy screener flags columns that look like emails, phone numbers, financial identifiers, credentials, or tokens so they can be excluded from the model context.
 
@@ -197,7 +204,7 @@ CloudInsightAI/
 │   ├── AI.py              # AI insights and conversational dataset Q&A
 │   ├── Cleaning.py        # Deduplication, missing-value handling, and export
 │   ├── Compare.py         # Schema drift and column-level comparison
-│   ├── Dashboard.py       # Quality Index gauge and distribution indicators
+│   ├── Dashboard.py       # Data hygiene index gauge and summary indicators
 │   ├── EDA.py             # Exploratory analysis, correlations, and outliers
 │   ├── ML.py              # Model training, evaluation, saving, and prediction
 │   ├── Report.py          # PDF report generation and template management
@@ -217,7 +224,7 @@ CloudInsightAI/
 │   ├── logsys.py          # Centralized application logging
 │   ├── paths.py           # Safe path handling, format parsing, and limits
 │   ├── privacy.py         # Sensitive column screening and PII detection
-│   ├── quality.py         # Data quality index and health scoring
+│   ├── quality.py         # Data hygiene index and completeness/uniqueness scoring
 │   ├── secrets.py         # Ephemeral in-memory credential management
 │   └── theme.py           # UI styling and CSS tokens
 ├── tests/                 # Unit, security, and regression test suites
@@ -266,14 +273,14 @@ Key safeguards include:
 - Bounded AI response parsing with column caps (>200 columns rejected)
 - Ephemeral in-memory credential handling (no disk storage or intentional logging of API keys)
 - Sensitive-column screening before Gemini analysis
-- Provenance metadata and dataset fingerprinting for saved ML models
+- Provenance metadata, dataset fingerprinting, and HMAC-SHA256 authenticity signing for saved ML models
 
 ## Limitations
 
 - Local-first architecture: No built-in authentication or multi-tenant per-user storage isolation
 - Gemini and S3 require external services when those features are used
 - PDF ingestion requires extractable text; scanned image PDFs need a separate OCR workflow
-- Joblib model bundles execute code on unpickling — load only trusted models
+- Joblib model bundles rely on pickle and execute Python bytecode upon deserialization. Models trained in CloudInsight are cryptographically signed with HMAC-SHA256 to ensure integrity; external or untrusted `.joblib` files are blocked from loading
 - Production deployment requires additional authenticating reverse proxy, storage isolation, and network controls
 
 ## Contributing
@@ -282,4 +289,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development checks and contribution g
 
 ## License
 
-No LICENSE file is currently included in the repository.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
