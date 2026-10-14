@@ -1,0 +1,766 @@
+import io
+import datetime
+
+import pandas as pd
+import numpy as np
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+)
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from xml.sax.saxutils import escape
+
+from Utils.logsys import get_logger
+from Utils.quality import quality_metrics
+from Utils.sampling import sample_for_visualization
+
+
+logger = get_logger("PDF")
+
+USABLE_WIDTH = 540  # letter minus the 36pt page margins
+
+SECTION_COLORS = {
+    "blue": "#2563EB",
+    "teal": "#0D9488",
+    "purple": "#7C3AED",
+    "orange": "#EA580C",
+    "rose": "#E11D48",
+    "indigo": "#4F46E5",
+    "slate": "#475569",
+}
+
+
+def _fmt(value, decimals=2):
+    if value is None or (isinstance(value, float) and (np.isnan(value) or np.isinf(value))):
+        return "-"
+    if isinstance(value, (int, np.integer)):
+        return f"{value:,}"
+    try:
+        return f"{float(value):,.{decimals}f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def validate_report_template(config: dict) -> dict:
+    """Validate and sanitize report template schema to prevent configuration bugs."""
+    if not isinstance(config, dict):
+        raise ValueError("Report template must be a valid dictionary/JSON object.")
+
+    title = str(config.get("title") or "CloudInsight AI Executive Analytics Report").strip()
+    if len(title) > 200:
+        title = title[:200]
+
+    author = str(config.get("author") or "CloudInsight AI Platform").strip()
+    if len(author) > 200:
+        author = author[:200]
+
+    def _parse_bool(val, default=True):
+        if val is None:
+            return default
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, (int, float)):
+            return bool(val)
+        if isinstance(val, str):
+            v = val.strip().lower()
+            if v in ("true", "1", "yes", "on"):
+                return True
+            if v in ("false", "0", "no", "off"):
+                return False
+        return default
+
+    include_charts = _parse_bool(config.get("include_charts"), default=True)
+    include_ai = _parse_bool(config.get("include_ai"), default=True)
+
+    return {
+        "template_version": 1,
+        "title": title or "CloudInsight AI Executive Analytics Report",
+        "author": author or "CloudInsight AI Platform",
+        "include_charts": include_charts,
+        "include_ai": include_ai,
+        "saved_at": config.get("saved_at"),
+    }
+
+
+_UNICODE_FONTS_RESOLVED = False
+_PDF_FONT_REGULAR = "Helvetica"
+_PDF_FONT_BOLD = "Helvetica-Bold"
+
+
+def _resolve_pdf_fonts():
+    """Register broad Unicode/TrueType fonts with ReportLab if available.
+    Prefers CJK-capable system fonts (SimSun, YaHei, Malgun, Noto CJK, Arial Unicode MS),
+    then falls back to matplotlib's bundled DejaVuSans, and finally Helvetica."""
+    global _UNICODE_FONTS_RESOLVED, _PDF_FONT_REGULAR, _PDF_FONT_BOLD
+    if _UNICODE_FONTS_RESOLVED:
+        return _PDF_FONT_REGULAR, _PDF_FONT_BOLD
+
+    from pathlib import Path
+    import matplotlib.font_manager as fm
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    # 1. Try to find a font supporting CJK + Latin
+    cjk_families = [
+        "Microsoft YaHei", "SimSun", "SimHei", "Malgun Gothic",
+        "MS Gothic", "Arial Unicode MS", "Noto Sans CJK SC", "Noto Sans CJK",
+    ]
+    for fam in cjk_families:
+        try:
+            fpath = fm.findfont(fam, fallback_to_default=False)
+            if fpath and Path(fpath).exists():
+                pdfmetrics.registerFont(TTFont("AppUnicodeFont", fpath))
+                _PDF_FONT_REGULAR = "AppUnicodeFont"
+                _PDF_FONT_BOLD = "AppUnicodeFont"
+                _UNICODE_FONTS_RESOLVED = True
+                logger.info("Registered CJK Unicode font '%s' (%s) for PDF export", fam, fpath)
+                return _PDF_FONT_REGULAR, _PDF_FONT_BOLD
+        except Exception:
+            continue
+
+    # 2. Try matplotlib's bundled DejaVuSans (guaranteed present across platforms with matplotlib)
+    try:
+        import matplotlib
+        data_dir = Path(matplotlib.get_data_path()) / "fonts" / "ttf"
+        reg_ttf = data_dir / "DejaVuSans.ttf"
+        bold_ttf = data_dir / "DejaVuSans-Bold.ttf"
+        if reg_ttf.exists() and bold_ttf.exists():
+            pdfmetrics.registerFont(TTFont("AppDejaVu", str(reg_ttf)))
+            pdfmetrics.registerFont(TTFont("AppDejaVu-Bold", str(bold_ttf)))
+            _PDF_FONT_REGULAR = "AppDejaVu"
+            _PDF_FONT_BOLD = "AppDejaVu-Bold"
+            _UNICODE_FONTS_RESOLVED = True
+            logger.info("Registered bundled DejaVuSans TrueType fonts for PDF export")
+            return _PDF_FONT_REGULAR, _PDF_FONT_BOLD
+    except Exception as exc:
+        logger.debug("DejaVu font registration failed: %s", exc)
+
+    # 3. Graceful fallback
+    _UNICODE_FONTS_RESOLVED = True
+    return _PDF_FONT_REGULAR, _PDF_FONT_BOLD
+
+
+def _style_table(data, header_color, col_widths=None):
+    font_reg, font_bold = _resolve_pdf_fonts()
+    table = Table(
+        data,
+        colWidths=col_widths,
+        repeatRows=1,
+    )
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(header_color)),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+        ("FONTNAME", (0, 0), (-1, 0), font_bold),
+        ("FONTNAME", (0, 1), (-1, -1), font_reg),
+        ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E5E7EB")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F9FAFB")]),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    return table
+
+
+def _matplotlib():
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        return plt
+    except ImportError:
+        return None
+
+
+def _safe_chart(render, *args, default=None, **kwargs):
+    """Run one chart renderer; a single chart failure skips that chart only."""
+    try:
+        return render(*args, **kwargs)
+    except Exception as error:
+        logger.warning("report chart skipped (%s): %s", getattr(render, "__name__", "chart"), error)
+        return default
+
+
+def _render_histograms(df, max_charts=4):
+    plt = _matplotlib()
+    if plt is None:
+        return []
+
+    numeric_cols = df.select_dtypes(include="number").columns[:max_charts]
+    images = []
+    for col in numeric_cols:
+        series = df[col].dropna()
+        if series.empty:
+            continue
+        fig, ax = plt.subplots(figsize=(4, 2.6), dpi=100)
+        ax.hist(series, bins=24, color="#2563EB", edgecolor="white", linewidth=0.4)
+        ax.set_title(str(col)[:40], fontsize=9)
+        ax.tick_params(labelsize=7)
+        ax.spines[["top", "right"]].set_visible(False)
+        buffer = io.BytesIO()
+        fig.savefig(buffer, format="png", bbox_inches="tight")
+        plt.close(fig)
+        buffer.seek(0)
+        images.append((str(col), buffer))
+    return images
+
+
+def _render_correlation_heatmap(df):
+    plt = _matplotlib()
+    if plt is None:
+        return None
+
+    num_df = df.select_dtypes(include="number")
+    if len(num_df.columns) < 2:
+        return None
+    # Align column selection with correlation insights using highest-variance features
+    if len(num_df.columns) > 10:
+        variances = num_df.var().sort_values(ascending=False)
+        num_df = num_df[variances.head(10).index]
+    corr = num_df.corr(numeric_only=True)
+    if corr.dropna(how="all").empty:
+        return None
+
+    fig, ax = plt.subplots(figsize=(5.2, 4.4), dpi=100)
+    image = ax.imshow(corr.values, cmap="coolwarm", vmin=-1, vmax=1)
+    ax.set_xticks(range(len(corr.columns)))
+    ax.set_yticks(range(len(corr.columns)))
+    ax.set_xticklabels([str(c)[:18] for c in corr.columns], rotation=45, ha="right", fontsize=7)
+    ax.set_yticklabels([str(c)[:18] for c in corr.columns], fontsize=7)
+    fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+    buffer = io.BytesIO()
+    fig.savefig(buffer, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buffer.seek(0)
+    return buffer
+
+
+def _render_boxplots(df, max_charts=4):
+    plt = _matplotlib()
+    if plt is None:
+        return []
+
+    numeric_cols = df.select_dtypes(include="number").columns[:max_charts]
+    images = []
+    for col in numeric_cols:
+        series = df[col].dropna()
+        if series.empty:
+            continue
+        fig, ax = plt.subplots(figsize=(4, 2.2), dpi=100)
+        try:
+            ax.boxplot(series, orientation="horizontal", widths=0.55,
+                       flierprops={"marker": "o", "markersize": 3, "markerfacecolor": "#E11D48"})
+        except TypeError:
+            ax.boxplot(series, vert=False, widths=0.55,
+                       flierprops={"marker": "o", "markersize": 3, "markerfacecolor": "#E11D48"})
+        ax.set_title(str(col)[:40], fontsize=9)
+        ax.tick_params(labelsize=7, left=False, labelleft=False)
+        ax.spines[["top", "right"]].set_visible(False)
+        buffer = io.BytesIO()
+        fig.savefig(buffer, format="png", bbox_inches="tight")
+        plt.close(fig)
+        buffer.seek(0)
+        images.append((str(col), buffer))
+    return images
+
+
+def _quality_flags_for_column(series):
+    """Data-quality flags for one column; shared logic, directly unit-testable.
+
+    Flags: High missingness (>=40% null), Constant (<=1 distinct), Possible
+    ID/high-cardinality (>95% distinct and >20 values in a text column --
+    dtype-agnostic because pandas >= 3 uses StringDtype, not object), Heavy
+    outliers (>=10% beyond Tukey fences in a numeric column).
+    """
+    flags = []
+    missing_pct = series.isnull().mean() * 100
+    if missing_pct >= 40:
+        flags.append("High missingness")
+    n_unique = series.nunique(dropna=True)
+    if n_unique <= 1:
+        flags.append("Constant")
+    if pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series):
+        if n_unique / max(len(series.dropna()), 1) > 0.95 and n_unique > 20:
+            flags.append("Possible ID/high-cardinality")
+    if (
+        pd.api.types.is_numeric_dtype(series)
+        and not pd.api.types.is_bool_dtype(series)
+        and not series.dropna().empty
+    ):
+        q1, q3 = series.dropna().quantile([0.25, 0.75])
+        iqr = q3 - q1
+        if iqr > 0:
+            outlier_pct = (((series.dropna() < q1 - 1.5 * iqr) | (series.dropna() > q3 + 1.5 * iqr)).mean()) * 100
+            if outlier_pct >= 10:
+                flags.append("Heavy outliers")
+    return flags
+
+
+def generate_pdf_report(
+    df,
+    dataset_name,
+    report_title="Executive Data Analytics Report",
+    author_name="CloudInsight AI",
+    include_ai_insights=None,
+    include_charts=True,
+    source_rows=None,
+    analyzed_rows=None,
+    excluded_columns=None,
+):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        rightMargin=36,
+        leftMargin=36,
+        topMargin=36,
+        bottomMargin=48,
+        title=str(report_title),
+        author=str(author_name),
+    )
+
+    font_reg, font_bold = _resolve_pdf_fonts()
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle(
+        "ReportTitle", parent=styles["Heading1"],
+        fontName=font_bold,
+        fontSize=22, leading=26,
+        textColor=colors.HexColor("#1E3A8A"), spaceAfter=6
+    )
+    subtitle_style = ParagraphStyle(
+        "ReportSubtitle", parent=styles["Normal"],
+        fontName=font_reg,
+        fontSize=10, textColor=colors.HexColor("#6B7280"), spaceAfter=14
+    )
+    heading2_style = ParagraphStyle(
+        "SectionHeading", parent=styles["Heading2"],
+        fontName=font_bold,
+        fontSize=13, leading=17,
+        textColor=colors.HexColor("#1E40AF"), spaceBefore=14, spaceAfter=6
+    )
+    body_style = ParagraphStyle(
+        "Body", parent=styles["Normal"],
+        fontName=font_reg,
+        fontSize=9, leading=13, textColor=colors.HexColor("#1F2937")
+    )
+    ai_heading_style = ParagraphStyle(
+        "AIHeading", parent=styles["Heading3"],
+        fontName=font_bold,
+        fontSize=11, leading=15,
+        textColor=colors.HexColor("#1E3A8A"), spaceBefore=10, spaceAfter=4
+    )
+    cell_style = ParagraphStyle(
+        "Cell", parent=styles["Normal"],
+        fontName=font_reg,
+        fontSize=7.5, leading=9.5, textColor=colors.HexColor("#1F2937")
+    )
+    note_style = ParagraphStyle(
+        "Note", parent=styles["Normal"],
+        fontName=font_reg,
+        fontSize=8, leading=11, textColor=colors.HexColor("#6B7280"),
+        spaceBefore=4
+    )
+
+    def footer(canvas, doc_ref):
+        canvas.saveState()
+        canvas.setFont(font_reg, 8)
+        canvas.setFillColor(colors.HexColor("#9CA3AF"))
+        canvas.drawString(36, 24, f"{dataset_name} | {report_title}"[:110])
+        canvas.drawRightString(576, 24, f"Page {doc_ref.page}")
+        canvas.setStrokeColor(colors.HexColor("#E5E7EB"))
+        canvas.line(36, 34, 576, 34)
+        canvas.restoreState()
+
+    story = []
+
+    story.append(Paragraph(escape(str(report_title)), title_style))
+    now_str = datetime.datetime.now().strftime("%B %d, %Y - %H:%M:%S")
+    story.append(Paragraph(
+        f"<b>Dataset:</b> {escape(str(dataset_name))} | "
+        f"<b>Generated:</b> {now_str} | "
+        f"<b>Prepared by:</b> {escape(str(author_name))}",
+        subtitle_style
+    ))
+
+    from Utils.sampling import sample_for_analysis
+    total_input_rows = len(df)
+    if source_rows is None:
+        source_rows = total_input_rows
+    df, is_sampled, _ = sample_for_analysis(df, max_rows=50_000, random_state=42)
+    if is_sampled:
+        analyzed_rows = len(df)
+        if source_rows is None or source_rows < total_input_rows:
+            source_rows = total_input_rows
+    elif analyzed_rows is None:
+        analyzed_rows = len(df)
+
+    rows, cols = df.shape
+    num_df = df.select_dtypes(include="number")
+    cat_df = df.select_dtypes(exclude="number")
+    from Utils.privacy import detect_sensitive_columns
+    sensitive_cols = set(detect_sensitive_columns(df).keys())
+    if excluded_columns:
+        sensitive_cols.update(c for c in excluded_columns if c in df.columns)
+    quality = quality_metrics(df)
+    dup_count = quality["duplicate_rows"]
+    missing_count = quality["missing_cells"]
+    quality_index = quality["index"]
+    memory_mb = df.memory_usage(deep=True).sum() / (1024 ** 2)
+
+    # 1 -- summary
+    story.append(Paragraph("1. High-Level Dataset Summary", heading2_style))
+    if source_rows is not None and analyzed_rows is not None and source_rows != analyzed_rows:
+        summary_data = [
+            ["Source Records (Total)", f"{source_rows:,}", "Records Analyzed (Sample)", f"{analyzed_rows:,}"],
+            ["Total Features (Cols)", f"{cols}", "Data Hygiene Index", f"{quality_index:.1f} / 100"],
+            ["Duplicate Rows (Sample)", f"{dup_count:,}", "Missing Cells (Sample)", f"{missing_count:,}"],
+            ["Numeric Columns", f"{len(num_df.columns)}", "Categorical Columns", f"{len(cat_df.columns)}"],
+        ]
+    else:
+        summary_data = [
+            ["Total Records (Rows)", f"{rows:,}", "Total Features (Cols)", f"{cols}"],
+            ["Duplicate Rows", f"{dup_count:,}", "Total Missing Cells", f"{missing_count:,}"],
+            ["Numeric Columns", f"{len(num_df.columns)}", "Categorical Columns", f"{len(cat_df.columns)}"],
+            ["Memory Footprint", f"{memory_mb:.2f} MB", "Data Hygiene Index", f"{quality_index:.1f} / 100"],
+        ]
+    summary_table = Table(summary_data, colWidths=[150, 120, 150, 120])
+    summary_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F3F4F6")),
+        ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#111827")),
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D1D5DB")),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    story.append(summary_table)
+    story.append(Paragraph(
+        "Quality Index blends column completeness and row uniqueness equally.",
+        note_style
+    ))
+    story.append(Spacer(1, 10))
+
+    # 2 -- per-column structure, every column listed
+    story.append(Paragraph("2. Column Structure & Missing Value Breakdown", heading2_style))
+    col_table_data = [["#", "Column Name", "Data Type", "Non-Null", "Missing", "Missing %", "Unique"]]
+    for position, col in enumerate(df.columns, start=1):
+        m_cnt = int(df[col].isnull().sum())
+        m_pct = m_cnt / max(rows, 1) * 100
+        col_table_data.append([
+            str(position),
+            Paragraph(escape(str(col)), cell_style),
+            escape(str(df[col].dtype)),
+            f"{int(df[col].notnull().sum()):,}",
+            f"{m_cnt:,}",
+            f"{m_pct:.1f}%",
+            f"{int(df[col].nunique(dropna=True)):,}",
+        ])
+    story.append(_style_table(
+        col_table_data, SECTION_COLORS["blue"],
+        col_widths=[22, 168, 70, 70, 60, 65, 85]
+    ))
+    story.append(Spacer(1, 12))
+
+    # 3 -- extended numeric stats
+    if not num_df.empty:
+        display_num_cols = list(num_df.columns[:100])
+        num_capped_note = f" (First 100 of {len(num_df.columns)} Columns)" if len(num_df.columns) > 100 else ""
+        story.append(Paragraph(f"3. Numerical Descriptive Statistics{num_capped_note}", heading2_style))
+        stats_table_data = [[
+            "Feature", "Count", "Mean", "Std Dev", "Min",
+            "Q1 (25%)", "Median", "Q3 (75%)", "Max", "Skew", "Kurtosis"
+        ]]
+        for col in display_num_cols:
+            s = df[col].dropna()
+            if s.empty:
+                continue
+            if col in sensitive_cols:
+                stats_table_data.append([
+                    Paragraph(escape(str(col)), cell_style),
+                    _fmt(s.count(), 0),
+                    "[REDACTED]",
+                    "[REDACTED]",
+                    "[REDACTED]",
+                    "[REDACTED]",
+                    "[REDACTED]",
+                    "[REDACTED]",
+                    "[REDACTED]",
+                    "-",
+                    "-",
+                ])
+            else:
+                stats_table_data.append([
+                    Paragraph(escape(str(col)), cell_style),
+                    _fmt(s.count(), 0),
+                    _fmt(s.mean()),
+                    _fmt(s.std()),
+                    _fmt(s.min()),
+                    _fmt(s.quantile(0.25)),
+                    _fmt(s.median()),
+                    _fmt(s.quantile(0.75)),
+                    _fmt(s.max()),
+                    _fmt(s.skew()),
+                    _fmt(s.kurtosis()),
+                ])
+        story.append(_style_table(
+            stats_table_data, SECTION_COLORS["teal"],
+            col_widths=[90, 40, 48, 48, 46, 46, 46, 46, 46, 36, 48]
+        ))
+        story.append(Spacer(1, 12))
+
+    # 4 -- tukey outliers
+    if not num_df.empty:
+        story.append(Paragraph("4. Outlier Analysis (Tukey IQR Method)", heading2_style))
+        outlier_data = [["Column", "Q1 (25%)", "Q3 (75%)", "IQR", "Lower Bound", "Upper Bound", "Outliers", "Outlier %"]]
+        for col in num_df.columns:
+            s = df[col].dropna()
+            if s.empty:
+                continue
+            if col in sensitive_cols:
+                outlier_data.append([
+                    Paragraph(escape(str(col)), cell_style),
+                    "[REDACTED]", "[REDACTED]", "[REDACTED]", "[REDACTED]", "[REDACTED]",
+                    "-", "-",
+                ])
+                continue
+            q1 = s.quantile(0.25)
+            q3 = s.quantile(0.75)
+            iqr = q3 - q1
+            lb = q1 - 1.5 * iqr
+            ub = q3 + 1.5 * iqr
+            o_cnt = int(((s < lb) | (s > ub)).sum()) if iqr > 0 else 0
+            pct = o_cnt / len(s) * 100
+            outlier_data.append([
+                Paragraph(escape(str(col)), cell_style),
+                _fmt(q1), _fmt(q3), _fmt(iqr), _fmt(lb), _fmt(ub),
+                f"{o_cnt:,}", f"{pct:.1f}%"
+            ])
+        story.append(_style_table(
+            outlier_data, SECTION_COLORS["purple"],
+            col_widths=[130, 55, 55, 55, 62, 62, 58, 63]
+        ))
+        story.append(Spacer(1, 12))
+
+    # 5 -- categoricals
+    if not cat_df.empty:
+        display_cat_cols = list(cat_df.columns[:100])
+        cat_capped_note = f" (First 100 of {len(cat_df.columns)} Columns)" if len(cat_df.columns) > 100 else ""
+        story.append(Paragraph(f"5. Categorical Column Analysis{cat_capped_note}", heading2_style))
+        cat_data = [["Column", "Unique", "Top Value", "Top Frequency", "Top Share", "Missing"]]
+        for col in display_cat_cols:
+            s = df[col].dropna()
+            unique_n = int(s.nunique())
+            if s.empty:
+                top_value, top_freq, top_share = "-", 0, 0.0
+            else:
+                if col in sensitive_cols:
+                    top_value = "[REDACTED SENSITIVE]"
+                else:
+                    top_value = str(s.mode().iloc[0])[:38]
+                top_freq = int(s.value_counts().iloc[0])
+                top_share = top_freq / len(s) * 100
+            cat_data.append([
+                Paragraph(escape(str(col)), cell_style),
+                f"{unique_n:,}",
+                Paragraph(escape(top_value), cell_style),
+                f"{top_freq:,}",
+                f"{top_share:.1f}%",
+                f"{int(df[col].isnull().sum()):,}",
+            ])
+        story.append(_style_table(
+            cat_data, SECTION_COLORS["orange"],
+            col_widths=[140, 60, 160, 75, 60, 45]
+        ))
+        story.append(Spacer(1, 12))
+
+    # 6 -- strongest correlations
+    safe_corr_cols = [c for c in num_df.columns if c not in sensitive_cols]
+    if len(safe_corr_cols) >= 2:
+        corr_num_df = num_df[safe_corr_cols]
+        capped_note = ""
+        if len(safe_corr_cols) > 50:
+            variances = corr_num_df.var().sort_values(ascending=False)
+            corr_num_df = corr_num_df[variances.head(50).index]
+            capped_note = " (Top 50 non-sensitive columns by variance)"
+        corr_matrix = corr_num_df.corr(numeric_only=True)
+        pairs = []
+        columns = list(corr_matrix.columns)
+        for i in range(len(columns)):
+            for j in range(i + 1, len(columns)):
+                r = corr_matrix.iloc[i, j]
+                if pd.notna(r) and abs(r) >= 0.3:
+                    pairs.append((columns[i], columns[j], float(r)))
+        pairs.sort(key=lambda item: abs(item[2]), reverse=True)
+
+        if pairs:
+            story.append(Paragraph(f"6. Correlation Insights (|r| ≥ 0.30){capped_note}", heading2_style))
+            corr_data = [["Feature A", "Feature B", "Pearson r", "Strength", "Direction"]]
+            for name_a, name_b, r in pairs[:12]:
+                strength = "Strong" if abs(r) >= 0.7 else ("Moderate" if abs(r) >= 0.4 else "Weak")
+                direction = "Positive" if r > 0 else "Negative"
+                corr_data.append([
+                    Paragraph(escape(str(name_a)), cell_style),
+                    Paragraph(escape(str(name_b)), cell_style),
+                    f"{r:+.3f}", strength, direction
+                ])
+            story.append(_style_table(
+                corr_data, SECTION_COLORS["rose"],
+                col_widths=[165, 165, 70, 70, 70]
+            ))
+            story.append(Spacer(1, 12))
+
+    # 7 -- quality flags per column
+    display_quality_cols = list(df.columns[:100])
+    qual_capped_note = f" (First 100 of {len(df.columns)} Columns)" if len(df.columns) > 100 else ""
+    story.append(Paragraph(f"7. Data Quality Assessment{qual_capped_note}", heading2_style))
+    quality_data = [["Column", "Completeness %", "Uniqueness %", "Flags"]]
+    flags_by_column = {}
+    for col in display_quality_cols:
+        s = df[col]
+        flags = _quality_flags_for_column(s)
+        col_missing_pct = s.isnull().mean() * 100
+        flags_by_column[col] = ", ".join(flags) if flags else "OK"
+        completeness_col = 100 - col_missing_pct
+        uniqueness_col = s.nunique(dropna=True) / max(len(s.dropna()), 1) * 100
+        quality_data.append([
+            Paragraph(escape(str(col)), cell_style),
+            f"{completeness_col:.1f}%",
+            f"{uniqueness_col:.1f}%",
+            Paragraph(escape(flags_by_column[col]), cell_style),
+        ])
+    story.append(_style_table(
+        quality_data, SECTION_COLORS["indigo"],
+        col_widths=[150, 90, 90, 210]
+    ))
+    flagged = [c for c, f in flags_by_column.items() if f != "OK"]
+    if flagged:
+        story.append(Paragraph(
+            f"Columns needing review: {escape(', '.join(str(c) for c in flagged[:15]))}"
+            + (" ..." if len(flagged) > 15 else ""),
+            note_style
+        ))
+    story.append(Spacer(1, 12))
+
+    # 8 -- sample records
+    if cols == 0:
+        story.append(Paragraph("8. Sample Records", heading2_style))
+        story.append(Paragraph(
+            "The dataset has no columns, so no sample records can be shown.",
+            note_style
+        ))
+        story.append(Spacer(1, 12))
+    else:
+        is_subset = is_sampled or (source_rows is not None and analyzed_rows is not None and source_rows != analyzed_rows)
+        sample_title = "8. Sample Records (First 8 Rows of Sample)" if is_subset else "8. Sample Records (First 8 Rows)"
+        story.append(Paragraph(sample_title, heading2_style))
+        sample_cols = list(df.columns[:8])
+        sample_data = [[escape(str(c)) for c in sample_cols]]
+        # Mask sensitive columns to prevent accidental credential/PII leakage in PDF reports
+        for _, row in df[sample_cols].head(8).iterrows():
+            row_cells = []
+            for c in sample_cols:
+                v = row[c]
+                if c in sensitive_cols and pd.notna(v):
+                    row_cells.append(Paragraph("●●●●●●", cell_style))
+                else:
+                    row_cells.append(Paragraph(escape(str(v)[:28] if pd.notna(v) else "-"), cell_style))
+            sample_data.append(row_cells)
+        sample_width = USABLE_WIDTH / len(sample_cols)
+        story.append(_style_table(sample_data, SECTION_COLORS["slate"], col_widths=[sample_width] * len(sample_cols)))
+        if cols > len(sample_cols):
+            story.append(Paragraph(
+                f"Showing first {len(sample_cols)} of {cols} columns.", note_style
+            ))
+        story.append(Spacer(1, 12))
+
+    # 9 -- optional matplotlib charts
+    charts_shown = False
+    safe_chart_cols = [c for c in num_df.columns if c not in sensitive_cols]
+    if include_charts and safe_chart_cols:
+        base_chart_df = df[safe_chart_cols]
+        chart_df, chart_sampled, _ = sample_for_visualization(base_chart_df, max_rows=25_000, random_state=42)
+        chart_rows = len(chart_df)
+
+        chart_images = _safe_chart(_render_histograms, chart_df, max_charts=4, default=[])
+        heatmap_buffer = _safe_chart(_render_correlation_heatmap, chart_df) if len(safe_chart_cols) >= 2 else None
+        box_images = _safe_chart(_render_boxplots, chart_df, max_charts=4, default=[])
+
+        if chart_images or heatmap_buffer or box_images:
+            charts_shown = True
+            story.append(Paragraph("9. Distribution & Relationship Charts", heading2_style))
+            if chart_sampled:
+                story.append(Paragraph(
+                    f"<i>Note: Charts are rendered using a representative sample of {chart_rows:,} rows "
+                    f"(out of {rows:,} analyzed rows) for performance and visual clarity.</i>",
+                    note_style
+                ))
+
+            def _image_grid(images, image_width=260, image_height=150):
+                grid_rows = []
+                current_row = []
+                for _, img_buffer in images:
+                    current_row.append(Image(img_buffer, width=image_width, height=image_height))
+                    if len(current_row) == 2:
+                        grid_rows.append(current_row)
+                        current_row = []
+                if current_row:
+                    current_row.extend([None] * (2 - len(current_row)))
+                    grid_rows.append(current_row)
+                for row_cells in grid_rows:
+                    cells = [cell if cell is not None else "" for cell in row_cells]
+                    row_table = Table([cells], colWidths=[270] * len(cells))
+                    row_table.setStyle(TableStyle([
+                        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                        ("TOPPADDING", (0, 0), (-1, -1), 4),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                    ]))
+                    story.append(row_table)
+
+            if chart_images:
+                story.append(Paragraph("Distributions", body_style))
+                _image_grid(chart_images)
+            if box_images:
+                story.append(Spacer(1, 6))
+                story.append(Paragraph("Box Plots (Outlier View)", body_style))
+                _image_grid(box_images, image_width=250, image_height=130)
+            if heatmap_buffer is not None:
+                story.append(Spacer(1, 6))
+                story.append(Paragraph("Correlation Heatmap (Top Columns by Variance)", body_style))
+                heat_table = Table([[Image(heatmap_buffer, width=330, height=280)]], colWidths=[540])
+                heat_table.setStyle(TableStyle([
+                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ]))
+                story.append(heat_table)
+            story.append(Spacer(1, 10))
+
+    # 10 -- optional AI insights (markdown-lite rendering); number follows
+    # whether a charts section actually exists, so reports never skip a digit
+    if include_ai_insights:
+        section_no = "10" if charts_shown else "9"
+        story.append(Paragraph(f"{section_no}. AI Executive Insights & Strategy", heading2_style))
+        for line in include_ai_insights.split("\n"):
+            clean_line = line.strip()
+            if not clean_line:
+                continue
+            stripped = clean_line.lstrip("#").strip()
+            bold_match = stripped.startswith("**") and "**" in stripped[2:]
+            if clean_line.startswith("#") or bold_match:
+                text = stripped.replace("**", "").replace("#", "").strip()
+                story.append(Paragraph(escape(text), ai_heading_style))
+            elif stripped.startswith(("-", "*")):
+                story.append(Paragraph(f"• {escape(stripped[1:].strip())}", body_style))
+                story.append(Spacer(1, 2))
+            else:
+                story.append(Paragraph(escape(stripped.replace("*", "")), body_style))
+                story.append(Spacer(1, 3))
+
+    doc.build(story, onFirstPage=footer, onLaterPages=footer)
+    buffer.seek(0)
+    return buffer.getvalue()
