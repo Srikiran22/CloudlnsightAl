@@ -1,0 +1,23 @@
+# Core platform
+streamlit>=1.52.0        # 1.52.0+ required for width="stretch" support across dataframe and chart elements
+pandas>=2.0.0
+numpy>=1.24.0
+
+# File formats
+openpyxl>=3.1.0        # Excel reader for .xlsx
+xlrd>=2.0.1            # Excel reader for legacy .xls
+pyarrow>=14.0.0        # Parquet reader for pd.read_parquet
+pypdf>=4.0.0           # PDF text extraction before AI structuring
+
+# Analytics / ML
+plotly>=5.18.0
+scikit-learn>=1.3.0
+statsmodels>=0.14.0    # required by plotly trendline="ols" (Visualization page OLS checkbox)
+
+# External services
+google-genai>=1.0.0
+boto3>=1.34.0
+
+# Reports
+reportlab>=4.0.0
+matplotlib>=3.7.0      # optional at runtime: PDF report charts
