@@ -2,7 +2,7 @@
 
 ![CI Status](https://github.com/Srikiran22/CloudInsightAI/actions/workflows/tests.yml/badge.svg)
 ![Python 3.12 | 3.13](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
-![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
+![Platform: Windows 11](https://img.shields.io/badge/platform-Windows%2011-blue)
 
 CloudInsight AI is a local-first data analytics application built with Streamlit, pandas, scikit-learn, Plotly, ReportLab, and Google Gemini.
 
@@ -138,10 +138,10 @@ Gemini is optional and is used for:
 The platform defaults to `gemini-3.8-flash` via the primary `google-genai` SDK, while supporting `gemini-3.5-flash`, `gemini-2.5-flash`, and `gemini-2.5-pro` (retired Gemini 1.x/2.0 models map automatically to supported modern equivalents).
 
 ## Requirements
-
-- Python 3.12+ (tested and CI-validated on Ubuntu, Windows, and macOS across Python 3.12 and 3.13)
+ 
+- Python 3.12+ (tested and CI-validated on Windows 11 across Python 3.12 and 3.13)
 - Streamlit 1.52.0+
-- Linux, Windows, or macOS
+- Windows 11
 
 A database is not required. Production dependencies are locked in `requirements-lock.txt` for exact CI-matched reproducibility, with loose ranges in `requirements.txt`.
 
@@ -266,7 +266,6 @@ CloudInsightAI/
 ├── App.py                 # Application entry point and navigation
 ├── CHANGELOG.md           # Product release notes and version history
 ├── CONTRIBUTING.md        # Contribution guidelines and development checks
-├── LICENSE                # MIT License
 ├── pyproject.toml         # Ruff, pytest, and project metadata configuration
 ├── README.md              # Project documentation and setup guide
 ├── requirements.txt       # Base application dependencies

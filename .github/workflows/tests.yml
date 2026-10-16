@@ -15,11 +15,11 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ${{ matrix.os }}
+    name: Windows 11 (Python ${{ matrix.python-version }})
+    runs-on: windows-latest
     timeout-minutes: 30
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.12", "3.13"]
       fail-fast: false
 
@@ -31,12 +31,6 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-
-      - name: Install system dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libpng-dev libfreetype6-dev pkg-config
 
       - name: Install dependencies
         run: |
