@@ -11,15 +11,18 @@ from Utils.privacy import apply_exclusions, detect_sensitive_columns
 from Utils.secrets import ask, value_of, keep_box, release, drop
 from Utils.logsys import get_logger
 from Utils.dataset_ui import dataframe_fingerprint, dataset_fingerprint, render_sidebar, select_working_dataset
+from Utils.theme import page_header, section_card_header
 
 logger = get_logger("AI")
 
 MAX_TOTAL_CHAT_CHARS = 100_000
 
-st.title("AI insights")
-st.markdown("Gemini-powered executive summaries and conversational Q&A over the active dataset.")
+page_header(
+    "AI Summary & Insights",
+    "Executive summaries, natural language diagnostics, and statistical insights over the active dataset."
+)
 
-df, selected_file = select_working_dataset("Select Dataset for AI Analysis:")
+df, selected_file = select_working_dataset("Active Dataset:")
 render_sidebar()
 
 try:
@@ -47,35 +50,47 @@ with st.sidebar:
 
 api_key = value_of("gemini")
 
-if not api_key:
-    st.info("Enter your **Google Gemini API key** in the sidebar to generate new AI insights or send chat messages.")
-
-st.caption(f"Analyzing: `{selected_file}` ({df.shape[0]:,} rows × {df.shape[1]} cols)")
-st.warning(
-    "Privacy note: generating insights or asking a question sends a compact dataset summary and sample rows "
-    "to Google Gemini. Use de-identified data when it contains sensitive information."
-)
-
-# privacy screening: let the user exclude likely-sensitive columns from the
-# AI context entirely; everything below uses ai_df instead of df
-st.caption(
-    "Automated privacy screening: uses pattern heuristics to detect likely-sensitive columns "
-    "(emails, tokens, credit cards, phones, IBANs). This does not replace human data classification."
-)
-
+# Privacy screening: detect sensitive columns
 sensitive = detect_sensitive_columns(df)
-if sensitive:
-    reasons = ", ".join(f"`{col}` ({reason})" for col, reason in sorted(sensitive.items()))
-    st.warning(f"Possible sensitive columns detected: {reasons}.")
-
 all_cols = list(df.columns)
 default_exclusions = [c for c in all_cols if c in sensitive]
-excluded_cols = st.multiselect(
-    "Columns to EXCLUDE from AI context:",
-    options=all_cols,
-    default=default_exclusions,
-    help="Excluded columns are removed from everything sent to Gemini. Detected sensitive columns are preselected automatically.",
-)
+
+# Consolidated AI Governance & Privacy Shield
+with st.container(border=True):
+    section_card_header(
+        "AI Governance & Privacy Shield",
+        f"Data governance, PII protection, and context boundary for {selected_file}"
+    )
+    gov_col1, gov_col2 = st.columns([1.2, 1.8])
+    with gov_col1:
+        if api_key:
+            st.success("Gemini API Key: Active in Session")
+        else:
+            st.warning("Gemini API Key: Required to generate insights")
+            ask(
+                "gemini",
+                "Enter Gemini API Key (or set in sidebar):",
+                help_text="Key is held in volatile session memory only. Get a free key at https://aistudio.google.com/",
+                key="inline_gemini_key_ai",
+            )
+            api_key = value_of("gemini")
+
+        if sensitive:
+            reasons = ", ".join(f"`{col}`" for col in sorted(sensitive.keys()))
+            st.info(f"PII Protection: {len(sensitive)} sensitive column(s) detected ({reasons}) and pre-excluded.")
+        else:
+            st.success("PII Protection: No high-risk identifiers detected in active schema.")
+
+        st.caption("*Only statistical summaries and non-excluded sample records are transmitted to Google Gemini.*")
+
+    with gov_col2:
+        excluded_cols = st.multiselect(
+            "Columns to EXCLUDE from AI context:",
+            options=all_cols,
+            default=default_exclusions,
+            help="Excluded columns are stripped from everything sent to Gemini. Detected sensitive columns are preselected automatically.",
+        )
+
 ai_df, exclusions_applied = apply_exclusions(df, excluded_cols)
 if not exclusions_applied and excluded_cols:
     st.error(
@@ -87,8 +102,6 @@ if not exclusions_applied and excluded_cols:
 if exclusions_applied:
     logger.info("AI context excludes %d flagged column(s)", len(excluded_cols))
 
-tab_insights, tab_chat = st.tabs(["Executive report", "Chat"])
-
 excl_sig = ",".join(sorted(excluded_cols))
 ctx_str = f"{selected_file}|{active_fp}|{chosen_model}|{excl_sig}|v2"
 ctx_hash = hashlib.sha256(ctx_str.encode("utf-8")).hexdigest()[:16]
@@ -98,51 +111,57 @@ chat_key = f"chat_messages_{ctx_hash}"
 
 prune_ai_contexts(st.session_state, ctx_hash)
 
-with tab_insights:
-    st.markdown("Generate a data health audit, pattern discovery, and business recommendations.")
 
-    if st.button("Generate insights report", type="primary"):
-        if not api_key:
-            st.error("Google Gemini API key is required to generate new insights. Enter your key in the sidebar.")
-        else:
-            with st.spinner("Gemini is analyzing your dataset structure, metrics, and distributions..."):
-                try:
-                    insights_text = generate_executive_insights(
-                        api_key=api_key,
-                        df=ai_df,
-                        dataset_name=selected_file,
-                        model_name=chosen_model
-                    )
-                    st.session_state[insights_key] = insights_text
-                    st.session_state["latest_ai_insights"] = {
-                        "dataset_name": selected_file,
-                        "dataset_fingerprint": active_fp,
-                        "model_name": chosen_model,
-                        "excluded_cols": sorted(list(excluded_cols)),
-                        "ctx_hash": ctx_hash,
-                        "text": insights_text,
-                    }
-                    st.session_state[f"insights_{selected_file}_{active_fp}"] = insights_text
-                except GeminiError as e:
-                    st.error(f"Gemini error — {e}")
-                except Exception as e:
-                    logger.warning("insights generation failed: %s: %s", type(e).__name__, e)
-                    st.error(f"Gemini error: {str(e)}")
-                finally:
-                    if release("gemini", keep_key="gemini_keep"):
-                        st.toast("Gemini key released from session state.")
-
-    saved_insights = st.session_state.get(insights_key)
-    if saved_insights:
-        st.markdown(saved_insights)
-        st.download_button(
-            label="Download insights (Markdown)",
-            data=saved_insights.encode("utf-8"),
-            file_name=f"ai_insights_{selected_file}.md",
-            mime="text/markdown"
+def render_executive_summary():
+    with st.container(border=True):
+        section_card_header(
+            "Executive Data Summary",
+            "Generate an automated data health audit, pattern discovery, and actionable findings"
         )
 
-with tab_chat:
+        if st.button("Generate insights report", type="primary"):
+            if not api_key:
+                st.error("Google Gemini API key is required to generate new insights. Enter your key in the sidebar.")
+            else:
+                with st.spinner("Gemini is analyzing your dataset structure, metrics, and distributions..."):
+                    try:
+                        insights_text = generate_executive_insights(
+                            api_key=api_key,
+                            df=ai_df,
+                            dataset_name=selected_file,
+                            model_name=chosen_model
+                        )
+                        st.session_state[insights_key] = insights_text
+                        st.session_state["latest_ai_insights"] = {
+                            "dataset_name": selected_file,
+                            "dataset_fingerprint": active_fp,
+                            "model_name": chosen_model,
+                            "excluded_cols": sorted(list(excluded_cols)),
+                            "ctx_hash": ctx_hash,
+                            "text": insights_text,
+                        }
+                        st.session_state[f"insights_{selected_file}_{active_fp}"] = insights_text
+                    except GeminiError as e:
+                        st.error(f"Gemini error — {e}")
+                    except Exception as e:
+                        logger.warning("insights generation failed: %s: %s", type(e).__name__, e)
+                        st.error(f"Gemini error: {str(e)}")
+                    finally:
+                        if release("gemini", keep_key="gemini_keep"):
+                            st.toast("Gemini key released from session state.")
+
+        saved_insights = st.session_state.get(insights_key)
+        if saved_insights:
+            st.markdown(saved_insights)
+            st.download_button(
+                label="Download insights (Markdown)",
+                data=saved_insights.encode("utf-8"),
+                file_name=f"ai_insights_{selected_file}.md",
+                mime="text/markdown"
+            )
+
+
+def render_chat_tab():
     st.markdown(
         "Ask questions about your dataset based on column structures, summary metrics, "
         "and sample records."
@@ -195,3 +214,14 @@ with tab_chat:
                     finally:
                         if release("gemini", keep_key="gemini_keep"):
                             st.toast("Gemini key released from session state.")
+
+
+has_chat_history = bool(st.session_state.get(chat_key))
+if has_chat_history:
+    tab_insights, tab_chat = st.tabs(["Executive summary", "Chat"])
+    with tab_insights:
+        render_executive_summary()
+    with tab_chat:
+        render_chat_tab()
+else:
+    render_executive_summary()

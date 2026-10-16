@@ -13,32 +13,36 @@
 #   concrete values — no reliance on Streamlit runtime CSS variable names, so
 #   contrast is correct in both modes.
 
+import html
+import re
 import streamlit as st
 
 
 def _palette(dark):
     if dark:
         return {
+            "__BG__": "#0B0F19",
             "__ACCENT__": "#3B82F6",
             "__ACCENT_HOVER__": "#60A5FA",
-            "__TEXT__": "#E5E7EB",
-            "__TEXT2__": "rgba(226, 232, 240, .80)",
-            "__MUTED__": "rgba(148, 163, 184, .88)",
+            "__TEXT__": "#F8FAFC",
+            "__TEXT2__": "#CBD5E1",
+            "__MUTED__": "#94A3B8",
             "__BORDER__": "rgba(148, 163, 184, .26)",
             "__TINT__": "rgba(148, 163, 184, .09)",
             "__SURFACE__": "#111827",
             "__SHADOW__": "none",
         }
     return {
+        "__BG__": "#FFFFFF",
         "__ACCENT__": "#2563EB",
         "__ACCENT_HOVER__": "#1D4ED8",
-        "__TEXT__": "#101828",
-        "__TEXT2__": "rgba(52, 64, 84, .92)",
-        "__MUTED__": "rgba(100, 116, 139, .95)",
-        "__BORDER__": "rgba(120, 120, 135, .24)",
-        "__TINT__": "rgba(128, 128, 140, .06)",
-        "__SURFACE__": "#F7F8FA",
-        "__SHADOW__": "0 1px 2px rgba(16, 24, 40, .06)",
+        "__TEXT__": "#0F172A",
+        "__TEXT2__": "#334155",
+        "__MUTED__": "#64748B",
+        "__BORDER__": "rgba(100, 116, 139, .22)",
+        "__TINT__": "rgba(100, 116, 139, .06)",
+        "__SURFACE__": "#F8FAFC",
+        "__SHADOW__": "0 1px 2px rgba(15, 23, 42, .06)",
     }
 
 
@@ -49,10 +53,10 @@ SEMANTIC_TOKENS = {
     "warning": "#D97706",
     "danger": "#DC2626",
     "info": "#0284C7",
-    "text": "#101828",
+    "text": "#0F172A",
     "muted": "#64748B",
     "background": "#FFFFFF",
-    "surface": "#F7F8FA",
+    "surface": "#F8FAFC",
     "border": "#E2E8F0",
 }
 
@@ -63,11 +67,11 @@ DARK_SEMANTIC_TOKENS = {
     "warning": "#F59E0B",
     "danger": "#EF4444",
     "info": "#38BDF8",
-    "text": "#E5E7EB",
+    "text": "#F8FAFC",
     "muted": "#94A3B8",
-    "background": "#0E1117",
+    "background": "#0B0F19",
     "surface": "#111827",
-    "border": "#374151",
+    "border": "#263042",
 }
 
 CHART_PALETTE = [
@@ -89,6 +93,7 @@ def get_semantic_tokens(dark: bool = False) -> dict:
 
 _CSS = """
 :root {
+  --ci-bg: __BG__;
   --ci-accent: __ACCENT__;
   --ci-accent-hover: __ACCENT_HOVER__;
   --ci-text: __TEXT__;
@@ -103,6 +108,13 @@ _CSS = """
   --ci-font: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
 }
 
+/* ---- global app container & background consistency ----------------- */
+.stApp, [data-testid="stAppViewContainer"] {
+  background-color: var(--ci-bg) !important;
+  color: var(--ci-text) !important;
+  font-family: var(--ci-font);
+}
+
 /* ---- typography scale ------------------------------------------------ */
 .stApp, .stApp p, .stApp li {
   font-family: var(--ci-font);
@@ -112,18 +124,26 @@ _CSS = """
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.25;
+  color: var(--ci-text) !important;
   margin-bottom: 0;
 }
 .stApp h2 {                       /* section headings via st.subheader */
-  font-size: 1.02rem;
+  font-size: 1.05rem;
   font-weight: 650;
   letter-spacing: -0.01em;
+  color: var(--ci-text) !important;
   padding-bottom: .35rem;
   border-bottom: 1px solid var(--ci-border);
 }
 .stApp h3 {
-  font-size: .93rem;
+  font-size: .95rem;
   font-weight: 650;
+  color: var(--ci-text) !important;
+}
+.stApp h4 {
+  font-size: .9rem;
+  font-weight: 650;
+  color: var(--ci-text) !important;
 }
 .stApp p, .stApp li {
   font-size: .9rem;
@@ -131,16 +151,33 @@ _CSS = """
   color: var(--ci-text-2);
 }
 .stApp caption, .stApp [data-testid="stCaptionContainer"] p {
-  font-size: .8rem;
+  font-size: .82rem;
   color: var(--ci-muted);
 }
-.stApp strong { color: var(--ci-text); }
+.stApp strong { color: var(--ci-text); font-weight: 650; }
+
+/* ---- form labels & radios & checkboxes ------------------------------- */
+[data-testid="stWidgetLabel"] p,
+[data-testid="stWidgetLabel"] span,
+[data-testid="stWidgetLabel"] label {
+  color: var(--ci-text) !important;
+  font-weight: 600 !important;
+  font-size: 0.88rem !important;
+}
+[data-testid="stCheckbox"] label p,
+[data-testid="stRadio"] label p,
+[data-testid="stRadio"] [data-testid="stMarkdownContainer"] p {
+  color: var(--ci-text) !important;
+  font-weight: 500 !important;
+  font-size: 0.88rem !important;
+}
 
 /* ---- layout ------------------------------------------------------------ */
 [data-testid="stMainBlockContainer"], .block-container {
   max-width: 1180px;
   padding-top: 1.6rem;
   padding-bottom: 3rem;
+  background-color: transparent !important;
 }
 hr {
   border: none;
@@ -160,57 +197,88 @@ section[data-testid="stSidebar"] {
   border-right: 1px solid var(--ci-border);
 }
 section[data-testid="stSidebar"] .block-container {
-  padding-top: 1rem;
+  padding-top: 0.6rem !important;
+  padding-bottom: 0.6rem !important;
 }
-section[data-testid="stSidebar"] hr { margin: .8rem 0; }
+section[data-testid="stSidebar"] hr { margin: .5rem 0; }
+
+/* ---- compact sidebar navigation ----------------------------------------- */
+[data-testid="stSidebarNav"] {
+  padding-top: 0.15rem !important;
+  padding-bottom: 0.15rem !important;
+}
+[data-testid="stSidebarNavItems"] {
+  gap: 1px !important;
+}
+[data-testid="stSidebarNavItems"] li {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+[data-testid="stSidebarNavItems"] a,
 section[data-testid="stSidebar"] a,
 section[data-testid="stSidebar"] [data-testid="stPageLink-NavLink"] {
-  font-size: .88rem;
+  font-size: 0.83rem !important;
   border-radius: var(--ci-radius-sm);
-  padding: .3rem .55rem;
+  padding: 2.5px 8px !important;
+  min-height: 1.7rem !important;
+  line-height: 1.25 !important;
 }
+[data-testid="stSidebarNavItems"] a:hover,
 section[data-testid="stSidebar"] [data-testid="stPageLink-NavLink"]:hover {
   background: var(--ci-tint);
 }
-.ci-brand { margin-bottom: .25rem; user-select: none; }
+[data-testid="stSidebarNav"] [data-testid="stSidebarNavSeparator"],
+[data-testid="stSidebarNav"] span[data-testid="stHeader"] {
+  margin-top: 0.35rem !important;
+  margin-bottom: 0.1rem !important;
+  font-size: 0.70rem !important;
+  letter-spacing: 0.06em !important;
+}
+[data-testid="stSidebarUserContent"] {
+  padding-top: 0.15rem !important;
+}
+
+.ci-brand { margin-bottom: .2rem; user-select: none; }
 .ci-brand-name {
   font-family: var(--ci-font);
-  font-size: .98rem;
+  font-size: .95rem;
   font-weight: 750;
   letter-spacing: -0.02em;
   color: var(--ci-text);
 }
 .ci-brand-name span { color: var(--ci-accent); }
 .ci-brand-tag {
-  font-size: .74rem;
+  font-size: .72rem;
   color: var(--ci-muted);
-  line-height: 1.4;
+  line-height: 1.35;
 }
 .ci-side-label {
-  font-size: .68rem;
+  font-size: .65rem;
   font-weight: 650;
   text-transform: uppercase;
   letter-spacing: .08em;
   color: var(--ci-muted);
-  margin-bottom: .15rem;
+  margin-top: 0.3rem;
+  margin-bottom: .1rem;
 }
 .ci-dataset {
   background: var(--ci-surface);
   border: 1px solid var(--ci-border);
   border-radius: var(--ci-radius);
-  padding: .6rem .7rem;
-  margin-top: .15rem;
+  padding: .4rem .6rem;
+  margin-top: .1rem;
+  margin-bottom: .25rem;
 }
 .ci-dataset-name {
-  font-size: .85rem;
+  font-size: .82rem;
   font-weight: 600;
   color: var(--ci-text);
   word-break: break-all;
 }
 .ci-dataset-meta {
-  font-size: .76rem;
+  font-size: .72rem;
   color: var(--ci-muted);
-  margin-top: .1rem;
+  margin-top: .05rem;
 }
 
 /* ---- buttons: primary / secondary / tertiary hierarchy ------------------ */
@@ -218,52 +286,93 @@ section[data-testid="stSidebar"] [data-testid="stPageLink-NavLink"]:hover {
   border-radius: var(--ci-radius-sm);
   border: 1px solid var(--ci-border);
   font-weight: 600;
-  font-size: .87rem;
-  height: 2.2rem;
+  font-size: .88rem;
+  height: 2.35rem;
   box-shadow: none;
-  transition: background-color .12s ease, border-color .12s ease;
+  transition: all .15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .stButton > button[kind="primary"] {
-  background: var(--primary-color, var(--ci-accent));
-  border-color: transparent;
-  color: #FFFFFF;
+  background: var(--ci-accent) !important;
+  border-color: transparent !important;
+  color: #FFFFFF !important;
 }
 .stButton > button[kind="primary"]:hover {
-  background: var(--ci-accent-hover);
-  border-color: transparent;
-  color: #FFFFFF;
+  background: var(--ci-accent-hover) !important;
+  border-color: transparent !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 2px 4px rgba(37, 99, 235, .25);
 }
-.stButton > button:hover {
-  border-color: rgba(120, 120, 135, .45);
+.stButton > button:not([kind="primary"]) {
+  background: var(--ci-surface);
   color: var(--ci-text);
+  border: 1px solid var(--ci-border);
+}
+.stButton > button:not([kind="primary"]):hover {
+  border-color: var(--ci-accent);
+  color: var(--ci-accent);
+  background: var(--ci-tint);
 }
 .stButton > button:focus-visible {
   outline: 2px solid var(--ci-accent);
   outline-offset: 2px;
 }
 
-/* ---- metrics: quiet numbers instead of cards ----------------------------- */
+/* ---- metrics: structured KPI cards --------------------------------------- */
 [data-testid="stMetric"] {
-  background: none;
-  border: none;
-  padding: .15rem 0 .5rem 0;
+  background: var(--ci-surface) !important;
+  border: 1px solid var(--ci-border) !important;
+  border-radius: 10px !important;
+  padding: 12px 16px !important;
+  box-shadow: var(--ci-shadow-sm);
+  transition: border-color .15s ease, box-shadow .15s ease;
 }
-[data-testid="stMetricLabel"] > div {
-  font-size: .72rem !important;
+[data-testid="stMetric"]:hover {
+  border-color: var(--ci-accent) !important;
+}
+[data-testid="stMetricLabel"],
+[data-testid="stMetricLabel"] > div,
+[data-testid="stMetricLabel"] p {
+  font-size: .74rem !important;
   font-weight: 650;
   text-transform: uppercase;
   letter-spacing: .07em;
   color: var(--ci-muted) !important;
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  line-height: 1.25 !important;
 }
 [data-testid="stMetricValue"] {
-  font-size: 1.32rem !important;
+  font-size: 1.35rem !important;
   font-weight: 700;
   letter-spacing: -0.02em;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: tabular-nums !important;
   color: var(--ci-text);
+  margin-top: 0.1rem;
 }
 [data-testid="stMetricDelta"] > div[data-testid="stMetricDelta"] {
   font-size: .78rem !important;
+  font-weight: 550;
+}
+/* Hide fake upward/downward arrow SVG on neutral delta status pills */
+[data-testid*="stMetricDelta"] svg,
+[data-testid*="stMetricDeltaIcon-Up"],
+[data-testid*="stMetricDeltaIcon-Down"],
+[data-testid*="stMetricDeltaIcon"],
+[data-testid*="stMetricDelta"] span:has(svg) {
+  display: none !important;
+}
+
+/* ---- containers & borders ------------------------------------------------ */
+[data-testid="stVerticalBlockBorderWrapper"] {
+  border-radius: var(--ci-radius) !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"] > div {
+  border-color: var(--ci-border) !important;
+  border-radius: var(--ci-radius) !important;
 }
 
 /* ---- tabs: underline navigation, not pills -------------------------------- */
@@ -329,8 +438,71 @@ div[data-testid="stAlert"] p { font-size: .86rem; }
 
 /* Streamlit decor that competes with the app's own chrome (community-standard
    polish; the Settings menu stays reachable via the header toolbar). */
-footer [data-testid="stStatusWidget"], footer { display: none; }
+[data-testid="stAppDeployButton"], #MainMenu {
+  display: none !important;
+}
+[data-testid="stSidebarCollapseButton"] {
+  display: flex !important;
+  visibility: visible !important;
+}
+footer [data-testid="stStatusWidget"], footer { display: none !important; }
 """
+
+
+def _format_inline_code(text: str) -> str:
+    """Format inline backtick code snippets into clean HTML code tags after escaping."""
+    if not text:
+        return ""
+    escaped = html.escape(str(text))
+    pattern = r"`([^`]+)`"
+    def _repl(match):
+        inner = match.group(1)
+        return (
+            f'<code style="background:var(--ci-tint, rgba(148,163,184,0.15)); '
+            f'padding:2px 6px; border-radius:4px; font-family:monospace; '
+            f'font-size:0.86em; color:var(--ci-text);">{inner}</code>'
+        )
+    return re.sub(pattern, _repl, escaped)
+
+
+def page_header(title: str, subtitle: str, badge: str | None = None):
+    """Renders a standardized, professional page header row with optional status badge."""
+    badge_html = (
+        f'<span style="background: var(--ci-tint); border: 1px solid var(--ci-border); color: var(--ci-accent); '
+        f'padding: 0.2rem 0.65rem; border-radius: 9999px; font-size: 0.76rem; font-weight: 600; '
+        f'letter-spacing: 0.04em;">{html.escape(badge)}</span>'
+        if badge
+        else ""
+    )
+    formatted_sub = _format_inline_code(subtitle)
+    st.markdown(
+        f"""
+        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.2rem;">
+          <h1 style="margin: 0; padding: 0;">{html.escape(title)}</h1>
+          {badge_html}
+        </div>
+        <p style="margin-top: 0.15rem; margin-bottom: 1.1rem; color: var(--ci-text-2); font-size: 0.92rem;">{formatted_sub}</p>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def section_card_header(title: str, subtitle: str | None = None):
+    """Renders a clean card section header inside bordered containers."""
+    sub_html = (
+        f'<p style="margin: 0.1rem 0 0.65rem 0; color: var(--ci-muted); font-size: 0.82rem;">{_format_inline_code(subtitle)}</p>'
+        if subtitle
+        else ""
+    )
+    st.markdown(
+        f"""
+        <div style="margin-bottom: 0.45rem;">
+          <h3 style="margin: 0; font-size: 0.98rem; font-weight: 650; color: var(--ci-text);">{html.escape(title)}</h3>
+          {sub_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def apply_theme():
@@ -356,6 +528,8 @@ def current_theme_base():
 
 
 def is_dark():
+    if hasattr(st, "session_state") and "theme_mode" in st.session_state:
+        return st.session_state["theme_mode"] == "dark"
     return current_theme_base() == "dark"
 
 
@@ -366,10 +540,13 @@ def plot_template():
 
 def toggle_theme_button():
     dark = is_dark()
-    if st.button("Light mode" if dark else "Dark mode", key="ci_theme_toggle",
-                 use_container_width=True):
+    btn_label = "Light mode" if dark else "Dark mode"
+    if st.button(btn_label, key="ci_theme_toggle", use_container_width=True):
+        new_mode = "light" if dark else "dark"
+        if hasattr(st, "session_state"):
+            st.session_state["theme_mode"] = new_mode
         try:
-            st._config.set_option("theme.base", "light" if dark else "dark")
+            st._config.set_option("theme.base", new_mode)
         except Exception as error:
             # private-API risk made explicit: if the hook ever vanishes the
             # user still gets a hint instead of a button that does nothing

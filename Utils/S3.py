@@ -31,40 +31,80 @@ S3_CLIENT_CONFIG = Config(
 )
 
 
-def get_s3_client(aws_access_key, aws_secret_key, region_name="us-east-1", aws_session_token=None):
+def get_s3_client(aws_access_key=None, aws_secret_key=None, region_name="us-east-1", aws_session_token=None):
+    clean_region = (region_name or "us-east-1").strip()
     kwargs = {
-        "aws_access_key_id": aws_access_key,
-        "aws_secret_access_key": aws_secret_key,
-        "region_name": region_name,
+        "region_name": clean_region,
         "config": S3_CLIENT_CONFIG,
     }
-    if aws_session_token:
-        kwargs["aws_session_token"] = aws_session_token
+    has_key = aws_access_key is not None and str(aws_access_key).strip() != ""
+    has_secret = aws_secret_key is not None and str(aws_secret_key).strip() != ""
+    if has_key and has_secret:
+        kwargs["aws_access_key_id"] = str(aws_access_key).strip()
+        kwargs["aws_secret_access_key"] = str(aws_secret_key).strip()
+    
+    clean_token = str(aws_session_token).strip() if (aws_session_token is not None and str(aws_session_token).strip() != "") else None
+    if clean_token:
+        kwargs["aws_session_token"] = clean_token
+
     return boto3.client("s3", **kwargs)
 
 
-def describe_s3_error(error):
-    """Translate a boto3 failure into a user-safe message (no secrets/ARNs)."""
+def describe_s3_error(error, action=None, bucket=None):
+    """Translate a boto3 failure into an actionable, user-safe message (no secrets/ARNs)."""
     if isinstance(error, ClientError):
         code = error.response.get("Error", {}).get("Code", "")
         status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        b_name = f"`{bucket}`" if bucket else "the bucket"
+        if code == "AccessDenied":
+            if action == "list":
+                return (
+                    f"AWS denied access (AccessDenied). Your AWS identity lacks the 's3:ListBucket' "
+                    f"permission on {b_name} (resource ARN 'arn:aws:s3:::{bucket or 'bucket-name'}'). "
+                    "Note: 's3:ListBucket' must be granted on the bucket itself, not on '/*'."
+                )
+            elif action == "download":
+                return (
+                    f"AWS denied access (AccessDenied). Your AWS identity lacks the 's3:GetObject' "
+                    f"permission on objects in {b_name} (resource ARN 'arn:aws:s3:::{bucket or 'bucket-name'}/*')."
+                )
+            elif action == "upload":
+                return (
+                    f"AWS denied access (AccessDenied). Your AWS identity lacks the 's3:PutObject' "
+                    f"permission on objects in {b_name} (resource ARN 'arn:aws:s3:::{bucket or 'bucket-name'}/*')."
+                )
+            return (
+                f"AWS denied access. Check the key/secret and the bucket policy allows "
+                f"s3:ListBucket (on {b_name}) and s3:GetObject / s3:PutObject (on {b_name}/*)."
+            )
         messages = {
-            "AccessDenied": "AWS denied access. Check the key/secret and the "
-                            "bucket policy allows s3:ListBucket / s3:GetObject.",
             "InvalidAccessKeyId": "That AWS Access Key ID was not recognized.",
             "SignatureDoesNotMatch": "The AWS secret key does not match the access key.",
-            "NoSuchBucket": "No such bucket exists in this region/account.",
+            "NoSuchBucket": f"No such bucket exists in this region/account ({b_name}).",
             "NoSuchKey": "That object no longer exists in the bucket.",
             "AuthorizationHeaderMalformed": "Credentials were malformed; re-enter them.",
             "BucketAlreadyExists": "That bucket name is taken.",
+            "InvalidToken": "The AWS session token is invalid or expired. Refresh your temporary STS/SSO credentials.",
+            "ExpiredToken": "The AWS session token has expired. Refresh your temporary STS/SSO credentials.",
+            "IllegalLocationConstraintException": "Bucket location constraint mismatch. Check that your AWS Region matches the bucket's region.",
+            "PermanentRedirect": "Bucket is located in a different AWS region than specified. Enter the correct AWS Region.",
         }
         if code in messages:
             return messages[code]
         logger.warning("s3 ClientError code=%s status=%s", code, status)
         return f"AWS rejected the request ({code or 'unknown error'})."
+
+    error_type = type(error).__name__
+    if error_type == "NoCredentialsError":
+        return "No AWS credentials found. Provide manual access keys or configure your AWS environment/IAM Role."
+    if error_type == "PartialCredentialsError":
+        return "Incomplete AWS credentials. Both Access Key ID and Secret Access Key must be provided."
+
     if isinstance(error, BotoCoreError):
         logger.warning("s3 BotoCoreError: %s: %s", type(error).__name__, error)
-        return "Could not reach Amazon S3. Check the region name and your network."
+        if "EndpointConnectionError" in error_type:
+            return "Could not reach Amazon S3. Check the region name and your network."
+        return f"Could not reach Amazon S3 ({error_type}). Check the region name and your network."
     logger.warning("s3 unexpected error: %s: %s", type(error).__name__, error)
     return "An unexpected AWS error occurred."
 

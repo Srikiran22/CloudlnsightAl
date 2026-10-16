@@ -18,10 +18,10 @@ def _ver(name):
     return f"{name}_ver"
 
 
-def ask(name, label, help_text=""):
+def ask(name, label, help_text="", key=None):
     slot = _slot(name)
     ver = st.session_state.get(_ver(name), 0) if hasattr(st, "session_state") else 0
-    w_key = f"{name}_widget_{ver}"
+    w_key = key or f"{name}_widget_{ver}"
     if slot not in st.session_state:
         st.session_state[slot] = ""
     value = st.text_input(label, value=st.session_state[slot], type="password", help=help_text, key=w_key)

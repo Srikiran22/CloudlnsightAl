@@ -17,12 +17,16 @@ class TestPageSmoke(unittest.TestCase):
     PAGES = [
         "App.py",
         "Pages/Upload.py",
+        "Pages/CloudS3.py",
+        "Pages/AIConverter.py",
         "Pages/Cleaning.py",
         "Pages/Compare.py",
         "Pages/EDA.py",
         "Pages/Visualization.py",
         "Pages/ML.py",
+        "Pages/Predict.py",
         "Pages/AI.py",
+        "Pages/AIChat.py",
         "Pages/Report.py",
         "Pages/Dashboard.py",
     ]

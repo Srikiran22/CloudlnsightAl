@@ -141,3 +141,10 @@ HANDOFF.md
 SESSIONS.md
 MODEL.md
 
+# Office temporary lock files
+~$*
+
+# Scratch images
+ingest_page.png
+s3_section.png
+

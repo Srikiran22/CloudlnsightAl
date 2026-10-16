@@ -207,6 +207,10 @@ def create_bar_count_plot(df, x_col, y_col=None, agg_func="Count", hue_col=None,
             xaxis_title=x_col if orientation == "v" else "Count",
             yaxis_title="Count" if orientation == "v" else x_col
         )
+    if orientation == "v":
+        fig.update_xaxes(type="category")
+    else:
+        fig.update_yaxes(type="category")
     return fig
 
 

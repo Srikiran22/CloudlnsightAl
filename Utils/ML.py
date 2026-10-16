@@ -465,6 +465,24 @@ def detect_problem_type(df, target_col):
     return "Regression"
 
 
+
+def is_likely_id_column(df, col):
+    """Identify columns that are identifiers or near-unique keys unsuitable as ML predictors."""
+    if df is None or not col or col not in df.columns:
+        return False
+    c_lower = str(col).lower().strip()
+    if c_lower in {"id", "uuid", "guid", "index", "row_id", "pk", "key"} or c_lower.endswith(("_id", "_uuid", "_guid", "_pk")):
+        return True
+    s = df[col]
+    if pd.api.types.is_string_dtype(s) or pd.api.types.is_object_dtype(s) or isinstance(s.dtype, pd.CategoricalDtype):
+        non_null = s.dropna()
+        n_unique = non_null.nunique()
+        n_rows = len(non_null)
+        if n_rows >= 20 and (n_unique / max(n_rows, 1)) > 0.5:
+            return True
+    return False
+
+
 def _non_finite_columns(frame, columns):
     """Columns whose numeric values contain inf/overflow-sized entries."""
     bad = []
@@ -535,7 +553,16 @@ def train_and_evaluate_model(
         if ceil(len(clean_df) * test_size) < 2:
             raise ValueError("Regression needs at least two test rows. Increase the dataset size or test split.")
     else:
-        y = clean_df[target_col].astype(str)
+        raw_y = clean_df[target_col]
+        try:
+            num_y = pd.to_numeric(raw_y, errors="raise")
+            if (num_y % 1 == 0).all():
+                y = num_y.astype(int)
+            else:
+                y = raw_y.astype(str)
+        except Exception:
+            y = raw_y.astype(str)
+
         class_counts = y.value_counts()
         if class_counts.size < 2:
             raise ValueError("Classification requires at least two target classes.")
@@ -644,13 +671,13 @@ def train_and_evaluate_model(
 
     if problem_type == "Classification":
         if model_name == "Random Forest":
-            clf = RandomForestClassifier(n_estimators=100, max_depth=15, min_samples_leaf=2, random_state=random_state)
+            clf = RandomForestClassifier(n_estimators=100, max_depth=15, min_samples_leaf=2, random_state=random_state, class_weight="balanced")
         elif model_name == "Decision Tree":
-            clf = DecisionTreeClassifier(random_state=random_state)
+            clf = DecisionTreeClassifier(random_state=random_state, class_weight="balanced")
         elif model_name == "Gradient Boosting":
             clf = GradientBoostingClassifier(random_state=random_state)
         elif model_name in ("Logistic Regression", "Default"):
-            clf = LogisticRegression(max_iter=1000, random_state=random_state)
+            clf = LogisticRegression(max_iter=1000, random_state=random_state, class_weight="balanced")
         else:
             raise ValueError(
                 f"Unsupported classification model: '{model_name}'. "
