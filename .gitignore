@@ -141,8 +141,13 @@ HANDOFF.md
 SESSIONS.md
 MODEL.md
 
-# Office temporary lock files
+# Office temporary lock files and local documents
 ~$*
+*.docx
+*.pdf
+PROJECT_EXPLANATION_FOR_ARGON.md
+screenshots_guide.md
+screenshots/
 
 # Scratch images
 ingest_page.png
