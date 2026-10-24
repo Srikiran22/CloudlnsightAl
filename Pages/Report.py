@@ -16,11 +16,12 @@ from Utils.dataset_ui import (
 from Utils.theme import page_header, section_card_header
 
 page_header(
-    "Executive PDF Report Studio",
-    "Generate comprehensive audit reports, save reusable report presets, or batch-export reports for every dataset."
+    "Data Science Audit Report",
+    "Generate comprehensive audit reports, save reusable report presets, and export executive PDF documentation.",
+    badge="EXECUTIVE REPORT"
 )
 
-df, selected_file = select_working_dataset("Select Dataset for PDF Report:")
+df, selected_file = select_working_dataset("Dataset to report")
 render_sidebar()
 
 def _list_templates() -> list:
@@ -72,7 +73,7 @@ with col_right:
         applied_template = None
         if saved_templates:
             chosen_template = st.selectbox(
-                "Load template:",
+                "Load template",
                 ["(none)"] + saved_templates,
                 help="Templates store title, author, and chart/AI settings."
             )
@@ -88,12 +89,12 @@ with col_right:
 with col_left:
     with st.container(border=True):
         section_card_header("Report Configuration", f"Metadata and analytical sections for {selected_file}")
-        default_title = str((applied_template or {}).get("title") or "CloudInsight AI Executive Analytics Report")
-        default_author = str((applied_template or {}).get("author") or "CloudInsight AI Platform")
+        default_title = str((applied_template or {}).get("title") or "CloudInsight Data Science Audit Report")
+        default_author = str((applied_template or {}).get("author") or "CloudInsight Data Science Studio")
         default_charts = _parse_bool((applied_template or {}).get("include_charts"), default=True)
 
-        rep_title = st.text_input("Report Title:", value=default_title)
-        author = st.text_input("Prepared By:", value=default_author)
+        rep_title = st.text_input("Report title", value=default_title)
+        author = st.text_input("Prepared by", value=default_author)
 
         template_ai_pref = _parse_bool((applied_template or {}).get("include_ai"), default=True)
         include_ai = False
@@ -103,14 +104,14 @@ with col_left:
                 st.caption(f"AI insights model: `{latest_ai.get('model_name')}`")
 
         include_charts = st.checkbox(
-            "Include charts: histograms, box plots & correlation heatmap (requires matplotlib)",
+            "Include charts: histograms, box plots & correlation heatmap (high-DPI embedded plots)",
             value=default_charts,
-            help="Skipped automatically if matplotlib is not installed."
+            help="Renders publication-grade vector and high-DPI visual diagnostics."
         )
 
         sensitive_detected = list(detect_sensitive_columns(df).keys())
         excluded_cols = st.multiselect(
-            "Exclude columns from PDF statistics, correlations & charts (PII/confidential):",
+            "Exclude columns from PDF statistics, correlations & charts (PII/confidential)",
             options=list(df.columns),
             default=[c for c in sensitive_detected if c in df.columns],
             help="Selected columns will be redacted in summaries and omitted from correlations and visualization charts.",
@@ -163,7 +164,8 @@ with col_right:
                         "filename": pdf_filename,
                         "bytes": pdf_bytes,
                     }
-                    st.success(f"Report saved as `Reports/{pdf_filename}`.")
+                    st.success("PDF report generated.")
+                    st.code(f"Reports/{pdf_filename}", language=None)
                 except Exception as e:
                     st.error(f"PDF generation failed: {str(e)}")
 
@@ -182,9 +184,14 @@ with col_right:
 
         st.markdown("---")
         section_card_header("Save Preset", "Save current form values as a new reusable template")
-        template_name = st.text_input("Template name:", value="")
+        template_name = st.text_input("Template name", value="")
         overwrite_template = st.checkbox("Overwrite existing template with same name", value=False)
-        if template_name and st.button("Save Template"):
+        save_template_clicked = st.button(
+            "Save template",
+            disabled=not template_name.strip(),
+            help="Enter a name above to enable saving.",
+        )
+        if save_template_clicked:
             try:
                 safe_template = safe_stem(template_name, fallback="")
                 if not safe_template:
@@ -218,7 +225,7 @@ with st.container(border=True):
     st.caption(f"Generates a PDF report for each of the {len(ready_files)} tabular datasets in Datasets/ using active configuration.")
 
     max_batch = st.number_input(
-        "Row limit per dataset in batch mode:",
+        "Row limit per dataset in batch mode",
         min_value=100, max_value=500000, value=20000, step=1000,
         help="Caps rows loaded per dataset to keep batch runs fast."
     )

@@ -37,7 +37,6 @@ from Utils.PDF import validate_report_template, generate_pdf_report
 from Utils.sampling import sample_for_visualization, sample_for_analysis
 from Utils.Charts import create_histogram_plot
 from Utils.Gemini import generate_executive_insights
-from Utils.S3 import upload_s3_dataset
 from Utils.Preprocessing import fill_missing_values
 from Utils.compare_logic import column_drift_rows, benjamini_hochberg_correction
 from Utils.theme import get_semantic_tokens, SEMANTIC_TOKENS, CHART_PALETTE
@@ -205,33 +204,6 @@ class SecurityBoundaryPipelineTests(unittest.TestCase):
         self.assertTrue(np.isnan(df["utc_date"].iloc[1]))
         self.assertTrue(np.isnan(df["est_date"].iloc[1]))
 
-    # -------------------------------------------------------------------------
-    # Finding E: S3 streaming memory isolation
-    # -------------------------------------------------------------------------
-    def test_s3_streaming_bounds_and_cleanup(self):
-        """S3 download enforces byte boundaries and cleans up files on failure."""
-        from Utils.S3 import download_s3_dataset
-
-        mock_s3 = MagicMock()
-        mock_body = MagicMock()
-        mock_body.read.side_effect = [b"col1,col2\n", b"1,2\n" * 10, b""]
-        mock_s3.get_object.return_value = {
-            "ContentLength": 50,
-            "Body": mock_body,
-        }
-
-        # Successful bounded download
-        df, _ = download_s3_dataset("bucket", "key.csv", mock_s3)
-        self.assertEqual(len(df), 10)
-
-        # Oversized ContentLength rejected
-        mock_s3.get_object.return_value = {
-            "ContentLength": 300 * 1024 * 1024,
-            "Body": mock_body,
-        }
-        with self.assertRaises(ValueError) as ctx:
-            download_s3_dataset("bucket", "large.csv", mock_s3)
-        self.assertIn("ingest limit is 200 mb", str(ctx.exception).lower())
 
     # -------------------------------------------------------------------------
     # Finding F: Global ingestion cell budget
@@ -240,7 +212,7 @@ class SecurityBoundaryPipelineTests(unittest.TestCase):
         """read_tabular rejects files exceeding MAX_INGESTION_CELLS."""
         # 1 row × 3 columns = 3 cells > 2 cells
         buf = io.BytesIO(b"a,b,c\n1,2,3\n")
-        with patch("Utils.paths.MAX_INGESTION_CELLS", 2):
+        with patch("Utils.limits.MAX_INGESTION_CELLS", 2):
             with self.assertRaises(ValueError) as ctx:
                 read_tabular(buf, filename="test.csv")
             self.assertIn("exceeds the maximum supported limit", str(ctx.exception).lower())
@@ -521,32 +493,6 @@ class SecurityBoundaryPipelineTests(unittest.TestCase):
             load_trained_model(self.test_path / "model.joblib:stream", allowed_dir=self.test_path)
         self.assertIn("Invalid character ':'", str(ctx.exception))
 
-    # -------------------------------------------------------------------------
-    # Finding 2.5: S3 upload limits & export boundary
-    # -------------------------------------------------------------------------
-    def test_s3_upload_limits_and_export_boundary(self):
-        """upload_s3_dataset bounds memory/upload size and separates canonical vs export sanitization."""
-        mock_client = MagicMock()
-        df = pd.DataFrame({"formula": ["=SUM(A1:A2)", "-123"], "val": [10, 20]})
-
-        # Canonical internal upload preserves exact values
-        upload_s3_dataset(df, "mybucket", "canonical.csv", mock_client, sanitize=False)
-        self.assertTrue(mock_client.put_object.called)
-        uploaded_bytes = mock_client.put_object.call_args[1]["Body"]
-        self.assertIn(b"=SUM(A1:A2)", uploaded_bytes)
-
-        # External spreadsheet export sanitizes formula injection triggers
-        mock_client.reset_mock()
-        upload_s3_dataset(df, "mybucket", "export.csv", mock_client, sanitize=True)
-        uploaded_bytes_sanitized = mock_client.put_object.call_args[1]["Body"]
-        self.assertIn(b"'=SUM(A1:A2)", uploaded_bytes_sanitized)
-
-        # Exceeding size ceiling fails closed before put_object
-        mock_client.reset_mock()
-        with self.assertRaises(ValueError) as ctx:
-            upload_s3_dataset(df, "mybucket", "huge.csv", mock_client, max_bytes=10)
-        self.assertIn("exceeds the maximum allowed upload limit", str(ctx.exception))
-        self.assertFalse(mock_client.put_object.called)
 
     # -------------------------------------------------------------------------
     # Finding 2.13: Temporal preprocessing (no lookahead bias by default)
@@ -686,7 +632,6 @@ from Utils.Charts import (
     create_scatter_plot,
     downsample_timeseries,
 )
-from Utils.S3 import download_s3_dataset
 
 
 class SecurityBoundaryAndIsolationTests(unittest.TestCase):
@@ -729,16 +674,6 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
         self.assertNotIn("</dataset_context>", context)
         self.assertIn(r"<\/dataset_context>", context)
 
-    # -------------------------------------------------------------------------
-    # S3 download destination containment
-    # -------------------------------------------------------------------------
-    def test_s3_download_destination_path_traversal_blocked(self):
-        from unittest.mock import MagicMock
-        mock_client = MagicMock()
-        mock_client.get_object.return_value = {"Body": MagicMock(read=lambda sz: b""), "ContentLength": 100}
-        with self.assertRaises(ValueError) as ctx:
-            download_s3_dataset("b", "k.csv", client=mock_client, destination_path="../escape.csv")
-        self.assertIn("Security boundary rejection", str(ctx.exception))
 
     # -------------------------------------------------------------------------
     # Active reservation protection in cleanup_storage
@@ -960,18 +895,6 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
         downsampled = downsample_timeseries(df, x_col="t", y_col="y", hue_col="hue", max_points=1000)
         self.assertLessEqual(len(downsampled), 1000)
 
-    # -------------------------------------------------------------------------
-    # S3 upload early cell limit validation
-    # -------------------------------------------------------------------------
-    def test_s3_upload_rejects_oversized_cells_early(self):
-        class DummyOversizedDF:
-            shape = (100_000, 250)  # 25,000,000 cells > MAX_INGESTION_CELLS
-            def to_csv(self, **kwargs):
-                raise AssertionError("Should not serialize to CSV when cell limit is exceeded")
-
-        with self.assertRaises(ValueError) as ctx:
-            upload_s3_dataset(DummyOversizedDF(), "bucket", "out.csv", client=None)
-        self.assertIn("exceeds the maximum allowed limit", str(ctx.exception))
 
     # -------------------------------------------------------------------------
     # Drive-relative and Windows reserved name rejection
@@ -986,16 +909,6 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
             delete_dataset("CON.csv")
         self.assertIn("Windows reserved device name", str(ctx.exception))
 
-    # -------------------------------------------------------------------------
-    # S3 download destination absolute path containment
-    # -------------------------------------------------------------------------
-    def test_s3_download_destination_absolute_escape_blocked(self):
-        from unittest.mock import MagicMock
-        mock_client = MagicMock()
-        mock_client.get_object.return_value = {"Body": MagicMock(read=lambda sz: b""), "ContentLength": 100}
-        with self.assertRaises(ValueError) as ctx:
-            download_s3_dataset("b", "k.csv", client=mock_client, destination_path="C:\\escape.csv")
-        self.assertIn("Security boundary rejection", str(ctx.exception))
 
     # -------------------------------------------------------------------------
     # Phase 5: PDF population integrity updates analyzed_rows on sampling
@@ -1049,23 +962,6 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
                 fp2 = dataset_fingerprint("swap.csv", force_refresh=True)
                 self.assertNotEqual(fp1, fp2)
 
-    def test_s3_download_destination_windows_absolute_path_allowed(self):
-        """Valid absolute destination path inside DATASETS_DIR must succeed on Windows."""
-        from unittest.mock import MagicMock
-        from Utils.paths import DATASETS_DIR
-        mock_client = MagicMock()
-        mock_body = MagicMock()
-        mock_body.read.side_effect = [b"col1,col2\nval1,val2", b""]
-        mock_client.get_object.return_value = {"Body": mock_body, "ContentLength": len(b"col1,col2\nval1,val2")}
-        target_path = DATASETS_DIR / "test_s08_win_valid.csv"
-        try:
-            df, dest = download_s3_dataset("test-bucket", "test_key.csv", client=mock_client, destination_path=target_path)
-            self.assertEqual(dest, target_path)
-            self.assertIsNotNone(df)
-            self.assertEqual(len(df), 1)
-        finally:
-            if target_path.exists():
-                target_path.unlink()
 
     def test_get_unique_filename_persistent_permission_error_bounded(self):
         """Persistent PermissionError must fail closed after attempt ceiling, not loop infinitely."""
@@ -1293,7 +1189,7 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
         # 60,000 rows across 3 chunks
         lines = ["c1,c2\n"] + ["1,2\n"] * 60000
         buf = io.BytesIO("".join(lines).encode("utf-8"))
-        with patch("Utils.paths.MAX_INGESTION_ROWS", 50000):
+        with patch("Utils.limits.MAX_INGESTION_ROWS", 50000):
             with self.assertRaises(ValueError) as ctx:
                 _read_chunked_delimited_buffer(buf)
             self.assertIn("exceeds the maximum supported limit of 50,000 rows", str(ctx.exception))

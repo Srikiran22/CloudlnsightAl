@@ -26,6 +26,8 @@ CloudInsight AI implements defense-in-depth principles:
 - Tampered, unsigned, or escaping model files are rejected before `joblib.load()` executes.
 - An explicit `trusted=True` audit bypass exists only for internal test fixtures and emits loud audit log warnings.
 
+Scope note: the signing key is generated on first use and stored at `Models/.model_signing_key` (mode `0600`). This provides tamper evidence — corrupted, truncated, or partially rewritten artifacts are rejected — but it is not a protection against an attacker who already has read/write access to the `Models/` directory, because that attacker can read the key too. For multi-user or shared deployments, supply the key from an external secret store instead.
+
 ### 2. Ingestion Resource Governance
 To prevent memory exhaustion and denial-of-service:
 - Hard file size limit: 200 MB (`MAX_INGESTION_BYTES`).

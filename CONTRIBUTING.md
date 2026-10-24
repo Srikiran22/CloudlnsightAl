@@ -18,17 +18,20 @@ Run the headless page smoke check:
 python -m unittest tests/test_page_smoke.py -v
 ```
 
-Run the serious-error lint check:
+Run the full lint check used by CI:
 
 ```bash
-ruff check --select=E9,F63,F7,F82,F821 --preview .
+pip install ruff==0.16.4
+ruff check .
 ```
 
 ## Repository conventions
 
 - Put shared processing logic in `Utils/` rather than duplicating it in pages.
+- Keep resource ceilings in `Utils/limits.py` and format readers in `Utils/parsing.py`; pages must not hard-code limits.
 - Keep external integrations isolated in their utility modules.
-- Do not persist Gemini or AWS credentials to disk.
+- Keep the two theme palettes (`Utils/theme.py::_palette` and `.streamlit/config.toml`) in sync when changing colors.
+- Do not persist API keys or credentials to disk.
 - Keep generated datasets, models, reports, and local configuration out of commits.
 - Add regression tests when fixing parsing, security, ML, or report-generation bugs.
 - Keep README claims aligned with the current implementation.

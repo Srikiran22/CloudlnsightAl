@@ -1,24 +1,37 @@
-# CloudInsight AI — application theme.
-# Light and dark variants defined natively so users can also switch via Settings.
-# Tokens mirrored in Utils/theme.py CSS variables; change both together.
+# CloudInsight AI — native Streamlit theme.
+#
+# This file mirrors the design-system tokens in Utils/theme.py so that
+# canvas-rendered widgets (st.dataframe, st.selectbox, st.code, toasts) match
+# the hand-styled surfaces in both appearances. Keep these values in sync with
+# _palette() in Utils/theme.py.
+#
+# Appearance is owned by Streamlit itself: the app follows the browser/OS
+# preference by default, and users can pin Light or Dark from the ⋮ menu →
+# Settings → Theme. Utils/theme.py reads the *resolved* mode via
+# st.context.theme so the CSS layer can never disagree with the widgets.
 [theme]
-base = "light"
+base = "dark"
+primaryColor = "#3B82F6"
+backgroundColor = "#0B0F19"
+secondaryBackgroundColor = "#111827"
+textColor = "#F8FAFC"
+borderColor = "#263042"
 baseRadius = "small"
 baseFontSize = 15
-
-[theme.light]
-primaryColor = "#2563EB"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F7F8FA"
-textColor = "#101828"
-borderColor = "#E4E7EC"
 
 [theme.dark]
 primaryColor = "#3B82F6"
 backgroundColor = "#0B0F19"
 secondaryBackgroundColor = "#111827"
-textColor = "#E5E7EB"
+textColor = "#F8FAFC"
 borderColor = "#263042"
+
+[theme.light]
+primaryColor = "#2563EB"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F8FAFC"
+textColor = "#0F172A"
+borderColor = "#E2E8F0"
 
 [server]
 address = "127.0.0.1"

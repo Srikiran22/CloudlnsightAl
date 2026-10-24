@@ -2,11 +2,11 @@
 
 ![CI Status](https://github.com/Srikiran22/CloudInsightAI/actions/workflows/tests.yml/badge.svg)
 ![Python 3.12 | 3.13](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
-![Platform: Windows 11](https://img.shields.io/badge/platform-Windows%2011-blue)
+![Platform: Windows | macOS | Linux](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
 
 CloudInsight AI is a local-first data analytics application built with Streamlit, pandas, scikit-learn, Plotly, ReportLab, and Google Gemini.
 
-It brings common data-analysis tasks into one workspace: ingest a dataset, clean it, compare it with another dataset, explore it, train a machine-learning model, and export an executive PDF report. Google Gemini and Amazon S3 are optional integrations.
+It brings common data-analysis tasks into one workspace: ingest a dataset, clean it, compare it with another dataset, explore it, train a machine-learning model, and export an executive PDF report. Google Gemini is an optional integration.
 
 ## System Architecture
 
@@ -14,7 +14,7 @@ It brings common data-analysis tasks into one workspace: ingest a dataset, clean
 flowchart LR
     subgraph Ingestion ["1. Bounded Ingestion Layer"]
         Local["Local Files\n(CSV, Parquet, XLSX, JSON, XML)"]
-        S3["Amazon S3\n(Chunked Stream)"]
+        DB["Local Databases\n(SQLite .db, .sqlite)"]
         RawDoc["Unstructured Docs\n(PDF, TXT, Logs)"]
     end
 
@@ -32,7 +32,7 @@ flowchart LR
     end
 
     Local --> Parser
-    S3 --> Parser
+    DB --> Parser
     RawDoc --> AIConv --> Parser
     Parser --> Cache
     Cache --> EDA & Drift & ML & GenAI
@@ -135,13 +135,13 @@ Gemini is optional and is used for:
 - Executive summary generation in PDF reports
 - Automated dataset insights and conversational chat
 
-The platform defaults to `gemini-3.8-flash` via the primary `google-genai` SDK, while supporting `gemini-3.5-flash`, `gemini-2.5-flash`, and `gemini-2.5-pro` (retired Gemini 1.x/2.0 models map automatically to supported modern equivalents).
+The platform defaults to `gemini-3.8-flash` via the primary `google-genai` SDK, while supporting `gemini-3.6-flash`, `gemini-2.5-flash`, and `gemini-2.5-pro` (retired Gemini 1.x/2.0/3.5 models map automatically to supported modern equivalents).
 
 ## Requirements
- 
-- Python 3.12+ (tested and CI-validated on Windows 11 across Python 3.12 and 3.13)
-- Streamlit 1.52.0+
-- Windows 11
+
+- Python 3.12+ (CI runs the suite on Python 3.12 and 3.13 across Windows, macOS, and Linux)
+- Streamlit 1.52.0+ (the interface is developed and verified against 1.64)
+- A modern browser; Windows 11 is the primary development platform, macOS and Linux are supported
 
 A database is not required. Production dependencies are locked in `requirements-lock.txt` for exact CI-matched reproducibility, with loose ranges in `requirements.txt`.
 
@@ -150,7 +150,7 @@ Optional runtime capabilities:
 - `pypdf` for PDF text extraction
 - `matplotlib` for charts in PDF reports
 
-Gemini and AWS credentials are only required when using those features.
+Gemini credentials are only required when using AI features.
 
 ## Installation
 
@@ -208,25 +208,35 @@ The application keeps credentials in Streamlit session state only and clears the
 
 Before Gemini analysis, the privacy screener flags columns that look like emails, phone numbers, financial identifiers, credentials, or tokens so they can be excluded from the model context.
 
-### Amazon S3
-
-Enter AWS credentials in the S3 section of the Ingest page.
-
-The S3 client uses chunked streaming with an accumulated byte ceiling to enforce the 200 MB ingest limit even if `ContentLength` is omitted.
-
 ## Application pages
 
 | Page | Purpose |
 |---|---|
-| Ingest data | Local files, S3 browsing, and Gemini conversion |
-| Cleaning | Duplicate removal and missing-value handling |
-| Compare | Dataset comparison and schema drift |
-| EDA | Statistics, correlations, and outliers |
-| Visualization | Interactive charts |
-| Dashboard | Dataset health gauge and summary metrics |
-| Machine learning | Training, evaluation, saving, loading, and prediction |
-| AI insights | Gemini analysis and dataset chat |
-| PDF report | Report generation, templates, and batch mode |
+| Home | Workbench overview, system architecture, and benchmark datasets |
+| Ingest & Hub | Multi-format local ingestion (CSV, Parquet, Excel, JSON, TSV, SQLite), paste-in, and catalog |
+| Data Health & Profiler | Hygiene index gauge, cardinality inspector, null diagnostics, and slice-and-dice filter |
+| Clean Data | Deduplication, multivariate imputation, temporal filling, and dataset export |
+| Feature Engineering | Numerical scaling, categorical encoding, non-linear transforms, mutual information, interactions |
+| Compare Datasets | Covariate and target statistical drift diagnostics (KS-test, Chi-square, PSI) |
+| Statistical Diagnostics | Normality tests, correlation rankings, multicollinearity (VIF), Tukey/Z-score outliers, ANOVA |
+| Visual Analytics | Interactive distribution, relationship, composition, and correlation charts |
+| Model Studio | Regression & Classification pipelines, baseline benchmarking, cross-validation, model signing |
+| Batch Scoring | Cryptographically signed model loading, feature alignment, and prediction batch generation |
+| AI Summary | Executive analytical summaries and dataset Q&A |
+| Ask AI (Chat) | Conversational dataset analysis |
+| PDF Report | Publication-ready audit reporting with vector charts |
+
+### Appearance and theming
+
+The app ships a single design system with light and dark palettes. It follows the browser/OS preference by default; pin a mode from the **⋮** menu → **Settings** → **Theme**.
+
+Implementation notes:
+
+- `.streamlit/config.toml` mirrors the palette into Streamlit's native theme, so canvas-rendered widgets (`st.dataframe`, `st.selectbox`, `st.code`) match the hand-styled surfaces.
+- `Utils/theme.py` resolves the live mode from `st.context.theme` and injects both token sets; a zero-height client bridge flips the CSS palette instantly when the theme changes, without waiting for a script rerun.
+- Cards, metrics, buttons and inline code are styled through Streamlit's public test ids (with compatibility selectors for older releases), so the design system keeps working across upgrades.
+- The wordmark is rendered with `st.logo`, which Streamlit places in the sidebar header above the navigation.
+- Charts use `theme="streamlit"` so they re-colour with the rest of the page.
 
 ## Repository structure
 
@@ -236,41 +246,48 @@ CloudInsightAI/
 ├── .streamlit/            # Streamlit theme and runtime configuration
 ├── Pages/                 # Multi-page application views
 │   ├── AI.py              # AI insights and conversational dataset Q&A
+│   ├── AIChat.py          # Conversational dataset Q&A workspace
+│   ├── AIConverter.py     # Unstructured document → CSV conversion
 │   ├── Cleaning.py        # Deduplication, missing-value handling, and export
 │   ├── Compare.py         # Schema drift and column-level comparison
 │   ├── Dashboard.py       # Data hygiene index gauge and summary indicators
 │   ├── EDA.py             # Exploratory analysis, correlations, and outliers
+│   ├── FeatureEngineering.py # Scaling, encoding, transforms, mutual information
 │   ├── ML.py              # Model training, evaluation, saving, and prediction
+│   ├── Predict.py         # Signed-model loading and batch scoring
 │   ├── Report.py          # PDF report generation and template management
-│   ├── Upload.py          # File ingestion (local files and Amazon S3)
+│   ├── Upload.py          # Multi-format local ingestion and dataset catalog
 │   └── Visualization.py   # Interactive plotting (Plotly)
 ├── Utils/                 # Domain logic, security guards, and utilities
 │   ├── AIConvert.py       # Unstructured data extraction via Gemini
-│   ├── Charts.py          # Visualization figure builders
-│   ├── Gemini.py          # Google Gemini client and resilience handling
-│   ├── ML.py              # Scikit-learn pipelines and model persistence
-│   ├── PDF.py             # ReportLab PDF generation
-│   ├── Preprocessing.py   # Cleaning and missing-value imputation
-│   ├── S3.py              # Amazon S3 client and streaming ingestion
 │   ├── batch.py           # Multi-file merging and schema alignment
+│   ├── Charts.py          # Visualization figure builders
 │   ├── compare_logic.py   # Dataset comparison and drift metrics
 │   ├── dataset_ui.py      # Session state and dataset caching helpers
+│   ├── frames.py          # Column normalisation and export sanitisation
+│   ├── Gemini.py          # Google Gemini client and resilience handling
+│   ├── limits.py          # Resource ceilings, storage roots, supported formats
 │   ├── logsys.py          # Centralized application logging
-│   ├── paths.py           # Safe path handling, format parsing, and limits
+│   ├── ML.py              # Scikit-learn pipelines and model persistence
+│   ├── parsing.py         # CSV/JSON/XML/HTML/Excel/Parquet/PDF readers
+│   ├── paths.py           # Storage, filename safety, and ingestion dispatch
+│   ├── PDF.py             # ReportLab PDF generation
+│   ├── Preprocessing.py   # Cleaning and missing-value imputation
 │   ├── privacy.py         # Sensitive column screening and PII detection
 │   ├── quality.py         # Data hygiene index and completeness/uniqueness scoring
 │   ├── sampling.py        # Centralized analytical and visualization sampling policy
 │   ├── secrets.py         # Ephemeral in-memory credential management
-│   └── theme.py           # UI styling and CSS tokens
+│   └── theme.py           # UI styling, palette tokens, and live theme bridge
 ├── tests/                 # Unit, security, and regression test suites
 ├── App.py                 # Application entry point and navigation
 ├── CHANGELOG.md           # Product release notes and version history
 ├── CONTRIBUTING.md        # Contribution guidelines and development checks
-├── pyproject.toml         # Ruff, pytest, and project metadata configuration
+├── pyproject.toml         # Ruff, coverage, and project metadata configuration
 ├── README.md              # Project documentation and setup guide
 ├── requirements.txt       # Base application dependencies
 ├── requirements-lock.txt  # Pinned dependency lockfile
-└── SECURITY.md            # Security policy and vulnerability disclosure
+├── SECURITY.md            # Security policy and vulnerability disclosure
+└── start.bat              # Quickstart launcher script for Windows
 ```
 
 ## Development
@@ -287,14 +304,14 @@ Run the headless page smoke check:
 python -m unittest tests/test_page_smoke.py -v
 ```
 
-Run the CI-level serious-error Ruff check:
+Run the full Ruff check used by CI:
 
 ```bash
 pip install ruff==0.16.4
-ruff check --select=E9,F63,F7,F82,F821 --preview .
+ruff check .
 ```
 
-GitHub Actions runs these checks across Python 3.12 and 3.13.
+GitHub Actions runs the suite, the smoke check, Ruff, and `pip-audit` on Python 3.12 and 3.13 across Windows, macOS, and Linux.
 
 ## Security and privacy
 
@@ -311,17 +328,17 @@ Key safeguards include:
 - Bounded AI response parsing with column caps (>200 columns rejected)
 - Ephemeral in-memory credential handling (no disk storage or intentional logging of API keys)
 - Sensitive-column screening before Gemini analysis
-- Provenance metadata, dataset fingerprinting, and HMAC-SHA256 authenticity signing for saved ML models
+- Provenance metadata, dataset fingerprinting, and HMAC-SHA256 tamper-evidence signatures for saved ML models (the signing key is stored beside the model directory, so this detects corruption or partial tampering rather than defending against an attacker who already has write access to `Models/`)
 
 ## Limitations and architectural considerations
 
 - Local-first architecture: Designed for single-user analytical sessions; no multi-tenant authorization or per-user storage isolation
-- Memory governance: The 400 MB DataFrame memory budget governs pandas in-memory data structures; total process RSS (working set) is higher due to Python runtime heap, openpyxl/parser objects, and temporary intermediate buffers during multi-chunk ingestion or S3 export
+- Memory governance: The 400 MB DataFrame memory budget governs pandas in-memory data structures; total process RSS (working set) is higher due to Python runtime heap, openpyxl/parser objects, and temporary intermediate buffers during multi-chunk ingestion
 - Excel memory profile: Excel files (.xlsx / .xls) construct in-memory workbook DOMs; while bounded by decompression limits and row/cell limits, process RSS expands significantly compared to flat delimited text
 - Temporal decimation: Min-max envelope bucketing enforces chronological ordering and captures local extrema and temporal boundaries, but does not guarantee zero aliasing for frequencies exceeding the bucket sampling rate
-- Gemini and S3 require external services when those features are used
+- Gemini requires an API key when AI features are used
 - PDF ingestion requires extractable text; scanned image PDFs need a separate OCR workflow
-- Joblib model bundles rely on pickle and execute Python bytecode upon deserialization. Models trained in CloudInsight are cryptographically signed with HMAC-SHA256 to ensure integrity; external or untrusted `.joblib` files are blocked from loading
+- Joblib model bundles rely on pickle and execute Python bytecode upon deserialization. Models trained in CloudInsight are signed with HMAC-SHA256 and verified before loading; unsigned or externally supplied `.joblib` files are blocked
 - Production deployment requires an authenticating reverse proxy, storage isolation, and network controls
 
 ## Contributing

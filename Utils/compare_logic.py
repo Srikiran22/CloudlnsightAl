@@ -2,18 +2,24 @@
 # tested without Streamlit. All thresholds live here.
 
 import json
+from collections.abc import Sequence
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
 
+from Utils.logsys import get_logger
 from Utils.sampling import sample_for_analysis
+
+logger = get_logger("Compare")
 
 MISSINGNESS_DRIFT_PCT = 10.0
 MEAN_DRIFT_PCT = 10.0
 COMPARE_MAX_ANALYSIS_ROWS = 50_000
 
 
-def schema_diff(df_a, df_b):
+def schema_diff(df_a: pd.DataFrame, df_b: pd.DataFrame) -> tuple[list[str], list[str], list[str]]:
     """Column-set differences between two DataFrames.
 
     Returns (common, only_a, only_b) as sorted lists of column names.
@@ -75,7 +81,7 @@ def _safe_nunique(series):
         return int(series.dropna().map(_to_hashable).nunique())
 
 
-def benjamini_hochberg_correction(p_values):
+def benjamini_hochberg_correction(p_values: Sequence[float]) -> list[float]:
     """Compute Benjamini-Hochberg FDR-adjusted p-values (q-values).
 
     Guarantees monotonic q-values bounded in [0.0, 1.0].
@@ -93,7 +99,12 @@ def benjamini_hochberg_correction(p_values):
     return q_values
 
 
-def column_drift_rows(df_a, df_b, max_rows=COMPARE_MAX_ANALYSIS_ROWS, random_state=42):
+def column_drift_rows(
+    df_a: pd.DataFrame,
+    df_b: pd.DataFrame,
+    max_rows: int = COMPARE_MAX_ANALYSIS_ROWS,
+    random_state: int = 42,
+) -> list[dict[str, Any]]:
     """Per-column summary metric shift records for every column the datasets share.
 
     Mean shift is relative: (mean_b - mean_a) / |mean_a| * 100 for non-zero baselines.
@@ -166,8 +177,8 @@ def column_drift_rows(df_a, df_b, max_rows=COMPARE_MAX_ANALYSIS_ROWS, random_sta
                     ks_res = stats.ks_2samp(num_a, num_b)
                     ks_stat = round(float(ks_res.statistic), 4)
                     ks_pval = round(float(ks_res.pvalue), 4)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("suppressed error in %s: %s", "column_drift_rows", exc)
         else:
             # Statistical frequency drift for categorical columns (Total Variation Distance)
             cat_a = sa.dropna().astype(str)
@@ -181,8 +192,8 @@ def column_drift_rows(df_a, df_b, max_rows=COMPARE_MAX_ANALYSIS_ROWS, random_sta
                     tvd_val = round(tvd, 4)
                     if tvd >= 0.20:
                         flags.append(f"categorical drift (TVD={tvd_val:.3f})")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("suppressed error in %s: %s", "column_drift_rows", exc)
 
         row_idx = len(rows)
         if ks_stat is not None and ks_pval is not None:

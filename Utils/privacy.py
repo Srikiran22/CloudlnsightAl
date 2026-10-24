@@ -4,8 +4,13 @@
 # replace human judgment.
 
 import re
+from collections.abc import Iterable
 
 import pandas as pd
+
+from Utils.logsys import get_logger
+
+logger = get_logger("Privacy")
 
 
 SAMPLE_ROWS = 100
@@ -16,11 +21,18 @@ _SUBSTRING_HINTS = (
     "social_security", "credit_card", "card_number", "iban",
     "phone", "mobile", "email",
 )
+_IDENTIFIER_EXACT = {"id", "uuid", "guid", "row_id", "pk"}
+_IDENTIFIER_SUFFIXES = ("_id", "_uuid", "_guid", "_pk")
+_IDENTIFIER_TOKENS = {"id", "uuid", "guid", "identifier"}
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _IBAN_RE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b")
 _CARD_RE = re.compile(r"\b(?:\d[ -]?){12,18}\d\b")
 _PHONE_RE = re.compile(r"\+?\d[\d\t .()-]{7,}\d")
+_TIMESTAMP_RE = re.compile(
+    r"\b\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[T\s]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?\b|"
+    r"\b\d{1,2}:\d{2}:\d{2}(?:\.\d+)?\b"
+)
 _TOKEN_RES = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
@@ -60,8 +72,8 @@ def _scan_numeric_phone_values(series):
             str_vals = int_vals.abs().astype(str)
             if ((str_vals.str.len() >= 10) & (str_vals.str.len() <= 15)).mean() >= 0.8:
                 return "phone-number-like numeric values"
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("suppressed error in %s: %s", "_scan_numeric_phone_values", exc)
     return None
 
 
@@ -82,9 +94,10 @@ def _scan_values(series):
         digits = re.sub(r"\D", "", match.group(0))
         if len(digits) in range(13, 20) and _luhn_ok(digits):
             return "credit-card-like values"
-    for m in _PHONE_RE.finditer(joined):
+    cleaned_joined = _TIMESTAMP_RE.sub(" ", joined)
+    for m in _PHONE_RE.finditer(cleaned_joined):
         digits = re.sub(r"\D", "", m.group(0))
-        if len(digits) >= 9:
+        if 9 <= len(digits) <= 15:
             if len(digits) == 10 and digits.isdigit():
                 val = int(digits)
                 if 1_000_000_000 <= val <= 2_150_000_000:
@@ -93,7 +106,7 @@ def _scan_values(series):
     return None
 
 
-def detect_sensitive_columns(df):
+def detect_sensitive_columns(df: pd.DataFrame) -> dict[str, str]:
     """Map {column: reason} for columns that look like they hold sensitive data.
 
     A column is flagged when its NAME suggests secrets/identifiers, or when a
@@ -104,16 +117,28 @@ def detect_sensitive_columns(df):
     flags = {}
     for column in df.columns:
         col_str = str(column)
-        lowered = col_str.lower()
+        lowered = col_str.lower().strip()
         tokens = set(re.split(r"[^a-z0-9]+", lowered))
         camel_tokens = {m.lower() for m in re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)|[0-9]+", col_str)}
         all_tokens = (tokens | camel_tokens) - {""}
+
         hint = next((h for h in _EXACT_OR_TOKEN_HINTS if h in all_tokens), None)
         if not hint:
             hint = next((h for h in _SUBSTRING_HINTS if h in lowered), None)
         if hint:
             flags[column] = f"column name suggests '{hint}'"
             continue
+
+        if lowered in _IDENTIFIER_EXACT or lowered.endswith(_IDENTIFIER_SUFFIXES):
+            flags[column] = f"column name suggests identifier ('{col_str}')"
+            continue
+        if any(t in _IDENTIFIER_TOKENS for t in all_tokens) and any(
+            t in {"customer", "user", "client", "account", "patient", "member", "employee", "person", "subscriber"}
+            for t in all_tokens
+        ):
+            flags[column] = f"column name suggests identifier ('{col_str}')"
+            continue
+
         if pd.api.types.is_numeric_dtype(df[column]):
             if not pd.api.types.is_bool_dtype(df[column]):
                 phone_reason = _scan_numeric_phone_values(df[column])
@@ -128,7 +153,9 @@ def detect_sensitive_columns(df):
     return flags
 
 
-def apply_exclusions(df, excluded_columns):
+def apply_exclusions(
+    df: pd.DataFrame, excluded_columns: Iterable[str] | None
+) -> tuple[pd.DataFrame, bool]:
     """Drop excluded columns. Fails closed with an empty frame if all columns are excluded."""
     excluded_set = set(excluded_columns or [])
     remaining = [c for c in df.columns if c not in excluded_set]
@@ -137,7 +164,7 @@ def apply_exclusions(df, excluded_columns):
     return df[remaining], True
 
 
-def detect_sensitive_text(raw_text):
+def detect_sensitive_text(raw_text: str | None) -> list[str]:
     """Scan raw text for likely-sensitive patterns (emails, tokens, cards, phones)."""
     if not raw_text or not isinstance(raw_text, str):
         return []
@@ -156,6 +183,14 @@ def detect_sensitive_text(raw_text):
         if len(digits) in range(13, 20) and _luhn_ok(digits):
             findings.append("credit-card-like values")
             break
-    if any(len(re.sub(r"\D", "", m.group(0))) >= 9 for m in _PHONE_RE.finditer(sample)):
-        findings.append("phone-number-like values")
+    sample_no_timestamps = _TIMESTAMP_RE.sub(" ", sample)
+    for m in _PHONE_RE.finditer(sample_no_timestamps):
+        digits = re.sub(r"\D", "", m.group(0))
+        if 9 <= len(digits) <= 15:
+            if len(digits) == 10 and digits.isdigit():
+                val = int(digits)
+                if 1_000_000_000 <= val <= 2_150_000_000:
+                    continue
+            findings.append("phone-number-like values")
+            break
     return findings

@@ -2,7 +2,7 @@ import pandas as pd
 from pandas.api.types import is_numeric_dtype, is_datetime64_any_dtype
 
 
-def remove_duplicates(df):
+def remove_duplicates(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return df
     cleaned_df = df.drop_duplicates()
@@ -14,7 +14,12 @@ _CATEGORICAL_STRATEGIES = {"mode", "unknown"}
 _DATETIME_STRATEGIES = {"ffill", "ffill_bfill", "none"}
 
 
-def fill_missing_values(df, numeric_strategy="mean", categorical_strategy="mode", datetime_strategy="ffill"):
+def fill_missing_values(
+    df: pd.DataFrame,
+    numeric_strategy: str = "mean",
+    categorical_strategy: str = "mode",
+    datetime_strategy: str = "ffill",
+) -> pd.DataFrame:
     """Impute missing values column by column.
 
     numeric_strategy: mean / median / zero (an all-null numeric column gets 0).
@@ -84,7 +89,7 @@ def fill_missing_values(df, numeric_strategy="mean", categorical_strategy="mode"
     return cleaned_df
 
 
-def drop_missing_values(df, threshold=None):
+def drop_missing_values(df: pd.DataFrame, threshold: float | None = None) -> pd.DataFrame:
     if df is None or df.empty:
         return df
 

@@ -18,11 +18,11 @@ logger = get_logger("AI")
 MAX_TOTAL_CHAT_CHARS = 100_000
 
 page_header(
-    "AI Summary & Insights",
+    "AI Summary",
     "Executive summaries, natural language diagnostics, and statistical insights over the active dataset."
 )
 
-df, selected_file = select_working_dataset("Active Dataset:")
+df, selected_file = select_working_dataset("Active dataset")
 render_sidebar()
 
 try:
@@ -34,7 +34,7 @@ with st.sidebar:
     st.markdown('<div class="ci-side-label">Gemini settings</div>', unsafe_allow_html=True)
     ask(
         "gemini",
-        "Enter Google Gemini API Key:",
+        "Google Gemini API key",
         help_text="Get your key at https://aistudio.google.com/"
     )
     keep_box("gemini_keep")
@@ -43,7 +43,7 @@ with st.sidebar:
         st.rerun()
 
     chosen_model = st.selectbox(
-        "Gemini Model:",
+        "Gemini model",
         GEMINI_MODELS,
         index=GEMINI_MODELS.index(DEFAULT_GEMINI_MODEL)
     )
@@ -61,35 +61,30 @@ with st.container(border=True):
         "AI Governance & Privacy Shield",
         f"Data governance, PII protection, and context boundary for {selected_file}"
     )
-    gov_col1, gov_col2 = st.columns([1.2, 1.8])
+    if api_key:
+        st.success("Gemini API key active for this session.")
+    else:
+        st.warning("Gemini API key required — add it under **Gemini settings** in the sidebar.")
+
+    gov_col1, gov_col2 = st.columns([1.5, 1])
     with gov_col1:
-        if api_key:
-            st.success("Gemini API Key: Active in Session")
-        else:
-            st.warning("Gemini API Key: Required to generate insights")
-            ask(
-                "gemini",
-                "Enter Gemini API Key (or set in sidebar):",
-                help_text="Key is held in volatile session memory only. Get a free key at https://aistudio.google.com/",
-                key="inline_gemini_key_ai",
-            )
-            api_key = value_of("gemini")
-
-        if sensitive:
-            reasons = ", ".join(f"`{col}`" for col in sorted(sensitive.keys()))
-            st.info(f"PII Protection: {len(sensitive)} sensitive column(s) detected ({reasons}) and pre-excluded.")
-        else:
-            st.success("PII Protection: No high-risk identifiers detected in active schema.")
-
-        st.caption("*Only statistical summaries and non-excluded sample records are transmitted to Google Gemini.*")
-
-    with gov_col2:
         excluded_cols = st.multiselect(
-            "Columns to EXCLUDE from AI context:",
+            "Columns to exclude from AI context",
             options=all_cols,
             default=default_exclusions,
             help="Excluded columns are stripped from everything sent to Gemini. Detected sensitive columns are preselected automatically.",
         )
+    with gov_col2:
+        if sensitive:
+            reasons = ", ".join(f"`{col}`" for col in sorted(sensitive.keys()))
+            st.info(f"PII screening: {len(sensitive)} sensitive/identifier column(s) detected ({reasons}) and pre-excluded.")
+        else:
+            st.success("PII screening: no identifiers or sensitive patterns matched the current rules.")
+
+    st.caption(
+        "**Privacy notice:** Only statistical summaries and non-excluded sample records are transmitted to Google Gemini. "
+        "Privacy screening uses heuristics and cannot guarantee that all sensitive data will be detected."
+    )
 
 ai_df, exclusions_applied = apply_exclusions(df, excluded_cols)
 if not exclusions_applied and excluded_cols:

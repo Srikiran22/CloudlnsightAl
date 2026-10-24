@@ -10,7 +10,11 @@ MAX_VISUALIZATION_ROWS = 25_000
 MAX_ANALYSIS_ROWS = 50_000
 
 
-def sample_for_visualization(df: pd.DataFrame, max_rows: int = MAX_VISUALIZATION_ROWS, random_state: int = 42):
+def sample_for_visualization(
+    df: pd.DataFrame | None,
+    max_rows: int = MAX_VISUALIZATION_ROWS,
+    random_state: int = 42,
+) -> tuple[pd.DataFrame | None, bool, str]:
     """Return a deterministic representative sample for visualization rendering if df exceeds max_rows.
 
     Returns:
@@ -26,7 +30,11 @@ def sample_for_visualization(df: pd.DataFrame, max_rows: int = MAX_VISUALIZATION
     return sampled, True, note
 
 
-def sample_for_analysis(df: pd.DataFrame, max_rows: int = MAX_ANALYSIS_ROWS, random_state: int = 42):
+def sample_for_analysis(
+    df: pd.DataFrame | None,
+    max_rows: int = MAX_ANALYSIS_ROWS,
+    random_state: int = 42,
+) -> tuple[pd.DataFrame | None, bool, str]:
     """Return a deterministic representative sample for statistical analysis if df exceeds max_rows.
 
     Protects compute-intensive operations (descriptive statistics, correlations, IQR outliers,

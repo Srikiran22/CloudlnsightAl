@@ -10,8 +10,9 @@ from Utils.theme import page_header, section_card_header
 from Utils.ML import is_likely_id_column
 
 page_header(
-    "Compare Datasets",
-    "Schema differences, missing-value drift, and summary metric shifts between two files."
+    "Dataset Drift & Compare",
+    "Statistical distribution shifts, Kolmogorov-Smirnov tests, TVD categorical drift, and schema divergence between datasets.",
+    badge="DRIFT MONITOR"
 )
 
 available = list_ready_datasets()
@@ -23,7 +24,7 @@ with st.container(border=True):
     section_card_header("Dataset Pair Selection", "Select baseline (A) and target comparison (B) datasets")
     col_a, col_b = st.columns(2)
     with col_a:
-        name_a = st.selectbox("Dataset A:", available, index=0)
+        name_a = st.selectbox("Dataset A", available, index=0)
     with col_b:
         default_b = 0
         for idx, name in enumerate(available):
@@ -33,7 +34,7 @@ with st.container(border=True):
                     break
         if default_b == 0 and len(available) > 1:
             default_b = 1
-        name_b = st.selectbox("Dataset B:", available, index=default_b)
+        name_b = st.selectbox("Dataset B", available, index=default_b)
 
 render_sidebar()
 
@@ -65,9 +66,12 @@ with st.container(border=True):
     m1, m2, m3, m4 = st.columns(4)
     with m1:
         row_diff = total_b - total_a
-        delta_str = f"{row_diff:+,} vs B" if row_diff != 0 else "0 vs B"
-        delta_col = "normal" if row_diff != 0 else "off"
-        st.metric("Total Rows — A", f"{total_a:,}", delta=delta_str, delta_color=delta_col)
+        st.metric(
+            "Total Rows — A",
+            f"{total_a:,}",
+            delta=f"{row_diff:+,} vs B" if row_diff else None,
+            delta_color="normal" if row_diff else "off",
+        )
     with m2:
         st.metric("Total Rows — B", f"{total_b:,}")
     with m3:
@@ -152,15 +156,32 @@ with tab_drift:
                     else (f"{v:.3f}" if isinstance(v, float) else str(v))
                 )
 
+        def _style_status(value: str) -> str:
+            """Colour-code the drift verdict so flagged columns stand out."""
+            if value == "Drift detected":
+                return "color: #DC2626; font-weight: 600"
+            if value == "Stable":
+                return "color: #16A34A; font-weight: 600"
+            return "color: #64748B"
+
         if not show_technical:
             core_cols = [
                 "Status", "Column", "Plain-English Summary", "Dtype Match",
                 "Missing % A", "Missing % B", "Mean A", "Mean B", "Mean Shift %"
             ]
             display_cols = [c for c in core_cols if c in display_df.columns]
-            st.dataframe(display_df[display_cols], width="stretch", hide_index=True)
+            view = display_df[display_cols]
+            st.dataframe(
+                view.style.map(_style_status, subset=["Status"]),
+                width="stretch",
+                hide_index=True,
+            )
         else:
-            st.dataframe(display_df, width="stretch", hide_index=True)
+            st.dataframe(
+                display_df.style.map(_style_status, subset=["Status"]),
+                width="stretch",
+                hide_index=True,
+            )
 
         st.caption(
             "Statistical methodology: Numeric distribution drift evaluated via two-sample Kolmogorov-Smirnov tests with "

@@ -1,16 +1,20 @@
 import hashlib
 import threading
+from typing import Any
 import pandas as pd
 import streamlit as st
 from html import escape
 
+from Utils.logsys import get_logger
 from Utils.paths import (
     _sanitize_unhashable_cells,
     list_dataset_files,
     read_dataset,
     resolve_dataset_path,
 )
-from Utils.theme import toggle_theme_button
+from Utils.theme import render_appearance_note
+
+logger = get_logger("DatasetUI")
 
 
 class DatasetIdentity:
@@ -32,15 +36,7 @@ class DatasetIdentity:
         }
 
 
-_BRAND_HTML = """
-<div class="ci-brand">
-  <div class="ci-brand-name">Cloud<span>Insight</span> AI</div>
-  <div class="ci-brand-tag">Analytics workspace</div>
-</div>
-"""
-
-
-def set_active_dataset(df, name):
+def set_active_dataset(df: pd.DataFrame | None, name: str | None) -> None:
     st.session_state["current_df"] = df
     st.session_state["dataset_name"] = name
     try:
@@ -49,7 +45,7 @@ def set_active_dataset(df, name):
         st.session_state["session_fingerprint"] = None
 
 
-def init_session_state():
+def init_session_state() -> None:
     """Guarantee the app's core data contract keys exist with safe defaults.
 
     `current_df` / `dataset_name` are THE shared dataset state every page
@@ -64,7 +60,7 @@ def init_session_state():
 _CONTENT_HASH_CACHE = {}
 
 
-def invalidate_dataset_cache(dataset=None):
+def invalidate_dataset_cache(dataset: str | None = None) -> None:
     """Clear cached content fingerprints and memory-cached DataFrames.
 
     If dataset is provided, clears entries for that specific dataset path.
@@ -74,8 +70,8 @@ def invalidate_dataset_cache(dataset=None):
         _CONTENT_HASH_CACHE.clear()
         try:
             _DATASET_MEMORY_CACHE.clear()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("suppressed error in %s: %s", "invalidate_dataset_cache", exc)
     else:
         try:
             target_path_str = str(resolve_dataset_path(dataset))
@@ -83,11 +79,11 @@ def invalidate_dataset_cache(dataset=None):
                 if key[0] == target_path_str:
                     _CONTENT_HASH_CACHE.pop(key, None)
             _DATASET_MEMORY_CACHE.invalidate(target_path_str)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("suppressed error in %s: %s", "invalidate_dataset_cache", exc)
 
 
-def dataset_fingerprint(dataset, force_refresh=False):
+def dataset_fingerprint(dataset: str, force_refresh: bool = False) -> str:
     """Cryptographic content-derived fingerprint for a dataset file.
 
     Computes a full SHA-256 hash over the actual file content to establish
@@ -128,7 +124,7 @@ def dataset_fingerprint(dataset, force_refresh=False):
     return fp
 
 
-def dataframe_fingerprint(df):
+def dataframe_fingerprint(df: pd.DataFrame | None) -> str:
     """Deterministic cryptographic content fingerprint for an in-memory DataFrame.
 
     Incorporates shape, column names, column order, data types, and all row values.
@@ -156,7 +152,9 @@ def dataframe_fingerprint(df):
     return hasher.hexdigest()
 
 
-def results_match_active(results, selected_file, df=None):
+def results_match_active(
+    results: dict[str, Any] | None, selected_file: str | None, df: pd.DataFrame | None = None
+) -> bool:
     """True when stored analysis results still describe the active dataset.
 
     Guards against the same filename being replaced on disk between training
@@ -272,7 +270,7 @@ def clear_dataset_memory_cache():
     _DATASET_MEMORY_CACHE.clear()
 
 
-def load_dataset_cached(dataset, max_rows=None):
+def load_dataset_cached(dataset: str, max_rows: int | None = None) -> pd.DataFrame:
     path = resolve_dataset_path(dataset)
     fp = dataset_fingerprint(dataset)
     cache_key = (str(path), fp, max_rows)
@@ -285,9 +283,8 @@ def load_dataset_cached(dataset, max_rows=None):
 
 
 
-def render_sidebar():
+def render_sidebar() -> None:
     with st.sidebar:
-        st.markdown(_BRAND_HTML, unsafe_allow_html=True)
         name = st.session_state.get("dataset_name")
         df = st.session_state.get("current_df")
         st.markdown('<div class="ci-side-label">Active dataset</div>', unsafe_allow_html=True)
@@ -302,14 +299,15 @@ def render_sidebar():
         else:
             st.markdown(
                 '<div class="ci-dataset"><div class="ci-dataset-meta">Nothing loaded yet — start at '
-                '<b>Ingest data</b>.</div></div>',
+                '<b>Import Files</b>.</div></div>',
                 unsafe_allow_html=True,
             )
-        st.markdown('<div class="ci-side-label">Appearance</div>', unsafe_allow_html=True)
-        toggle_theme_button()
+        render_appearance_note()
 
 
-def select_working_dataset(selectbox_label, max_rows=None):
+def select_working_dataset(
+    selectbox_label: str, max_rows: int | None = None
+) -> tuple[pd.DataFrame, str]:
     files = list_dataset_files(tabular_only=True)
     df_session = st.session_state.get("current_df")
     name_session = st.session_state.get("dataset_name")
@@ -321,7 +319,7 @@ def select_working_dataset(selectbox_label, max_rows=None):
     options.extend(files)
 
     if not options:
-        st.warning("No dataset loaded. Ingest one on the **Ingest data** page first.")
+        st.warning("No dataset loaded. Ingest one on the **Import Files** page first.")
         st.stop()
 
     selected_option = st.selectbox(selectbox_label, options)
@@ -337,8 +335,8 @@ def select_working_dataset(selectbox_label, max_rows=None):
                         f"Notice: `{name_session}` on disk was modified since it was loaded into this session. "
                         "Pick the file from the dropdown to reload fresh data from disk."
                     )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("suppressed error in %s: %s", "select_working_dataset", exc)
         ret_df = df_session
         if max_rows is not None and len(ret_df) > max_rows:
             ret_df = ret_df.iloc[:max_rows].copy()

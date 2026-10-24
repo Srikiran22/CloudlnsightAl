@@ -2,10 +2,12 @@
 # Computes a structural completeness and uniqueness heuristic.
 # Dashboard gauge and PDF report must always agree -- both import from here.
 
+from typing import Any
+
 import pandas as pd
 
 
-def quality_metrics(df):
+def quality_metrics(df: pd.DataFrame) -> dict[str, Any]:
     """Compute the structural Data Hygiene Index for a DataFrame.
 
         index = (completeness + uniqueness) / 2
@@ -47,7 +49,7 @@ def quality_metrics(df):
     }
 
 
-def quality_index(df):
+def quality_index(df: pd.DataFrame) -> float:
     """The 0-100 composite score alone."""
     return quality_metrics(df)["index"]
 

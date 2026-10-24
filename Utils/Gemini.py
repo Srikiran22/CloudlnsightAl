@@ -15,11 +15,12 @@ logger = get_logger("Gemini")
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 GEMINI_MODELS = [
     "gemini-3.8-flash",
-    "gemini-3.5-flash",
+    "gemini-3.6-flash",
     "gemini-2.5-flash",
     "gemini-2.5-pro",
 ]
 DEPRECATED_GEMINI_MODELS = {
+    "gemini-3.5-flash": "gemini-3.6-flash",
     "gemini-2.0-flash": "gemini-3.8-flash",
     "gemini-2.0-flash-exp": "gemini-3.8-flash",
     "gemini-1.5-flash": "gemini-3.8-flash",

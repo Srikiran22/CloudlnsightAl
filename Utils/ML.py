@@ -182,7 +182,8 @@ def save_trained_model(res, model_name, directory=None):
         "pipeline": res["pipeline"],
         "problem_type": res.get("problem_type"),
         "algorithm": res.get("model_name"),
-        "target_col": res.get("target_col"),
+        "target_col": res.get("target_col") or res.get("target_column"),
+        "target_column": res.get("target_column") or res.get("target_col"),
         "feature_cols": res.get("feature_cols", []),
         "numeric_features": res.get("numeric_features", []),
         "categorical_features": res.get("categorical_features", []),
@@ -197,7 +198,8 @@ def save_trained_model(res, model_name, directory=None):
         "training_config": {
             "problem_type": res.get("problem_type"),
             "algorithm": res.get("model_name"),
-            "target_col": res.get("target_col"),
+            "target_col": res.get("target_col") or res.get("target_column"),
+            "target_column": res.get("target_column") or res.get("target_col"),
             "feature_cols": res.get("feature_cols", []),
             "random_state": res.get("random_state"),
             "test_size": res.get("test_size"),
@@ -209,6 +211,7 @@ def save_trained_model(res, model_name, directory=None):
             key: res[key]
             for key in (
                 "accuracy", "precision", "recall", "f1_score", "f1_macro",
+                "positive_class", "positive_precision", "positive_recall", "positive_f1", "positive_support",
                 "r2_score", "rmse", "mae",
                 "cv_accuracy_mean", "cv_accuracy_std", "cv_f1_macro_mean", "cv_f1_macro_std",
                 "cv_r2_mean", "cv_r2_std", "cv_rmse_mean", "cv_rmse_std",
@@ -692,7 +695,11 @@ def train_and_evaluate_model(
         pipe.fit(X_train, y_train)
         y_pred = pipe.predict(X_test)
 
-        classes = sorted(set(y_test.astype(str)).union(str(value) for value in y_pred))
+        try:
+            classes = sorted(set(y_test).union(set(y_pred)))
+        except TypeError:
+            classes = sorted(set(y_test).union(set(y_pred)), key=str)
+
         acc = accuracy_score(y_test, y_pred)
         prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)
         rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)
@@ -700,6 +707,22 @@ def train_and_evaluate_model(
         f1_macro = f1_score(y_test, y_pred, average="macro", zero_division=0)
         cm = confusion_matrix(y_test, y_pred, labels=classes)
         cr = classification_report(y_test, y_pred, labels=classes, output_dict=True, zero_division=0)
+
+        pos_metrics = {}
+        if len(classes) == 2:
+            candidates = [c for c in classes if str(c).strip().lower() in ("1", "true", "yes", "churn", "churned", "positive")]
+            pos_label = candidates[0] if candidates else classes[1]
+            pos_prec = precision_score(y_test, y_pred, pos_label=pos_label, zero_division=0)
+            pos_rec = recall_score(y_test, y_pred, pos_label=pos_label, zero_division=0)
+            pos_f1 = f1_score(y_test, y_pred, pos_label=pos_label, zero_division=0)
+            pos_sup = int(sum(y_test == pos_label))
+            pos_metrics = {
+                "positive_class": str(pos_label),
+                "positive_precision": round(float(pos_prec), 4),
+                "positive_recall": round(float(pos_rec), 4),
+                "positive_f1": round(float(pos_f1), 4),
+                "positive_support": pos_sup,
+            }
 
         # Baseline model: majority class prediction
         dummy_clf = DummyClassifier(strategy="most_frequent")
@@ -755,6 +778,7 @@ def train_and_evaluate_model(
             "model_name": model_name,
             "pipeline": pipe,
             "target_col": target_col,
+            "target_column": target_col,
             "feature_cols": list(feature_cols),
             "accuracy": round(acc, 4),
             "precision": round(prec, 4),
@@ -784,6 +808,7 @@ def train_and_evaluate_model(
             "train_rows": len(X_train),
             "stratified_split": stratified_succeeded,
             "stratified_warning": stratified_warning,
+            **pos_metrics,
         }
 
     else:

@@ -5,12 +5,11 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-from Utils.theme import plot_template, page_header, section_card_header
-from Utils.paths import MODELS_DIR, resolve_dataset_path, sanitize_for_csv_export
+from Utils.theme import plot_template, style_plotly_fig, page_header, section_card_header
+from Utils.paths import resolve_dataset_path
 from Utils.ML import (
     detect_problem_type, train_and_evaluate_model,
-    save_trained_model, load_trained_model, list_saved_models, predict_with_model,
-    is_likely_id_column,
+    save_trained_model, is_likely_id_column,
 )
 from Utils.dataset_ui import (
     dataframe_fingerprint, dataset_fingerprint, render_sidebar, results_match_active,
@@ -21,11 +20,12 @@ from Utils.logsys import get_logger
 logger = get_logger("ML_Page")
 
 page_header(
-    "Train Model",
-    "Train, evaluate, and persist classification or regression models with automatic preprocessing and baseline benchmarking."
+    "Model Studio & Training",
+    "Train, evaluate, and benchmark Scikit-Learn classification and regression models with leak-free cross-validation.",
+    badge="MACHINE LEARNING"
 )
 
-df, selected_file = select_working_dataset("Active Dataset:")
+df, selected_file = select_working_dataset("Active dataset")
 render_sidebar()
 
 if df.empty or len(df.columns) < 2 or len(df) < 2:
@@ -41,7 +41,7 @@ with st.container(border=True):
 
     with col1:
         target_column = st.selectbox(
-            "Select Target Variable (What do you want to predict?):",
+            "Target variable (what do you want to predict?)",
             df.columns.tolist(),
             index=len(df.columns) - 1
         )
@@ -54,7 +54,7 @@ with st.container(border=True):
 
     with col2:
         problem_type = st.radio(
-            "Problem Type:",
+            "Problem type",
             ["Classification", "Regression"],
             index=0 if auto_type == "Classification" else 1,
             horizontal=True,
@@ -75,7 +75,7 @@ with st.container(border=True):
     col_feat1, col_feat2 = st.columns([3, 2])
     with col_feat1:
         selected_features = st.multiselect(
-            "Select Input Features (Predictors):",
+            "Input features (predictors)",
             available_features,
             default=default_features
         )
@@ -88,13 +88,13 @@ with st.container(border=True):
         else:
             algorithms = ["Random Forest", "Gradient Boosting", "Linear Regression", "Ridge Regression"]
 
-        chosen_algo = st.selectbox("Choose ML Algorithm:", algorithms)
+        chosen_algo = st.selectbox("Algorithm", algorithms)
 
     col_split1, col_split2 = st.columns(2)
     with col_split1:
-        test_pct = st.slider("Test Set Split Size (%):", min_value=10, max_value=40, value=20, step=5)
+        test_pct = st.slider("Test-set size (%)", min_value=10, max_value=40, value=20, step=5)
     with col_split2:
-        random_seed = st.number_input("Random State (Seed):", min_value=0, max_value=999, value=42)
+        random_seed = st.number_input("Random seed", min_value=0, max_value=999, value=42)
 
     has_temporal_col = any(pd.api.types.is_datetime64_any_dtype(df[c]) for c in df.columns) or isinstance(df.index, pd.DatetimeIndex)
     use_time_series_cv = False
@@ -167,7 +167,8 @@ def _render_fi_chart(fi_dict, title, imp_metric):
         template=plot_template(),
         title=title
     )
-    st.plotly_chart(fig_fi, width="stretch")
+    style_plotly_fig(fig_fi)
+    st.plotly_chart(fig_fi, width="stretch", theme="streamlit")
 
 results = st.session_state.get("ml_results")
 if results_match_active(results, selected_file, df=df):
@@ -188,26 +189,37 @@ if results_match_active(results, selected_file, df=df):
             prec_pct = results.get("precision", 0) * 100
             base_pct = results.get("baseline_accuracy", 0) * 100
             target_name = results.get("target_column") or target_column
-            if abs(acc_pct - base_pct) <= 3.0 and base_pct > 70.0:
+            model_disp_name = results.get('model_name', 'model')
+
+            if acc_pct < base_pct:
+                diff = base_pct - acc_pct
+                st.warning(
+                    f"**Model Verdict: Below baseline performance.** This {model_disp_name} achieved "
+                    f"**{acc_pct:.1f}% accuracy** on holdout test data, underperforming the naive "
+                    f"majority-class baseline ({base_pct:.1f}%) by **{diff:.1f} percentage points**. "
+                    "Predictions should not be relied upon for production decisions until feature representation or class imbalance is addressed."
+                )
+            elif abs(acc_pct - base_pct) <= 3.0 and base_pct > 70.0:
                 st.info(
-                    f"**Model Verdict:** Achieved **{acc_pct:.1f}% overall accuracy** and "
-                    f"**{prec_pct:.1f}% precision** on unseen test data, successfully identifying "
-                    f"high-risk {target_name} cases while a naive baseline guesses the majority class for every row."
+                    f"**Model Verdict: Baseline parity.** Achieved **{acc_pct:.1f}% overall accuracy** and "
+                    f"**{prec_pct:.1f}% weighted precision** on unseen test data, comparable to the "
+                    f"naive majority baseline of {base_pct:.1f}%."
                 )
             else:
-                st.info(
-                    f"**Model Verdict:** This {results.get('model_name', 'model')} accurately predicts **{target_name}** "
-                    f"**{acc_pct:.1f}% of the time** (precision: **{prec_pct:.1f}%**) on holdout test data "
-                    f"(compared to a simple baseline majority guess of {base_pct:.1f}%)."
+                gain = acc_pct - base_pct
+                st.success(
+                    f"**Model Verdict: Above baseline.** This {model_disp_name} achieved **{acc_pct:.1f}% accuracy** "
+                    f"(weighted precision: **{prec_pct:.1f}%**) on holdout test data, outperforming the "
+                    f"naive majority baseline ({base_pct:.1f}%) by **+{gain:.1f} percentage points**."
                 )
             if results.get("f1_macro") is not None:
                 m1, m2, m3, m4, m5 = st.columns(5)
                 with m1:
                     st.metric("Accuracy", f"{results['accuracy'] * 100:.2f}%")
                 with m2:
-                    st.metric("Precision", f"{results['precision'] * 100:.2f}%")
+                    st.metric("Precision (Weighted)", f"{results['precision'] * 100:.2f}%")
                 with m3:
-                    st.metric("Recall", f"{results['recall'] * 100:.2f}%")
+                    st.metric("Recall (Weighted)", f"{results['recall'] * 100:.2f}%")
                 with m4:
                     st.metric("F1 (Weighted)", f"{results['f1_score'] * 100:.2f}%")
                 with m5:
@@ -217,11 +229,23 @@ if results_match_active(results, selected_file, df=df):
                 with m1:
                     st.metric("Accuracy", f"{results['accuracy'] * 100:.2f}%")
                 with m2:
-                    st.metric("Precision", f"{results['precision'] * 100:.2f}%")
+                    st.metric("Precision (Weighted)", f"{results['precision'] * 100:.2f}%")
                 with m3:
-                    st.metric("Recall", f"{results['recall'] * 100:.2f}%")
+                    st.metric("Recall (Weighted)", f"{results['recall'] * 100:.2f}%")
                 with m4:
                     st.metric("F1 (Weighted)", f"{results['f1_score'] * 100:.2f}%")
+
+            if results.get("positive_class") is not None:
+                st.markdown(
+                    f'<div style="font-size: 0.84rem; color: var(--ci-text-2); margin: 0.6rem 0 0.85rem 0; padding: 8px 14px; background: var(--ci-tint); border-radius: var(--ci-radius-sm); border: 1px solid var(--ci-border);">'
+                    f'<strong>Positive class {results["positive_class"]}</strong> &nbsp;|&nbsp; '
+                    f'Precision <strong>{results["positive_precision"] * 100:.2f}%</strong> &nbsp;|&nbsp; '
+                    f'Recall <strong>{results["positive_recall"] * 100:.2f}%</strong> &nbsp;|&nbsp; '
+                    f'F1 <strong>{results["positive_f1"] * 100:.2f}%</strong> &nbsp;|&nbsp; '
+                    f'Support <strong>{results["positive_support"]}</strong> samples'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
 
             if results.get("cv_folds"):
                 st.markdown("##### Cross-Validation Performance & Baseline Benchmark")
@@ -236,17 +260,17 @@ if results_match_active(results, selected_file, df=df):
                 with cv2:
                     st.metric(
                         f"{results['cv_folds']}-Fold CV Macro F1",
-                        f"{results['cv_f1_macro_mean']:.4f}",
-                        help=f"Mean Macro F1 across {results['cv_folds']} folds with ±{results['cv_f1_macro_std']:.4f} standard deviation."
+                        f"{results['cv_f1_macro_mean'] * 100:.2f}%",
+                        help=f"Mean Macro F1 across {results['cv_folds']} folds with ±{results['cv_f1_macro_std'] * 100:.2f}% standard deviation."
                     )
-                    st.caption(f"Range: {results['cv_f1_macro_mean'] - results['cv_f1_macro_std']:.4f} – {results['cv_f1_macro_mean'] + results['cv_f1_macro_std']:.4f}")
+                    st.caption(f"Range: {(results['cv_f1_macro_mean'] - results['cv_f1_macro_std']) * 100:.1f}% – {(results['cv_f1_macro_mean'] + results['cv_f1_macro_std']) * 100:.1f}%")
                 with cv3:
                     st.metric(
                         "Dummy Baseline Accuracy",
                         f"{results.get('baseline_accuracy', 0) * 100:.2f}%",
                         help="Majority-class baseline without feature learning."
                     )
-                    st.caption(f"Baseline Macro F1: {results.get('baseline_f1_macro', 0):.4f}")
+                    st.caption(f"Baseline Macro F1: {results.get('baseline_f1_macro', 0) * 100:.1f}%")
 
             tab_cm, tab_fi = st.tabs(["Confusion Matrix Heatmap", "Feature Importance"])
             with tab_cm:
@@ -262,7 +286,8 @@ if results_match_active(results, selected_file, df=df):
                     template=plot_template()
                 )
                 fig_cm.update_layout(title="Confusion Matrix Heatmap")
-                st.plotly_chart(fig_cm, width="stretch")
+                style_plotly_fig(fig_cm)
+                st.plotly_chart(fig_cm, width="stretch", theme="streamlit")
 
             with tab_fi:
                 raw_fi = results.get("feature_importances")
@@ -359,7 +384,8 @@ if results_match_active(results, selected_file, df=df):
                         name="Perfect Prediction Line",
                         line={"color": "red", "dash": "dash"}
                     ))
-                st.plotly_chart(fig_pred, width="stretch")
+                style_plotly_fig(fig_pred)
+                st.plotly_chart(fig_pred, width="stretch", theme="streamlit")
 
             with tab_fi_reg:
                 raw_fi = results.get("feature_importances")
@@ -395,13 +421,16 @@ with st.container(border=True):
     else:
         col_save_left, col_save_right = st.columns([1.5, 1])
         with col_save_left:
+            last_saved = st.session_state.get("last_saved_model_path")
+            if last_saved and Path(last_saved).is_file():
+                st.success(f"Model automatically saved and HMAC-signed as `{Path(last_saved).name}` in `Models/`.")
             default_save_name = f"{current_results.get('model_name', 'model')}_{current_results.get('target_col', current_results.get('target_column', 'model'))}".replace(" ", "_").lower()
             save_name = st.text_input(
-                "Model Artifact Name:",
+                "Save copy with custom name",
                 value=default_save_name,
                 key="ml_save_model_name"
             )
-            if st.button("Save model to Models/ folder", key="btn_save_model_explicit"):
+            if st.button("Save additional named copy", key="btn_save_model_explicit"):
                 try:
                     path = save_trained_model(current_results, save_name)
                     st.success(f"Model saved and HMAC-signed as `{path.name}` in `Models/`.")
@@ -409,10 +438,13 @@ with st.container(border=True):
                     st.error(f"Save failed: {str(e)}")
         with col_save_right:
             st.markdown('<div class="ci-side-label" style="margin-top:0.6rem;">Batch Scoring</div>', unsafe_allow_html=True)
-            st.page_link(
-                "Pages/Predict.py",
-                label="Open Predict & Score page",
-                icon=":material/batch_prediction:",
-                help="Switch to dedicated batch inference and prediction scoring workspace"
-            )
+            try:
+                st.page_link(
+                    "Pages/Predict.py",
+                    label="Open Predict & Score page",
+                    icon=":material/batch_prediction:",
+                    help="Switch to dedicated batch inference and prediction scoring workspace"
+                )
+            except Exception as exc:
+                logger.debug("suppressed error in %s: %s", "_render_fi_chart", exc)
             st.caption("Use saved models to score new datasets with drift checks and CSV export.")

@@ -1,9 +1,11 @@
 # Helpers for batch ingestion: turning many uploaded files into one dataset.
 
+from collections.abc import Sequence
+
 import pandas as pd
 
 
-def merge_frames(frames):
+def merge_frames(frames: Sequence[tuple[str, pd.DataFrame]]) -> pd.DataFrame:
     """Merge (filename, DataFrame) pairs into one dataset.
 
     A provenance column is inserted first so rows stay traceable to the file

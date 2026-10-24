@@ -17,7 +17,7 @@ class TestPageSmoke(unittest.TestCase):
     PAGES = [
         "App.py",
         "Pages/Upload.py",
-        "Pages/CloudS3.py",
+        "Pages/FeatureEngineering.py",
         "Pages/AIConverter.py",
         "Pages/Cleaning.py",
         "Pages/Compare.py",

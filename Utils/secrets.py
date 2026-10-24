@@ -21,7 +21,7 @@ def _ver(name):
 def ask(name, label, help_text="", key=None):
     slot = _slot(name)
     ver = st.session_state.get(_ver(name), 0) if hasattr(st, "session_state") else 0
-    w_key = key or f"{name}_widget_{ver}"
+    w_key = f"{key}_{ver}" if key else f"{name}_widget_{ver}"
     if slot not in st.session_state:
         st.session_state[slot] = ""
     value = st.text_input(label, value=st.session_state[slot], type="password", help=help_text, key=w_key)
@@ -41,6 +41,14 @@ def keep_box(session_key):
     )
 
 
+def _purge_secret_keys(name):
+    if not hasattr(st, "session_state"):
+        return None
+    old = st.session_state.pop(_slot(name), None)
+    st.session_state[_ver(name)] = st.session_state.get(_ver(name), 0) + 1
+    return old
+
+
 def release(*names, **opts):
     keep_key = opts.get("keep_key")
     if keep_key and st.session_state.get(keep_key):
@@ -48,8 +56,7 @@ def release(*names, **opts):
 
     cleared = []
     for name in names:
-        old = st.session_state.pop(_slot(name), None)
-        st.session_state[_ver(name)] = st.session_state.get(_ver(name), 0) + 1
+        old = _purge_secret_keys(name)
         if old not in (None, ""):
             cleared.append(name)
     return cleared
@@ -57,8 +64,7 @@ def release(*names, **opts):
 
 def drop(*names):
     for name in names:
-        st.session_state.pop(_slot(name), None)
-        st.session_state[_ver(name)] = st.session_state.get(_ver(name), 0) + 1
+        _purge_secret_keys(name)
 
 
 @contextmanager

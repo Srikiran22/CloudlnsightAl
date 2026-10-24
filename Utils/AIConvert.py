@@ -514,8 +514,8 @@ def parse_ai_csv(text):
                 df = _cap_columns(_normalize(raw_df))
                 if df.shape[0] >= 1 and df.shape[1] >= 1 and _is_valid_dataframe_table(df):
                     return df
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("suppressed error in %s: %s", "parse_ai_csv", exc)
 
     # 2. Structured record extraction: use csv.reader to preserve multiline quoted cells
     # cleanly even when surrounded by conversational preamble/sign-off

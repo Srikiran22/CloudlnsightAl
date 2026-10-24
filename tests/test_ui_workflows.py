@@ -178,7 +178,6 @@ import os
 import shutil
 import tempfile
 import unittest
-from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
@@ -640,62 +639,18 @@ class LoggingLevelValidationTests(unittest.TestCase):
             self.assertEqual(logger.getEffectiveLevel(), logging.DEBUG)
 
 
-class S3UIRemediationAppTests(unittest.TestCase):
-    """AppTest regression tests for S3 authentication modes, session tokens, and S3 export."""
+class UploadPageStudioAppTests(unittest.TestCase):
+    """AppTest regression tests for Data Hub & Ingest page tabs and catalog."""
 
-    def test_upload_page_s3_manual_mode_renders_session_token_and_tabs(self):
+    def test_upload_page_renders_tabs_and_runs_cleanly(self):
         from streamlit.testing.v1 import AppTest
         root = Path(__file__).resolve().parent.parent
         at = AppTest.from_file(str(root / "Pages" / "Upload.py"), default_timeout=30)
         at.run()
         self.assertEqual(len(at.exception), 0)
-
-        # Switch to Amazon S3
-        at.radio[0].set_value("Amazon S3").run()
-        self.assertEqual(len(at.exception), 0)
-
-        # Check that authentication method radio exists
-        auth_radios = [r for r in at.radio if "Authentication Method" in getattr(r, "label", "")]
-        self.assertEqual(len(auth_radios), 1)
-        self.assertEqual(auth_radios[0].value, "Manual Access Keys")
-
-        # Check that session token text input is present
-        session_inputs = [ti for ti in at.text_input if "Session Token" in getattr(ti, "label", "")]
-        self.assertEqual(len(session_inputs), 1)
-
-        # Check tabs exist (Import from S3 and Export to S3)
-        self.assertTrue(len(at.tabs) >= 2)
-
-    def test_upload_page_s3_ambient_mode_enables_without_keys(self):
-        from streamlit.testing.v1 import AppTest
-        root = Path(__file__).resolve().parent.parent
-        at = AppTest.from_file(str(root / "Pages" / "Upload.py"), default_timeout=30)
-        at.run()
-        at.radio[0].set_value("Amazon S3").run()
-
-        # Switch to IAM Role / Environment
-        auth_radios = [r for r in at.radio if "Authentication Method" in getattr(r, "label", "")]
-        auth_radios[0].set_value("IAM Role / Environment / AWS CLI (Automatic)").run()
-        self.assertEqual(len(at.exception), 0)
-
-        # In ambient mode, manual key fields should not be displayed
-        key_inputs = [ti for ti in at.text_input if "AWS Access Key ID" in getattr(ti, "label", "")]
-        self.assertEqual(len(key_inputs), 0)
-
-    def test_upload_page_s3_export_tab_renders_active_dataset(self):
-        from streamlit.testing.v1 import AppTest
-        root = Path(__file__).resolve().parent.parent
-        at = AppTest.from_file(str(root / "Pages" / "Upload.py"), default_timeout=30)
-        at.session_state["current_df"] = pd.DataFrame({"col_a": [1, 2], "col_b": [3, 4]})
-        at.session_state["dataset_name"] = "test_export_dataset.csv"
-        at.run()
-        at.radio[0].set_value("Amazon S3").run()
-        self.assertEqual(len(at.exception), 0)
-
-        # Check export buttons
-        export_buttons = [b for b in at.button if "Upload to S3" in getattr(b, "label", "")]
-        self.assertTrue(len(export_buttons) >= 1)
+        self.assertEqual(len(at.tabs), 4)
 
 
 if __name__ == '__main__':
     unittest.main()
+

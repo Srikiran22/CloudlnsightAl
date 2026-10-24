@@ -28,26 +28,26 @@ available_files = list_ready_datasets()
 with st.container(border=True):
     section_card_header("Source Selection", "Choose an existing dataset or upload a new file")
     source_option = st.radio(
-        "Choose Dataset Source:",
-        ["Select from Datasets Folder", "Upload New File"],
+        "Choose dataset source",
+        ["Select from datasets folder", "Upload new file"],
         horizontal=True
     )
 
     df = None
     selected_filename = None
 
-    if source_option == "Select from Datasets Folder":
+    if source_option == "Select from datasets folder":
         if not available_files:
-            st.info("No datasets found in `Datasets/`. Ingest one on the Ingest data page first.")
+            st.info("No datasets found in `Datasets/`. Ingest one on the Import Files page first.")
         else:
-            selected_filename = st.selectbox("Select Dataset to Clean:", available_files)
+            selected_filename = st.selectbox("Select dataset to clean", available_files)
             try:
                 df = load_dataset_cached(selected_filename)
             except Exception as e:
                 st.error(f"Error reading file: {e}")
     else:
         uploaded_file = st.file_uploader(
-            "Upload Dataset to Clean",
+            "Upload dataset to clean",
             type=sorted(ext.lstrip(".") for ext in SUPPORTED_DATASET_EXTENSIONS)
         )
         if uploaded_file:
@@ -56,14 +56,14 @@ with st.container(border=True):
                 df = read_tabular(uploaded_file, filename=selected_filename)
             except AIConversionRequired:
                 st.warning(
-                    f"`{selected_filename}` has no native table structure. "
-                    "Convert it with Gemini on the **Ingest data** page first, then clean the converted copy here."
+                    f"`{selected_filename}` does not contain a standard tabular schema. "
+                    "Please ingest a valid CSV, Parquet, Excel, or JSON dataset on the Data Hub page."
                 )
             except Exception as e:
                 st.error(f"Error reading file: {e}")
 
 if df is not None:
-    is_stored = (source_option == "Select from Datasets Folder")
+    is_stored = (source_option == "Select from datasets folder")
     active_fp = dataset_fingerprint(selected_filename) if (is_stored and selected_filename) else dataframe_fingerprint(df)
     metrics_cache_key = f"clean_orig_metrics_{selected_filename}_{active_fp}"
     if metrics_cache_key not in st.session_state:
@@ -83,37 +83,41 @@ if df is not None:
         with col2:
             st.metric("Total Columns", df.shape[1])
         with col3:
-            st.metric("Duplicate Rows", f"{dup_count:,}", delta="Clean" if dup_count == 0 else f"{dup_count} dups", delta_color="off" if dup_count == 0 else "inverse")
+            st.metric("Duplicate Rows", f"{dup_count:,}")
         with col4:
-            st.metric("Missing Values", f"{missing_count:,}", delta="Complete" if missing_count == 0 else f"{missing_count} nulls", delta_color="off" if missing_count == 0 else "inverse")
+            st.metric("Missing Values", f"{missing_count:,}")
 
-        with st.expander("Preview Original Data"):
+        with st.expander("Preview original data"):
             st.dataframe(df.head(10), width="stretch", hide_index=True)
 
     with st.container(border=True):
-        section_card_header("Cleaning Pipeline Rules", "Configure deduplication, imputation strategies, and save destination")
-        col_opt1, col_opt2 = st.columns(2)
+        section_card_header("Cleaning Pipeline Rules", "Configure deduplication, imputation, and where the result is saved")
+        col_opt1, col_opt2 = st.columns([1, 1.8])
         with col_opt1:
-            do_remove_dups = st.checkbox("Remove Duplicate Rows", value=True)
+            do_remove_dups = st.checkbox("Remove duplicate rows", value=True)
+            st.caption("Drops exact duplicates before imputation.")
         with col_opt2:
             missing_strategy = st.selectbox(
-                "Missing Value Strategy:",
+                "Missing value strategy",
                 [
                     "Fill with average (numbers) & most common (text) — Recommended",
                     "Fill missing numbers with median & text with most common value",
                     "Fill missing numbers with zero & text with 'Unknown'",
                     "Drop Rows with Missing Values",
-                    "Keep Missing Values As-Is"
-                ]
+                    "Keep Missing Values As-Is",
+                ],
+                help="Applies per column: numeric columns use the chosen statistic, text columns fall back to the most common value.",
             )
 
-        col_save1, col_save2 = st.columns(2)
+        st.markdown("")
+
+        col_save1, col_save2 = st.columns([1, 1])
         with col_save1:
             save_mode = st.radio(
-                "Save Destination:",
+                "Save destination",
                 ["Update active session in-place", "Save as new dataset file"],
                 horizontal=True,
-                key="clean_save_mode"
+                key="clean_save_mode",
             )
         with col_save2:
             custom_new_name = ""
@@ -122,7 +126,7 @@ if df is not None:
                 while base_name_clean.lower().startswith("cleaned_"):
                     base_name_clean = base_name_clean[len("cleaned_"):]
                 custom_new_name = st.text_input(
-                    "New dataset filename (optional):",
+                    "New dataset filename (optional)",
                     value="",
                     placeholder=f"cleaned_{base_name_clean}.csv",
                     key="clean_custom_name"
@@ -172,7 +176,7 @@ if df is not None:
                 set_active_dataset(cleaned_df, cleaned_name)
                 st.success(f"Cleaned dataset saved as `{cleaned_name}`.")
 
-            is_stored = (source_option == "Select from Datasets Folder")
+            is_stored = (source_option == "Select from datasets folder")
             src_fp = dataset_fingerprint(selected_filename) if (is_stored and selected_filename) else dataframe_fingerprint(df)
             st.session_state["last_clean_result"] = {
                 "source": selected_filename,
@@ -183,7 +187,7 @@ if df is not None:
             }
 
     result = st.session_state.get("last_clean_result")
-    is_stored = (source_option == "Select from Datasets Folder")
+    is_stored = (source_option == "Select from datasets folder")
     current_fp = dataset_fingerprint(selected_filename) if (is_stored and selected_filename) else dataframe_fingerprint(df)
     if (
         result
@@ -198,13 +202,11 @@ if df is not None:
             c1, c2, c3, c4 = st.columns(4)
             with c1:
                 diff_rows = cleaned_df.shape[0] - result["orig_rows"]
-                if diff_rows == 0:
-                    delta_label = "0 rows removed"
-                    delta_color = "off"
-                else:
-                    delta_label = f"{abs(diff_rows):,} rows removed"
-                    delta_color = "normal"
-                st.metric("Rows", f"{cleaned_df.shape[0]:,}", delta=delta_label, delta_color=delta_color)
+                st.metric(
+                    "Rows",
+                    f"{cleaned_df.shape[0]:,}",
+                    delta=f"{abs(diff_rows):,} rows removed" if diff_rows else None,
+                )
             with c2:
                 st.metric("Columns", cleaned_df.shape[1])
             with c3:
@@ -214,56 +216,36 @@ if df is not None:
 
             st.dataframe(cleaned_df.head(10), width="stretch", hide_index=True)
 
-            c_dl, c_gap = st.columns([2, 3])
+            c_dl, c_parquet, c_save = st.columns(3)
             with c_dl:
                 csv_bytes = sanitize_for_csv_export(cleaned_df).to_csv(index=False).encode("utf-8")
                 st.download_button(
-                    label="Download cleaned CSV",
+                    label="Download CSV",
                     data=csv_bytes,
-                    file_name=cleaned_name,
+                    file_name=cleaned_name if cleaned_name.endswith(".csv") else f"{cleaned_name}.csv",
                     mime="text/csv",
                     use_container_width=True
                 )
-
-            with st.expander("Export cleaned dataset to Amazon S3"):
-                c_s3_1, c_s3_2 = st.columns(2)
-                with c_s3_1:
-                    clean_s3_bucket = st.text_input(
-                        "S3 Bucket Name:",
-                        value=st.session_state.get("s3_bucket", ""),
-                        placeholder="e.g. my-analytics-bucket",
-                        key="clean_s3_bucket"
-                    )
-                with c_s3_2:
-                    clean_s3_region = st.text_input(
-                        "AWS Region:",
-                        value=st.session_state.get("s3_region", "us-east-1"),
-                        placeholder="e.g. us-east-1",
-                        key="clean_s3_region"
-                    )
-
-                clean_s3_key = st.text_input(
-                    "Destination S3 Object Key:",
-                    value=f"cleaned/{cleaned_name}",
-                    key="clean_s3_key"
+            with c_parquet:
+                import io
+                parquet_buf = io.BytesIO()
+                cleaned_df.to_parquet(parquet_buf, index=False)
+                st.download_button(
+                    label="Download Parquet",
+                    data=parquet_buf.getvalue(),
+                    file_name=f"{cleaned_name.rsplit('.', 1)[0]}.parquet",
+                    mime="application/octet-stream",
+                    use_container_width=True
                 )
-
-                if st.button("Upload to S3", type="primary", key="btn_clean_upload_s3"):
-                    if not clean_s3_bucket.strip():
-                        st.error("Please specify a target S3 bucket name.")
-                    else:
-                        from Utils.S3 import get_s3_client, upload_s3_dataset, describe_s3_error
-                        from Utils.secrets import value_of
-                        k = value_of("aws_access")
-                        s = value_of("aws_secret")
-                        t = value_of("aws_session") or None
-                        s3_client = get_s3_client(k, s, region_name=clean_s3_region.strip(), aws_session_token=t)
-                        with st.spinner(f"Uploading `{cleaned_name}` to `s3://{clean_s3_bucket.strip()}/{clean_s3_key.strip()}`..."):
-                            try:
-                                upload_s3_dataset(cleaned_df, clean_s3_bucket.strip(), clean_s3_key.strip(), s3_client, sanitize=True)
-                                st.success(f"Successfully uploaded cleaned dataset to `s3://{clean_s3_bucket.strip()}/{clean_s3_key.strip()}`!")
-                            except Exception as up_err:
-                                st.error(f"S3 export failed: {describe_s3_error(up_err, action='upload', bucket=clean_s3_bucket.strip())}")
+            with c_save:
+                if st.button("Save to Workspace Catalog", use_container_width=True):
+                    from Utils.paths import resolve_dataset_path
+                    try:
+                        save_path = resolve_dataset_path(cleaned_name)
+                        cleaned_df.to_csv(save_path, index=False)
+                        st.success(f"Saved `{cleaned_name}` to Datasets catalog!")
+                    except Exception as save_err:
+                        st.error(f"Save failed: {save_err}")
 
 render_sidebar()
 

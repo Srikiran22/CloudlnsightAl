@@ -15,7 +15,6 @@ from Utils.paths import (
     DATASETS_DIR, ensure_project_directories,
 )
 from Utils.AIConvert import _field_count_quote_aware
-from Utils.S3 import download_s3_dataset
 from Utils.dataset_ui import (
     dataset_fingerprint, dataframe_fingerprint, load_dataset_cached,
 )
@@ -137,20 +136,6 @@ class ResourceAndMemoryLimitsTests(unittest.TestCase):
             enforce_size_limit(MAX_UPLOAD_BYTES + 1, "test file")
         self.assertIn("limit is 200 MB", str(ctx.exception))
 
-    def test_s3_streaming_hard_byte_limit_without_content_length(self):
-        mock_body = Mock()
-        # Return 64KB chunks infinitely
-        mock_body.read.return_value = b"X" * (64 * 1024)
-
-        mock_s3 = Mock()
-        mock_s3.get_object.return_value = {
-            "Body": mock_body,
-            # ContentLength intentionally absent
-        }
-
-        with self.assertRaises(ValueError) as ctx:
-            download_s3_dataset("bucket", "huge.csv", mock_s3)
-        self.assertIn("limit", str(ctx.exception).lower())
 
     def test_load_dataset_cached_bounds_rows(self):
         test_file = DATASETS_DIR / "temp_cache_test.csv"
@@ -303,16 +288,14 @@ class GeminiHardeningTests(unittest.TestCase):
     def test_gemini_model_registry_contains_supported_models(self):
         self.assertEqual(DEFAULT_GEMINI_MODEL, "gemini-3.8-flash")
         self.assertIn("gemini-3.8-flash", GEMINI_MODELS)
-        self.assertIn("gemini-3.5-flash", GEMINI_MODELS)
-        self.assertIn("gemini-2.5-flash", GEMINI_MODELS)
-        self.assertIn("gemini-2.5-pro", GEMINI_MODELS)
-        self.assertIn("gemini-3.5-flash", GEMINI_MODELS)
+        self.assertIn("gemini-3.6-flash", GEMINI_MODELS)
         self.assertIn("gemini-2.5-flash", GEMINI_MODELS)
         self.assertIn("gemini-2.5-pro", GEMINI_MODELS)
         self.assertNotIn("gemini-1.5-flash", GEMINI_MODELS)
         self.assertNotIn("gemini-1.5-pro", GEMINI_MODELS)
 
     def test_deprecated_model_resolution(self):
+        self.assertEqual(resolve_gemini_model("gemini-3.5-flash"), "gemini-3.6-flash")
         self.assertEqual(resolve_gemini_model("gemini-2.0-flash"), "gemini-3.8-flash")
         self.assertEqual(resolve_gemini_model("gemini-2.0-flash-exp"), "gemini-3.8-flash")
         self.assertEqual(resolve_gemini_model("gemini-1.5-flash"), "gemini-3.8-flash")

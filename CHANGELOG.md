@@ -5,6 +5,34 @@ All notable changes to CloudInsight AI are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-10-18
+
+### Fixed
+- **Light-mode consistency:** the CSS palette now follows the resolved Streamlit theme (`st.context.theme`) instead of a session flag, and a zero-height client bridge re-applies the palette instantly when the appearance changes. Dataframes, selectboxes, code chips and charts no longer stay dark on a light page.
+- **Card styling on current Streamlit:** bordered containers moved to `stLayoutWrapper` in Streamlit 1.60, so the old `stVerticalBlockBorderWrapper` rules were dead. Cards now use the design tokens again (8 px radius, 20/24 px padding, token border) on every page, with the legacy selector kept for older releases.
+- **Sidebar layout:** the brand wordmark is rendered with `st.logo` in the sidebar header (above the navigation) instead of a block that appeared below it; the active dataset panel and appearance note follow the navigation.
+- **Sidebar state:** pages that auto-select the working dataset render the sidebar after selection, so the active dataset is never shown as "Nothing loaded yet" on first load.
+- **Data hygiene gauge:** the indicator now uses the shared chart theming and design tokens, so the score and tick labels are legible in both appearances.
+- **Chart legibility:** axis and legend text in Plotly charts uses the design tokens instead of Streamlit's low-contrast default grey.
+- **Disabled buttons:** primary buttons now visibly mute when disabled (the forced primary colours were overriding the disabled state).
+- **Cleaning workflow:** option/save controls are arranged in a balanced grid, redundant "Clean"/"Complete" delta pills are gone, and the result card only shows a row-delta when rows were removed.
+- **Machine-learning metrics:** CV Macro F1, its range and the baseline F1 are reported as percentages to match the other metrics; the positive-class strip no longer renders `( 1 )` with chip padding.
+- **AI pages:** governance cards use a balanced two-column layout (context exclusions next to the PII result, full-width key status and privacy notice), and the converter's sample-log action is contextual to Paste mode instead of floating in the header row.
+- **PDF report:** saving a preset is a visible, disabled-until-named action, and the generated report path is shown in a copyable code block instead of wrapping mid-filename.
+- **Compare table:** status values are colour-coded (drift / stable / identifier) for faster scanning.
+- **Copy drift:** page titles match their navigation labels, "Ingest data" references now say "Import Files", and widget labels, radio options and action buttons use one sentence-case convention.
+
+### Changed
+- **Theme ownership:** appearance is now owned by Streamlit (browser preference or **⋮ → Settings → Theme**); both palettes are declared in `.streamlit/config.toml` and `Utils/theme.py`. The custom in-app toggle was removed because it could not re-theme canvas widgets without a full page reload.
+- **Chart theming:** all Plotly charts render with `theme="streamlit"` and share `chart_palette()` instead of ad-hoc Plotly defaults.
+- **Module structure:** `Utils/paths.py` was split into `limits.py` (resource ceilings, storage roots, supported formats), `frames.py` (column normalisation and export sanitisation) and `parsing.py` (format readers). `paths.py` keeps the public API and ingestion dispatch, so existing imports continue to work.
+- **Observability:** best-effort exception handlers now log at DEBUG instead of silently swallowing errors.
+- **Typing:** public utility APIs in `paths`, `frames`, `parsing`, `privacy`, `compare_logic`, `Charts`, `sampling`, `quality`, `batch`, `Preprocessing` and `dataset_ui` are annotated.
+
+### Added
+- Coverage reporting in CI and `[tool.coverage]` configuration.
+- README section documenting the theming architecture.
+
 ## [2.1.0] - 2026-10-02
 
 ### Added

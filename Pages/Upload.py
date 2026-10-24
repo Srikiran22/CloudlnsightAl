@@ -1,9 +1,9 @@
-import streamlit as st
+import sqlite3
 from pathlib import Path
+import pandas as pd
+import streamlit as st
 
-from Utils.secrets import ask, value_of, keep_box, release, drop
-from Utils.S3 import describe_s3_error, get_s3_client, list_s3_datasets, download_s3_dataset, upload_s3_dataset
-from Utils.Gemini import GEMINI_MODELS, DEFAULT_GEMINI_MODEL, GeminiError
+from Utils.dataset_ui import render_sidebar, set_active_dataset, invalidate_dataset_cache, load_dataset_cached
 from Utils.logsys import get_logger
 from Utils.paths import (
     AIConversionRequired,
@@ -24,85 +24,86 @@ from Utils.paths import (
     MAX_INGESTION_COLUMNS,
     MAX_INGESTION_CELLS,
     compute_upload_signature,
+    sanitize_for_csv_export,
+    safe_stem,
 )
 from Utils.AIConvert import convert_to_dataframe
 from Utils.batch import merge_frames
-from Utils.dataset_ui import render_sidebar, set_active_dataset, invalidate_dataset_cache
+from Utils.secrets import ask, value_of, keep_box, release
+from Utils.Gemini import GEMINI_MODELS, DEFAULT_GEMINI_MODEL, GeminiError
 from Utils.privacy import detect_sensitive_text
-from Utils.theme import page_header, section_card_header
+from Utils.theme import page_header, section_card_header, metric_card
 
 logger = get_logger("Upload")
 
 page_header(
-    "Import Files",
-    "Load local tabular files (.csv, .xlsx, .parquet, .json) or connect to Amazon S3."
+    "Data Hub & Ingest",
+    "Ingest tabular data files, connect to SQLite databases, paste raw tabular data, or manage your workspace catalog.",
+    badge="LOCAL PIPELINE"
 )
-
-upload_mode = st.radio(
-    "Source:",
-    ["Local file", "Amazon S3"],
-    horizontal=True
-)
-
-ACCEPTED_TYPES = sorted(ext.lstrip(".") for ext in SUPPORTED_DATASET_EXTENSIONS)
+render_sidebar()
 
 df = None
 file_name = None
 fresh_ingest = False
 
-_compute_upload_signature = compute_upload_signature
+tab_files, tab_sqlite, tab_paste, tab_catalog = st.tabs([
+    "File Ingestion (CSV / Parquet / Excel / JSON)",
+    "SQLite Database Ingest",
+    "Quick Paste / TSV",
+    "Active Catalog"
+])
 
-
-if upload_mode == "Local file":
+# -----------------------------------------------------------------------------
+# TAB 1: FILE INGESTION
+# -----------------------------------------------------------------------------
+with tab_files:
     with st.container(border=True):
         section_card_header(
-            "Upload Local Data Files",
-            "Choose one or more tabular datasets (.csv, .xlsx, .parquet, .json) to ingest"
+            "Local Tabular File Upload",
+            "Upload one or more structured datasets (.csv, .xlsx, .xls, .parquet, .json, .tsv) or document files (.txt, .pdf, .docx)."
         )
+        accepted_types = sorted(ext.lstrip(".") for ext in SUPPORTED_DATASET_EXTENSIONS)
         uploaded_files = st.file_uploader(
-            "Choose data file(s) — one or many",
-            type=ACCEPTED_TYPES,
+            "Select dataset file(s)",
+            type=accepted_types,
             accept_multiple_files=True,
+            key="file_uploader_tabular"
         )
 
-    parsed = []    # (name, df) ready to use
-    pending = []   # (name, AIConversionRequired) awaiting Gemini conversion
-    failures = []  # (name, reason)
+    _compute_upload_signature = compute_upload_signature
+    parsed_datasets = []
+    pending = []
+    failures = []
+    merge_error = None
 
     if uploaded_files:
         if len(uploaded_files) > MAX_UPLOAD_FILES:
-            st.error(
-                f"Too many files selected ({len(uploaded_files)}). Maximum allowed is "
-                f"{MAX_UPLOAD_FILES} files. Please reduce your selection."
-            )
+            st.error(f"Too many files selected ({len(uploaded_files)}). Maximum allowed is {MAX_UPLOAD_FILES} files.")
         else:
             total_bytes = sum(getattr(f, "size", 0) for f in uploaded_files)
             if total_bytes > MAX_AGGREGATE_UPLOAD_BYTES:
-                st.error(
-                    f"Total upload size ({total_bytes / (1024 * 1024):.1f} MB) exceeds aggregate limit of "
-                    f"{MAX_AGGREGATE_UPLOAD_BYTES // (1024 * 1024)} MB. Please split your files."
-                )
+                st.error(f"Total upload size ({total_bytes / (1024 * 1024):.1f} MB) exceeds aggregate limit of {MAX_AGGREGATE_UPLOAD_BYTES // (1024 * 1024)} MB.")
             else:
                 current_sig = _compute_upload_signature(uploaded_files)
                 last_sig = st.session_state.get("last_upload_signature")
+
                 if current_sig == last_sig and "last_upload_state" in st.session_state:
                     saved_state = st.session_state["last_upload_state"]
-                    parsed = saved_state["parsed"]
-                    pending = saved_state["pending"]
-                    failures = saved_state["failures"]
-                    file_name = saved_state["file_name"]
-                    df = saved_state["df"]
-                    if saved_state.get("merge_error"):
-                        st.error(saved_state["merge_error"])
+                    parsed_datasets = saved_state.get("parsed", [])
+                    pending = saved_state.get("pending", [])
+                    failures = saved_state.get("failures", [])
+                    file_name = saved_state.get("file_name")
+                    df = saved_state.get("df")
+                    merge_error = saved_state.get("merge_error")
+                    if merge_error:
+                        st.error(merge_error)
                 else:
                     seen_names = set()
-                    merge_error = None
                     for uploaded in uploaded_files:
                         raw_name = Path(uploaded.name).name
                         target_name = get_unique_filename(raw_name, directory=DATASETS_DIR, extra_names=seen_names)
                         seen_names.add(target_name)
-                        if target_name != raw_name:
-                            st.info(f"Existing dataset `{raw_name}` preserved — upload saved as `{target_name}`.")
 
                         try:
                             single_df = read_tabular(uploaded, filename=target_name)
@@ -110,7 +111,7 @@ if upload_mode == "Local file":
                             uploaded.seek(0)
                             atomic_write(DATASETS_DIR / target_name, uploaded.getbuffer(), mode="wb")
                             invalidate_dataset_cache(target_name)
-                            parsed.append((target_name, single_df))
+                            parsed_datasets.append((target_name, single_df))
                         except AIConversionRequired as needed:
                             needed.__traceback__ = None
                             active_model = st.session_state.get("ai_convert_model")
@@ -121,7 +122,7 @@ if upload_mode == "Local file":
                             )
                             if valid_conv:
                                 st.info(f"Reusing verified conversion `{valid_conv}` for `{target_name}`.")
-                                parsed.append((valid_conv, read_dataset(valid_conv)))
+                                parsed_datasets.append((valid_conv, read_dataset(valid_conv)))
                             else:
                                 pending.append((target_name, needed))
                         except Exception as read_error:
@@ -129,62 +130,36 @@ if upload_mode == "Local file":
                             failures.append((target_name, str(read_error)))
                             release_filename_reservation(target_name, directory=DATASETS_DIR)
 
-                    if parsed:
-                        if len(parsed) == 1:
-                            file_name, df = parsed[0]
+                    if parsed_datasets:
+                        if len(parsed_datasets) == 1:
+                            file_name, df = parsed_datasets[0]
                             fresh_ingest = True
                         else:
-                            total_rows = sum(len(f[1]) for f in parsed)
-                            approx_cols = len(set().union(*(set(f[1].columns) for f in parsed)))
+                            total_rows = sum(len(f[1]) for f in parsed_datasets)
+                            approx_cols = len(set().union(*(set(f[1].columns) for f in parsed_datasets)))
                             if total_rows > MAX_COMBINED_ROWS:
-                                merge_error = (
-                                    f"Combined row count ({total_rows:,}) exceeds the maximum supported limit of "
-                                    f"{MAX_COMBINED_ROWS:,} rows. Merge was aborted."
-                                )
+                                merge_error = f"Combined row count ({total_rows:,}) exceeds the maximum supported limit of {MAX_COMBINED_ROWS:,} rows. Merge was aborted."
                                 st.error(merge_error)
                                 file_name, df = None, None
                             elif approx_cols > MAX_INGESTION_COLUMNS:
-                                merge_error = (
-                                    f"Estimated combined column count ({approx_cols:,}) exceeds the maximum supported limit of "
-                                    f"{MAX_INGESTION_COLUMNS:,} columns. Merge was aborted."
-                                )
+                                merge_error = f"Estimated combined column count ({approx_cols:,}) exceeds the maximum supported limit of {MAX_INGESTION_COLUMNS:,} columns. Merge was aborted."
                                 st.error(merge_error)
                                 file_name, df = None, None
                             elif total_rows * approx_cols > MAX_INGESTION_CELLS:
-                                merge_error = (
-                                    f"Estimated combined dataset cell count ({total_rows * approx_cols:,}) exceeds the maximum "
-                                    f"limit of {MAX_INGESTION_CELLS:,} cells. Merge was aborted."
-                                )
+                                merge_error = f"Estimated combined dataset cell count ({total_rows * approx_cols:,}) exceeds the maximum limit of {MAX_INGESTION_CELLS:,} cells. Merge was aborted."
                                 st.error(merge_error)
                                 file_name, df = None, None
                             else:
-                                combined = merge_frames(parsed)
+                                combined = merge_frames(parsed_datasets)
                                 if combined.empty:
                                     merge_error = "Combined dataset has no records or columns. Merge was aborted."
-                                    st.error(merge_error)
-                                    file_name, df = None, None
-                                elif combined.shape[1] > MAX_INGESTION_COLUMNS:
-                                    merge_error = (
-                                        f"Combined column count ({combined.shape[1]:,}) exceeds the maximum supported limit of "
-                                        f"{MAX_INGESTION_COLUMNS:,} columns. Merge was aborted."
-                                    )
-                                    st.error(merge_error)
-                                    file_name, df = None, None
-                                elif combined.shape[0] * combined.shape[1] > MAX_INGESTION_CELLS:
-                                    merge_error = (
-                                        f"Combined dataset cell count ({combined.shape[0] * combined.shape[1]:,}) exceeds the maximum "
-                                        f"limit of {MAX_INGESTION_CELLS:,} cells. Merge was aborted."
-                                    )
                                     st.error(merge_error)
                                     file_name, df = None, None
                                 else:
                                     csv_text = combined.to_csv(index=False)
                                     csv_bytes = csv_text.encode("utf-8")
                                     if len(csv_bytes) > MAX_UPLOAD_BYTES:
-                                        merge_error = (
-                                            f"Combined dataset byte size ({len(csv_bytes)/(1024*1024):.1f} MB) exceeds the maximum "
-                                            f"limit of {MAX_UPLOAD_BYTES/(1024*1024):.0f} MB. Merge was aborted."
-                                        )
+                                        merge_error = f"Combined dataset byte size ({len(csv_bytes)/(1024*1024):.1f} MB) exceeds maximum limit. Merge was aborted."
                                         st.error(merge_error)
                                         file_name, df = None, None
                                     else:
@@ -197,7 +172,7 @@ if upload_mode == "Local file":
 
                     st.session_state["last_upload_signature"] = current_sig
                     st.session_state["last_upload_state"] = {
-                        "parsed": parsed,
+                        "parsed": parsed_datasets,
                         "pending": pending,
                         "failures": failures,
                         "file_name": file_name,
@@ -216,22 +191,10 @@ if upload_mode == "Local file":
         names_list = ", ".join(f"`{n}`" for n, _ in pending)
         st.info(
             f"{len(pending)} file(s) have no native table structure: {names_list}. "
-            "Structured files above are already loaded; convert the rest with Gemini."
+            "Convert and structure them with Google Gemini."
         )
-
-        hints = st.text_input(
-            "Conversion hints (optional)",
-            help=(
-                "Tell Gemini what these files contain so it structures them well — "
-                "e.g. 'previous year question papers: one row per question with year, "
-                "subject, topic, marks'. Leave empty for generic table extraction."
-            ),
-        )
-        ask(
-            "gemini",
-            "Google Gemini API Key:",
-            help_text="Entered at runtime, held in memory only."
-        )
+        hints = st.text_input("Conversion hints (optional)", key="ai_conv_hints")
+        ask("gemini", "Google Gemini API Key:")
         keep_box("gemini_keep")
 
         chosen_model = st.selectbox(
@@ -244,18 +207,10 @@ if upload_mode == "Local file":
         for fname, needed in pending:
             findings = detect_sensitive_text(needed.raw_text)
             if findings:
-                st.warning(
-                    f"Possible sensitive content detected in `{fname}`: {', '.join(findings)}. "
-                    "Review before converting with Gemini."
-                )
+                st.warning(f"Possible sensitive content detected in `{fname}`: {', '.join(findings)}.")
             with st.expander(f"Preview extracted content — {fname}"):
                 preview_text = needed.raw_text[:1500]
                 st.text(preview_text + ("..." if len(needed.raw_text) > 1500 else ""))
-
-        st.warning(
-            "Privacy note: extracted file content is sent to Google Gemini for structuring. "
-            "Avoid sensitive data or use de-identified copies."
-        )
 
         if st.button("Convert with Gemini", type="primary"):
             if not value_of("gemini"):
@@ -276,7 +231,7 @@ if upload_mode == "Local file":
                                 if valid_conv:
                                     st.info(f"Reusing verified conversion `{valid_conv}` for `{fname}`.")
                                     conv_df = read_dataset(valid_conv)
-                                    parsed.append((valid_conv, conv_df))
+                                    parsed_datasets.append((valid_conv, conv_df))
                                     newly_converted.append((valid_conv, conv_df))
                                     continue
                                 converted = convert_to_dataframe(
@@ -299,19 +254,15 @@ if upload_mode == "Local file":
                                     model_name=chosen_model,
                                     extra_instructions=(hints or "").strip() or None,
                                 )
-                                parsed.append((converted_name, converted))
+                                parsed_datasets.append((converted_name, converted))
                                 newly_converted.append((converted_name, converted))
-                                st.success(
-                                    f"Converted `{fname}` to {converted.shape[0]:,} rows × "
-                                    f"{converted.shape[1]} cols, saved as `{converted_name}`."
-                                )
+                                st.success(f"Converted `{fname}` to {converted.shape[0]:,} rows × {converted.shape[1]} cols, saved as `{converted_name}`.")
                             except GeminiError as conv_error:
                                 still_pending.append((fname, needed))
                                 st.error(f"`{fname}` conversion failed — {conv_error}")
                             except Exception as conv_error:
                                 still_pending.append((fname, needed))
-                                logger.warning("conversion failed for %s: %s: %s",
-                                               fname, type(conv_error).__name__, conv_error)
+                                logger.warning("conversion failed for %s: %s: %s", fname, type(conv_error).__name__, conv_error)
                                 st.error(f"`{fname}` conversion failed: {conv_error}")
                     finally:
                         if release("gemini", keep_key="gemini_keep"):
@@ -320,11 +271,11 @@ if upload_mode == "Local file":
 
                     if newly_converted:
                         merge_error = None
-                        if len(parsed) == 1:
-                            file_name, df = parsed[0]
+                        if len(parsed_datasets) == 1:
+                            file_name, df = parsed_datasets[0]
                             fresh_ingest = True
                         else:
-                            total_rows = sum(len(f[1]) for f in parsed)
+                            total_rows = sum(len(f[1]) for f in parsed_datasets)
                             if total_rows > MAX_COMBINED_ROWS:
                                 merge_error = (
                                     f"Combined row count ({total_rows:,}) exceeds the maximum supported limit of "
@@ -333,263 +284,185 @@ if upload_mode == "Local file":
                                 st.error(merge_error)
                                 file_name, df = None, None
                             else:
-                                combined = merge_frames(parsed)
+                                combined = merge_frames(parsed_datasets)
                                 csv_text = combined.to_csv(index=False)
-                                csv_bytes = csv_text.encode("utf-8")
-                                if combined.empty:
-                                    merge_error = "Combined dataset has no records or columns. Merge was aborted."
-                                    st.error(merge_error)
-                                    file_name, df = None, None
-                                elif combined.shape[1] > MAX_INGESTION_COLUMNS:
-                                    merge_error = (
-                                        f"Combined column count ({combined.shape[1]:,}) exceeds the maximum supported limit of "
-                                        f"{MAX_INGESTION_COLUMNS:,} columns. Merge was aborted."
-                                    )
-                                    st.error(merge_error)
-                                    file_name, df = None, None
-                                elif len(csv_bytes) > MAX_UPLOAD_BYTES:
-                                    merge_error = (
-                                        f"Combined dataset byte size ({len(csv_bytes)/(1024*1024):.1f} MB) exceeds the maximum "
-                                        f"limit of {MAX_UPLOAD_BYTES/(1024*1024):.0f} MB. Merge was aborted."
-                                    )
-                                    st.error(merge_error)
-                                    file_name, df = None, None
-                                else:
-                                    file_name = get_unique_filename("combined_dataset.csv", directory=DATASETS_DIR)
-                                    DATASETS_DIR.mkdir(parents=True, exist_ok=True)
-                                    atomic_write(DATASETS_DIR / file_name, csv_text, mode="w", encoding="utf-8")
-                                    invalidate_dataset_cache(file_name)
-                                    df = combined
-                                    fresh_ingest = True
+                                file_name = get_unique_filename("combined_dataset.csv", directory=DATASETS_DIR)
+                                DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+                                atomic_write(DATASETS_DIR / file_name, csv_text, mode="w", encoding="utf-8")
+                                invalidate_dataset_cache(file_name)
+                                df = combined
+                                fresh_ingest = True
 
                         if "last_upload_state" in st.session_state:
-                            st.session_state["last_upload_state"]["parsed"] = parsed
+                            st.session_state["last_upload_state"]["parsed"] = parsed_datasets
                             st.session_state["last_upload_state"]["pending"] = pending
                             st.session_state["last_upload_state"]["failures"] = failures
                             st.session_state["last_upload_state"]["file_name"] = file_name
                             st.session_state["last_upload_state"]["df"] = df
                             st.session_state["last_upload_state"]["merge_error"] = merge_error
 
-else:
-    with st.container(border=True):
-        section_card_header("S3 Connection & IAM Authentication", "Configure AWS bucket credentials or ambient environment roles")
-
-        s3_auth_mode = st.radio(
-            "Authentication Method:",
-            ["Manual Access Keys", "IAM Role / Environment / AWS CLI (Automatic)"],
-            horizontal=True,
-            key="s3_auth_mode",
-        )
-
-        c_b1, c_b2 = st.columns(2)
-        with c_b1:
-            bucket = st.text_input(
-                "S3 Bucket Name:",
-                value=st.session_state.get("s3_bucket", ""),
-                placeholder="e.g. my-analytics-bucket",
-                key="s3_bucket_input",
-            )
-        with c_b2:
-            region = st.text_input(
-                "AWS Region:",
-                value=st.session_state.get("s3_region", "us-east-1"),
-                placeholder="e.g. us-east-1",
-                key="s3_region_input",
-            )
-
-        clean_bucket = bucket.strip() if bucket else ""
-        clean_region = region.strip() if region else "us-east-1"
-        if clean_bucket:
-            st.session_state["s3_bucket"] = clean_bucket
-        if clean_region:
-            st.session_state["s3_region"] = clean_region
-
-        if s3_auth_mode == "Manual Access Keys":
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                aws_key = ask("aws_access", "AWS Access Key ID:")
-            with c2:
-                aws_secret = ask("aws_secret", "AWS Secret Access Key:")
-            with c3:
-                aws_session = ask(
-                    "aws_session",
-                    "AWS Session Token (Optional):",
-                    help_text="Required for temporary credentials from STS, AWS SSO, or assumed roles."
-                )
-
-            c_keep, c_clear = st.columns([3, 1])
-            with c_keep:
-                keep_box("aws_keep")
-            with c_clear:
-                if st.button("Clear keys", help="Purge entered AWS credentials from memory", key="btn_clear_aws_keys"):
-                    drop("aws_access", "aws_secret", "aws_session")
-                    st.session_state.pop("s3_files", None)
-                    st.toast("AWS credentials cleared from memory.")
-                    st.rerun()
-
-            auth_configured = bool(clean_bucket and (value_of("aws_access") or aws_key) and (value_of("aws_secret") or aws_secret))
-        else:
-            st.info(
-                "Connecting with ambient credentials from your IAM instance profile, ECS task role, "
-                "environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`), or AWS CLI (`~/.aws/credentials`)."
-            )
-            auth_configured = bool(clean_bucket)
-
-    def _create_s3_client():
-        if s3_auth_mode == "Manual Access Keys":
-            k = value_of("aws_access")
-            s = value_of("aws_secret")
-            t = value_of("aws_session") or None
-            return get_s3_client(k, s, region_name=clean_region, aws_session_token=t)
-        return get_s3_client(region_name=clean_region)
-
-    connection_key = (clean_bucket, clean_region, s3_auth_mode)
-    if st.session_state.get("s3_connection_key") != connection_key:
-        st.session_state["s3_connection_key"] = connection_key
-        st.session_state["s3_files"] = []
-
-    with st.container(border=True):
-        section_card_header("S3 Bucket Operations", "Browse objects or export datasets")
-        s3_tab_import, s3_tab_export = st.tabs(["Import from S3", "Export to S3"])
-
-    with s3_tab_import:
-        st.markdown("Browse and download tabular or unstructured datasets from your bucket.")
-
-        if st.button("Fetch datasets", type="primary", disabled=not auth_configured, key="btn_fetch_s3"):
-            with st.spinner(f"Scanning bucket `{clean_bucket}` for datasets..."):
-                try:
-                    s3_client = _create_s3_client()
-                    s3_files, s3_meta = list_s3_datasets(clean_bucket, s3_client, return_meta=True)
-                    if s3_files:
-                        st.session_state["s3_files"] = s3_files
-                        st.success(f"Found {len(s3_files)} dataset(s) in S3 bucket `{clean_bucket}`!")
-                    else:
-                        st.session_state["s3_files"] = []
-                        st.info(f"No supported data files found in S3 bucket `{clean_bucket}`.")
-                    if s3_meta.get("truncated"):
-                        st.warning(
-                            f"Notice: Bucket scan stopped after {s3_meta['scanned']:,} objects to protect performance. "
-                            "Some datasets in large buckets may not be shown."
-                        )
-                except Exception as e:
-                    logger.warning("s3 listing failed: %s: %s", type(e).__name__, e)
-                    st.error(f"S3 connection error: {describe_s3_error(e, action='list', bucket=clean_bucket)}")
-
-        s3_files_avail = st.session_state.get("s3_files", [])
-        if s3_files_avail:
-            st.markdown("---")
-            chosen_s3_file = st.selectbox("Select dataset from bucket:", s3_files_avail, key="select_s3_file")
-            if st.button("Download & load", type="primary", key="btn_download_s3"):
-                if s3_auth_mode == "Manual Access Keys" and not (value_of("aws_access") and value_of("aws_secret")):
-                    st.error("Re-enter your AWS access keys above — they were cleared after the previous operation.")
-                else:
-                    with st.spinner(f"Downloading `{chosen_s3_file}` from S3..."):
-                        try:
-                            s3_client = _create_s3_client()
-                            s3_stem = chosen_s3_file.replace("/", "_").replace("\\", "_")
-                            file_name = get_unique_filename(s3_stem, directory=DATASETS_DIR)
-
-                            DATASETS_DIR.mkdir(parents=True, exist_ok=True)
-                            local_s3_path = DATASETS_DIR / file_name
-                            df, _ = download_s3_dataset(clean_bucket, chosen_s3_file, s3_client, destination_path=local_s3_path)
-                            invalidate_dataset_cache(file_name)
-                            if df is None:
-                                st.warning(
-                                    f"`{file_name}` was downloaded to `Datasets/` but has no native table "
-                                    "structure. Convert it with Gemini via a **local file upload** "
-                                    "(the converted copy is saved automatically)."
-                                )
-                            else:
-                                fresh_ingest = True
-                                st.success(f"Downloaded `{file_name}` from Amazon S3 and loaded as active dataset.")
-                        except ValueError as ve:
-                            st.error(str(ve))
-                        except Exception as e:
-                            logger.warning("s3 download failed: %s: %s", type(e).__name__, e)
-                            st.error(f"S3 download failed: {describe_s3_error(e, action='download', bucket=clean_bucket)}")
-                        finally:
-                            if s3_auth_mode == "Manual Access Keys":
-                                if release("aws_access", "aws_secret", "aws_session", keep_key="aws_keep"):
-                                    st.toast("AWS credentials released from session state.")
-
-    with s3_tab_export:
-        st.markdown("Upload the currently active dataset or a saved dataset from `Datasets/` to an S3 bucket.")
-        curr_df = st.session_state.get("current_df")
-        curr_name = st.session_state.get("dataset_name")
-
-        export_df = None
-        export_name = None
-
-        if curr_df is not None and curr_name:
-            st.info(f"Active dataset ready for export: `{curr_name}` ({curr_df.shape[0]:,} rows × {curr_df.shape[1]} columns)")
-            export_df = curr_df
-            export_name = curr_name
-        else:
-            ready_files = list_ready_datasets()
-            if ready_files:
-                sel_ready = st.selectbox("Select a dataset to export to S3:", ready_files, key="select_export_s3_file")
-                try:
-                    export_df = read_dataset(sel_ready)
-                    export_name = sel_ready
-                    st.caption(f"Loaded: `{export_name}` ({export_df.shape[0]:,} rows × {export_df.shape[1]} columns)")
-                except Exception as read_err:
-                    st.error(f"Could not load `{sel_ready}`: {read_err}")
-            else:
-                st.warning("No dataset is currently active and no saved datasets found. Ingest or clean a dataset first before exporting to S3.")
-
-        if export_df is not None and export_name:
-            default_key = f"exports/{Path(export_name).stem}.csv" if not export_name.endswith(".csv") else f"exports/{export_name}"
-            exp_c1, exp_c2 = st.columns([3, 2])
-            with exp_c1:
-                dest_key = st.text_input("Destination S3 Object Key (Path in Bucket):", value=default_key, help="e.g. exports/customer_churn.csv", key="export_dest_key")
-            with exp_c2:
-                st.write("")
-                st.write("")
-                do_sanitize = st.checkbox("Sanitize for CSV export", value=False, help="Neutralize spreadsheet formula injection (=, +, -, @) for external spreadsheets.", key="export_sanitize")
-
-            if st.button("Upload to S3", type="primary", disabled=not auth_configured, key="btn_upload_s3"):
-                if not dest_key.strip():
-                    st.error("Please enter a valid destination object key.")
-                elif s3_auth_mode == "Manual Access Keys" and not (value_of("aws_access") and value_of("aws_secret")):
-                    st.error("Please enter your AWS Access Key ID and Secret Access Key above.")
-                else:
-                    with st.spinner(f"Uploading `{export_name}` to `s3://{clean_bucket}/{dest_key.strip()}`..."):
-                        try:
-                            s3_client = _create_s3_client()
-                            upload_s3_dataset(export_df, clean_bucket, dest_key.strip(), s3_client, sanitize=do_sanitize)
-                            st.success(f"Successfully uploaded `{export_name}` to `s3://{clean_bucket}/{dest_key.strip()}`!")
-                        except ValueError as ve:
-                            st.error(str(ve))
-                        except Exception as e:
-                            logger.warning("s3 upload failed: %s: %s", type(e).__name__, e)
-                            st.error(f"S3 export failed: {describe_s3_error(e, action='upload', bucket=clean_bucket)}")
-                        finally:
-                            if s3_auth_mode == "Manual Access Keys":
-                                if release("aws_access", "aws_secret", "aws_session", keep_key="aws_keep"):
-                                    st.toast("AWS credentials released from session state.")
+    if parsed_datasets and not merge_error:
+        for unique_fname, df_item in parsed_datasets:
+            with st.container(border=True):
+                section_card_header(f"Dataset: {unique_fname}", "")
+                m1, m2, m3, m4 = st.columns(4)
+                with m1:
+                    metric_card("Rows", f"{df_item.shape[0]:,}")
+                with m2:
+                    metric_card("Columns", df_item.shape[1])
+                with m3:
+                    mem_mb = df_item.memory_usage(deep=True).sum() / (1024 * 1024)
+                    metric_card("Memory", f"{mem_mb:.2f} MB")
+                with m4:
+                    null_pct = (df_item.isnull().sum().sum() / max(df_item.size, 1)) * 100
+                    metric_card("Missing", f"{null_pct:.1f}%")
+                st.dataframe(df_item.head(10), width="stretch", hide_index=True)
 
 if df is not None and file_name is not None and (fresh_ingest or not st.session_state.get("dataset_name")):
     set_active_dataset(df, file_name)
 
-render_sidebar()
 
-active_df = st.session_state.get("current_df")
-active_name = st.session_state.get("dataset_name")
-if active_df is not None and active_name:
-    st.caption(f"Active dataset: `{active_name}` ({active_df.shape[0]:,} rows × {active_df.shape[1]} columns)")
+# -----------------------------------------------------------------------------
+# TAB 2: SQLITE DATABASE INGEST
+# -----------------------------------------------------------------------------
+with tab_sqlite:
+    with st.container(border=True):
+        section_card_header(
+            "SQLite Database Connector",
+            "Query or extract tables from a local SQLite database file (.db, .sqlite, .sqlite3)."
+        )
+        sqlite_file = st.file_uploader(
+            "Upload SQLite database file",
+            type=["db", "sqlite", "sqlite3"],
+            key="sqlite_uploader"
+        )
 
-    st.subheader("Overview")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Rows", f"{active_df.shape[0]:,}")
-    with col2:
-        st.metric("Total Columns", active_df.shape[1])
-    with col3:
-        missing_total = int(active_df.isnull().sum().sum())
-        st.metric("Missing Values", f"{missing_total:,}")
-    with col4:
-        duplicate_total = int(active_df.duplicated().sum())
-        st.metric("Duplicate Rows", f"{duplicate_total:,}")
+        if sqlite_file:
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp_db:
+                tmp_db.write(sqlite_file.getvalue())
+                tmp_db_path = tmp_db.name
 
-    st.subheader("Preview (first 10 rows)")
-    st.dataframe(active_df.head(10), width="stretch", hide_index=True)
+            try:
+                conn = sqlite3.connect(tmp_db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+                tables = [r[0] for r in cursor.fetchall()]
+
+                if not tables:
+                    st.warning("No user tables found in this SQLite database.")
+                else:
+                    col_t1, col_t2 = st.columns([1, 2])
+                    with col_t1:
+                        selected_table = st.selectbox("Select table to extract", tables)
+                    with col_t2:
+                        custom_query = st.text_input("Optional SQL Query override", value=f"SELECT * FROM `{selected_table}` LIMIT 100000")
+
+                    query_to_run = custom_query.strip() if custom_query.strip() else f"SELECT * FROM `{selected_table}`"
+
+                    if st.button("Run SQL & Ingest Table", type="primary", key="btn_run_sql"):
+                        with st.spinner("Executing SQL query..."):
+                            sql_df = pd.read_sql_query(query_to_run, conn)
+                            if sql_df.empty:
+                                st.warning("Query returned zero rows.")
+                            else:
+                                out_name = get_unique_filename(f"{selected_table}.csv", directory=DATASETS_DIR)
+                                atomic_write(DATASETS_DIR / out_name, sql_df.to_csv(index=False), mode="w", encoding="utf-8")
+                                invalidate_dataset_cache(out_name)
+                                set_active_dataset(sql_df, out_name)
+                                st.success(f"Ingested `{out_name}` with {sql_df.shape[0]:,} rows and {sql_df.shape[1]} columns!")
+                                st.rerun()
+            except Exception as e:
+                st.error(f"SQLite error: {e}")
+            finally:
+                try:
+                    conn.close()
+                    Path(tmp_db_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+
+# -----------------------------------------------------------------------------
+# TAB 3: QUICK PASTE / TSV
+# -----------------------------------------------------------------------------
+with tab_paste:
+    with st.container(border=True):
+        section_card_header(
+            "Paste Tabular Text",
+            "Paste raw CSV, TSV (Tab-separated), or Pipe-separated text directly from spreadsheets or clipboards."
+        )
+        paste_text = st.text_area(
+            "Paste structured data here (first row should be headers)",
+            height=220,
+            placeholder="feature_a,feature_b,category,label\n1.2,3.4,GroupA,0\n5.6,7.8,GroupB,1\n..."
+        )
+        col_p1, col_p2, col_p3 = st.columns([1.5, 1.5, 1])
+        with col_p1:
+            sep = st.selectbox("Delimiter", [", (Comma)", "\\t (Tab)", "| (Pipe)", "; (Semicolon)"])
+            sep_map = {", (Comma)": ",", "\\t (Tab)": "\t", "| (Pipe)": "|", "; (Semicolon)": ";"}
+            chosen_sep = sep_map[sep]
+        with col_p2:
+            pasted_name = st.text_input("Dataset name", value="pasted_data.csv")
+
+        if st.button("Parse & Ingest Text", type="primary", key="btn_parse_pasted"):
+            if not paste_text.strip():
+                st.warning("Please paste some tabular text first.")
+            else:
+                import io
+                try:
+                    pasted_df = pd.read_csv(io.StringIO(paste_text), sep=chosen_sep)
+                    if pasted_df.empty:
+                        st.warning("Parsed DataFrame is empty.")
+                    else:
+                        clean_fname = get_unique_filename(pasted_name.strip() or "pasted_data.csv", directory=DATASETS_DIR)
+                        atomic_write(DATASETS_DIR / clean_fname, pasted_df.to_csv(index=False), mode="w", encoding="utf-8")
+                        invalidate_dataset_cache(clean_fname)
+                        set_active_dataset(pasted_df, clean_fname)
+                        st.success(f"Parsed `{clean_fname}` ({pasted_df.shape[0]:,} rows × {pasted_df.shape[1]} cols) and set as active!")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Parsing error: {e}")
+
+
+# -----------------------------------------------------------------------------
+# TAB 4: ACTIVE CATALOG
+# -----------------------------------------------------------------------------
+with tab_catalog:
+    with st.container(border=True):
+        section_card_header(
+            "Workspace Dataset Catalog",
+            "View and manage tabular datasets stored locally in the Datasets directory."
+        )
+        ready_files = list_ready_datasets()
+        if not ready_files:
+            st.info("No datasets currently saved in `Datasets/`. Ingest files above or load sample benchmarks from the Home page.")
+        else:
+            cat_rows = []
+            for rf in ready_files:
+                fpath = DATASETS_DIR / rf
+                fsize_kb = fpath.stat().st_size / 1024
+                mtime_str = pd.to_datetime(fpath.stat().st_mtime, unit="s").strftime("%Y-%m-%d %H:%M:%S")
+                cat_rows.append({
+                    "Dataset": rf,
+                    "Size (KB)": f"{fsize_kb:.1f} KB",
+                    "Last Modified": mtime_str,
+                })
+            st.dataframe(pd.DataFrame(cat_rows), width="stretch", hide_index=True)
+
+            c_act1, c_act2 = st.columns(2)
+            with c_act1:
+                target_to_act = st.selectbox("Select dataset to activate", ready_files, key="select_cat_act")
+                if st.button(f"Activate `{target_to_act}`", type="primary", key="btn_cat_activate"):
+                    df_to_act = load_dataset_cached(target_to_act)
+                    set_active_dataset(df_to_act, target_to_act)
+                    st.toast(f"Active dataset set to `{target_to_act}`")
+                    st.rerun()
+            with c_act2:
+                target_to_del = st.selectbox("Select dataset to delete", ready_files, key="select_cat_del")
+                if st.button(f"Delete `{target_to_del}`", help="Deletes file from disk", key="btn_cat_delete"):
+                    (DATASETS_DIR / target_to_del).unlink(missing_ok=True)
+                    invalidate_dataset_cache(target_to_del)
+                    if st.session_state.get("dataset_name") == target_to_del:
+                        set_active_dataset(None, None)
+                    st.toast(f"Deleted `{target_to_del}`")
+                    st.rerun()

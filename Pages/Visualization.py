@@ -16,11 +16,12 @@ from Utils.Charts import (
 )
 
 page_header(
-    "Charts & Visualizations",
-    "Interactive charts for distributions, relationships, composition, and correlation analysis."
+    "Interactive Visual Analytics",
+    "High-fidelity Plotly visual analytics for continuous distributions, bivariate regressions, composition, and correlation matrices.",
+    badge="VISUAL ANALYTICS"
 )
 
-df, selected_file = select_working_dataset("Active Dataset:")
+df, selected_file = select_working_dataset("Active dataset")
 render_sidebar()
 
 all_cols = df.columns.tolist()
@@ -64,30 +65,30 @@ with tab_dist:
             section_card_header("Distribution Controls", "Select feature, binning strategy, and group dimension")
             c1, c2, c3 = st.columns(3)
             with c1:
-                plot_kind = st.selectbox("Plot Type:", ["Histogram", "Box Plot", "Violin Plot"])
+                plot_kind = st.selectbox("Plot type", ["Histogram", "Box Plot", "Violin Plot"])
             with c2:
-                target_col = st.selectbox("Feature to Inspect:", numeric_cols, key="dist_target")
+                target_col = st.selectbox("Feature to inspect", numeric_cols, key="dist_target")
             with c3:
-                hue_choice = st.selectbox("Group By (Hue):", ["None"] + cat_ranked_cols + numeric_cols, key="dist_hue")
+                hue_choice = st.selectbox("Group by (hue)", ["None"] + cat_ranked_cols + numeric_cols, key="dist_hue")
                 hue = None if hue_choice == "None" else hue_choice
 
             if plot_kind == "Histogram":
                 c_bins, c_marg = st.columns(2)
                 with c_bins:
-                    bins = st.slider("Number of Bins:", min_value=5, max_value=100, value=30)
+                    bins = st.slider("Number of bins", min_value=5, max_value=100, value=30)
                 with c_marg:
-                    marginal = st.selectbox("Marginal Plot:", ["box", "violin", "rug", "none"])
+                    marginal = st.selectbox("Marginal plot", ["box", "violin", "rug", "none"])
                     marginal = None if marginal == "none" else marginal
             else:
                 c_pts, c_grp = st.columns(2)
                 with c_pts:
-                    points_opt = st.selectbox("Points Display:", ["outliers", "all", "suspectedoutliers", "none"])
+                    points_opt = st.selectbox("Points display", ["outliers", "all", "suspectedoutliers", "none"])
                     points_opt = False if points_opt == "none" else points_opt
                     if points_opt == "all" and len(df) > 10_000:
                         st.info("Displaying outliers only for large dataset (>10,000 rows) to keep browser responsive.")
                         points_opt = "outliers"
                 with c_grp:
-                    group_col = st.selectbox("Categorical Axis (Optional):", ["None"] + cat_ranked_cols, key="box_group")
+                    group_col = st.selectbox("Categorical axis (optional)", ["None"] + cat_ranked_cols, key="box_group")
                     group_col = None if group_col == "None" else group_col
 
         with st.container(border=True):
@@ -102,7 +103,7 @@ with tab_dist:
                     plot_type="Violin" if plot_kind == "Violin Plot" else "Box",
                     points=points_opt
                 )
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, width="stretch", theme="streamlit")
 
 with tab_rel:
     if len(numeric_cols) < 2:
@@ -110,22 +111,22 @@ with tab_rel:
     else:
         with st.container(border=True):
             section_card_header("Relational & Trend Controls", "Select coordinate mapping, color encoding, and trendlines")
-            rel_type = st.radio("Chart Style:", ["Scatter / Bubble Plot", "Line / Trend Plot"], horizontal=True)
+            rel_type = st.radio("Chart style", ["Scatter / Bubble Plot", "Line / Trend Plot"], horizontal=True)
 
             r1, r2, r3, r4 = st.columns(4)
             with r1:
                 x_options = numeric_cols if rel_type == "Scatter / Bubble Plot" else all_cols
                 x_key = "rel_x_scatter" if rel_type == "Scatter / Bubble Plot" else "rel_x_line"
-                x_axis = st.selectbox("X-Axis Feature:", x_options, index=0, key=x_key)
+                x_axis = st.selectbox("X-axis feature", x_options, index=0, key=x_key)
             with r2:
-                y_axis = st.selectbox("Y-Axis Feature:", numeric_cols, index=min(1, len(numeric_cols) - 1), key="rel_y")
+                y_axis = st.selectbox("Y-axis feature", numeric_cols, index=min(1, len(numeric_cols) - 1), key="rel_y")
             with r3:
-                color_by = st.selectbox("Color By (Hue):", ["None"] + cat_ranked_cols + numeric_cols, key="rel_color")
+                color_by = st.selectbox("Color by (hue)", ["None"] + cat_ranked_cols + numeric_cols, key="rel_color")
                 color_by = None if color_by == "None" else color_by
             with r4:
                 size_by = None
                 if rel_type == "Scatter / Bubble Plot":
-                    size_by = st.selectbox("Size By (Bubble):", ["None"] + numeric_cols, key="rel_size")
+                    size_by = st.selectbox("Size by (bubble)", ["None"] + numeric_cols, key="rel_size")
                     size_by = None if size_by == "None" else size_by
 
             if rel_type == "Scatter / Bubble Plot":
@@ -162,12 +163,12 @@ with tab_rel:
                 markers=show_markers
             )
         with st.container(border=True):
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, width="stretch", theme="streamlit")
 
 with tab_cat:
     with st.container(border=True):
         section_card_header("Categorical & Composition Controls", "Inspect distribution of discrete categories and part-to-whole proportions")
-        cat_type = st.radio("Chart Type:", ["Bar / Count Chart", "Pie Chart", "Donut Chart", "Treemap"], horizontal=True)
+        cat_type = st.radio("Chart type", ["Bar / Count Chart", "Pie Chart", "Donut Chart", "Treemap"], horizontal=True)
 
         if cat_type == "Bar / Count Chart":
             agg_options = ["Count"]
@@ -176,22 +177,22 @@ with tab_cat:
 
             b1, b2, b3, b4 = st.columns(4)
             with b1:
-                cat_x = st.selectbox("Category (X-Axis):", cat_ranked_cols, index=0, key="bar_x")
+                cat_x = st.selectbox("Category (x-axis)", cat_ranked_cols, index=0, key="bar_x")
             with b2:
-                agg_type = st.selectbox("Aggregation:", agg_options, key="bar_agg")
+                agg_type = st.selectbox("Aggregation", agg_options, key="bar_agg")
             with b3:
                 val_y = None
                 if agg_type != "Count":
-                    val_y = st.selectbox("Value Column (Y-Axis):", numeric_cols, key="bar_y")
+                    val_y = st.selectbox("Value column (y-axis)", numeric_cols, key="bar_y")
             with b4:
-                orient = st.selectbox("Orientation:", ["Vertical", "Horizontal"], key="bar_orient")
+                orient = st.selectbox("Orientation", ["Vertical", "Horizontal"], key="bar_orient")
 
         else:
             p1, p2 = st.columns(2)
             with p1:
-                cat_name = st.selectbox("Category / Labels Column:", cat_ranked_cols, index=0, key="pie_labels")
+                cat_name = st.selectbox("Category / labels column", cat_ranked_cols, index=0, key="pie_labels")
             with p2:
-                val_choice = st.selectbox("Value Column (Optional):", ["Count (Frequency)"] + numeric_cols, key="pie_vals")
+                val_choice = st.selectbox("Value column (optional)", ["Count (Frequency)"] + numeric_cols, key="pie_vals")
                 val_col = None if val_choice == "Count (Frequency)" else val_choice
 
     with st.container(border=True):
@@ -203,12 +204,12 @@ with tab_cat:
                 agg_func=agg_type,
                 orientation="v" if orient == "Vertical" else "h"
             )
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, width="stretch", theme="streamlit")
         else:
             plot_kind_pie = "Donut" if cat_type == "Donut Chart" else ("Treemap" if cat_type == "Treemap" else "Pie")
             try:
                 fig = create_pie_treemap_plot(df, names_col=cat_name, values_col=val_col, plot_type=plot_kind_pie)
-                st.plotly_chart(fig, width="stretch")
+                st.plotly_chart(fig, width="stretch", theme="streamlit")
             except ValueError as err:
                 st.error(str(err))
 
@@ -218,9 +219,9 @@ with tab_corr:
     else:
         with st.container(border=True):
             section_card_header("Correlation Controls", "Compute Pearson pairwise correlation matrix across numerical features")
-            c_theme = st.selectbox("Heatmap Color Palette:", ["RdBu_r", "Viridis", "Plasma", "Cividis", "Spectral", "Blues"])
+            c_theme = st.selectbox("Heatmap color palette", ["RdBu_r", "Viridis", "Plasma", "Cividis", "Spectral", "Blues"])
         fig = create_correlation_heatmap(df, colorscale=c_theme)
         if fig:
             with st.container(border=True):
-                st.plotly_chart(fig, width="stretch")
+                st.plotly_chart(fig, width="stretch", theme="streamlit")
 

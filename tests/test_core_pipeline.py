@@ -32,31 +32,11 @@ from Utils.ML import (
 from Utils.Preprocessing import fill_missing_values, remove_duplicates, drop_missing_values
 from Utils.quality import quality_metrics, quality_index
 from Utils.PDF import generate_pdf_report
-from Utils.S3 import (
-    describe_s3_error, download_s3_dataset, list_s3_datasets, upload_s3_dataset,
-)
 from Utils.secrets import ask, value_of
 from Utils.paths import AIConversionRequired, resolve_dataset_path, read_tabular
 from Utils.privacy import apply_exclusions, detect_sensitive_columns
 
 
-class FakeS3Client:
-    def __init__(self):
-        self.pages = iter([
-            {
-                "Contents": [{"Key": "first.csv"}, {"Key": "skip.zip"}],
-                "IsTruncated": True,
-                "NextContinuationToken": "next-page",
-            },
-            {"Contents": [{"Key": "archive/second.xlsx"}], "IsTruncated": False},
-        ])
-        self.upload = None
-
-    def list_objects_v2(self, **kwargs):
-        return next(self.pages)
-
-    def put_object(self, **kwargs):
-        self.upload = kwargs
 
 
 class CoreUtilityTests(unittest.TestCase):
@@ -97,39 +77,6 @@ class CoreUtilityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Datasets"):
             resolve_dataset_path("../App.py")
 
-    def test_s3_listing_paginates_and_uploads_bytes(self):
-        client = FakeS3Client()
-        self.assertEqual(
-            list_s3_datasets("bucket", client),
-            ["first.csv", "archive/second.xlsx"],
-        )
-
-        upload_s3_dataset(pd.DataFrame({"value": [1]}), "bucket", "result.csv", client)
-        self.assertEqual(client.upload["Bucket"], "bucket")
-        self.assertEqual(client.upload["Key"], "result.csv")
-        self.assertIsInstance(client.upload["Body"], bytes)
-
-    def test_s3_listing_includes_all_supported_formats(self):
-        class MultiFormatClient:
-            def __init__(self):
-                self.calls = 0
-
-            def list_objects_v2(self, **kwargs):
-                self.calls += 1
-                if self.calls == 1:
-                    return {
-                        "Contents": [
-                            {"Key": "events.jsonl"}, {"Key": "table.tsv"},
-                            {"Key": "notes.txt"}, {"Key": "skip.pdf.exe"},
-                        ],
-                        "IsTruncated": False,
-                    }
-                return {}
-
-        keys = list_s3_datasets("bucket", MultiFormatClient())
-        self.assertIn("events.jsonl", keys)
-        self.assertIn("table.tsv", keys)
-        self.assertNotIn("skip.pdf.exe", keys)
 
 
 class ModelPersistenceTests(unittest.TestCase):
@@ -1050,90 +997,6 @@ class PDFQualityFlagUnitTests(unittest.TestCase):
         self.assertEqual(_quality_flags_for_column(normal), [])
 
 
-class S3RobustnessTests(unittest.TestCase):
-    def _client_error(self, code):
-        from botocore.exceptions import ClientError
-        return ClientError({"Error": {"Code": code}}, "ListObjectsV2")
-
-    def test_known_error_codes_map_to_plain_language(self):
-        cases = {
-            "AccessDenied": "denied",
-            "InvalidAccessKeyId": "not recognized",
-            "SignatureDoesNotMatch": "does not match",
-            "NoSuchBucket": "No such bucket",
-            "NoSuchKey": "no longer exists",
-        }
-        for code, fragment in cases.items():
-            message = describe_s3_error(self._client_error(code))
-            self.assertIn(fragment, message)
-
-    def test_real_connection_failure_maps_to_network_advice(self):
-        from botocore.exceptions import EndpointConnectionError
-        message = describe_s3_error(EndpointConnectionError(endpoint_url="s3.example.com"))
-        self.assertIn("Could not reach Amazon S3", message)
-
-    def test_unknown_error_codes_stay_safe(self):
-        message = describe_s3_error(self._client_error("ExoticFailure"))
-        self.assertIn("ExoticFailure", message)
-        self.assertNotIn("aws_secret", message.lower())
-
-    def test_generic_errors_do_not_leak_details(self):
-        class WeirdError(Exception):
-            pass
-        self.assertIsInstance(describe_s3_error(WeirdError("boom")), str)
-
-    def test_download_parses_supported_file(self):
-        class Client:
-            def get_object(self, **kwargs):
-                self.requested = kwargs
-                return {"Body": io.BytesIO(b"x,y\n1,2\n")}
-        client = Client()
-        df, body = download_s3_dataset("bucket", "folder/data.csv", client)
-        self.assertEqual(df.shape, (1, 2))
-        self.assertEqual(body, b"x,y\n1,2\n")
-        self.assertEqual(client.requested["Key"], "folder/data.csv")
-
-    def test_download_returns_raw_bytes_for_unstructured_content(self):
-        class Client:
-            def get_object(self, **kwargs):
-                return {"Body": io.BytesIO(b"single line of plain prose\n")}
-        df, body = download_s3_dataset("bucket", "notes.txt", Client())
-        self.assertIsNone(df)
-        self.assertEqual(body, b"single line of plain prose\n")
-
-    def test_download_lets_aws_errors_propagate_for_ui_mapping(self):
-        class Client:
-            def get_object(self, **kwargs):
-                raise self._error
-            _error = None
-        client = Client()
-        client._error = self._client_error("NoSuchKey")
-        with self.assertRaises(Exception) as raised:
-            download_s3_dataset("bucket", "gone.csv", client)
-        message = describe_s3_error(raised.exception)
-        self.assertIn("no longer exists", message)
-
-    def test_download_refuses_objects_over_the_ingest_limit(self):
-        from Utils.paths import MAX_UPLOAD_BYTES
-
-        class Client:
-            def get_object(self, **kwargs):
-                return {
-                    "ContentLength": MAX_UPLOAD_BYTES + 1,
-                    "Body": io.BytesIO(b"x,y\n1,2\n"),
-                }
-
-        with self.assertRaisesRegex(ValueError, "ingest limit"):
-            download_s3_dataset("bucket", "huge.csv", Client())
-
-    def test_download_accepts_objects_that_report_a_safe_contentlength(self):
-        class Client:
-            def get_object(self, **kwargs):
-                return {"ContentLength": 8, "Body": io.BytesIO(b"x,y\n1,2\n")}
-
-        df, body = download_s3_dataset("bucket", "ok/data.csv", Client())
-        self.assertEqual(df.shape, (1, 2))
-        self.assertEqual(body, b"x,y\n1,2\n")
 
 
 class DatasetCacheBehaviorTests(unittest.TestCase):
@@ -1831,67 +1694,6 @@ class AIReportProvenanceTests(unittest.TestCase):
         self.assertNotEqual(base_ctx, diff_fp_ctx)
 
 
-class S3StreamClosingTests(unittest.TestCase):
-    def test_streaming_body_closed_on_success_and_on_error(self):
-        from Utils.S3 import download_s3_dataset
-
-        closed_success = []
-        class MockBodySuccess:
-            def read(self, chunk_size):
-                if not hasattr(self, "_done"):
-                    self._done = True
-                    return b"a,b\n1,2"
-                return b""
-            def close(self):
-                closed_success.append(True)
-
-        mock_client = SimpleNamespace(
-            get_object=lambda Bucket, Key: {
-                "Body": MockBodySuccess(),
-                "ContentLength": 7,
-            }
-        )
-        df, _ = download_s3_dataset("mybucket", "test.csv", mock_client)
-        self.assertEqual(len(closed_success), 1)
-
-        closed_err = []
-        class MockBodyTooBig:
-            def read(self, chunk_size):
-                return b"X" * (1024 * 1024)
-            def close(self):
-                closed_err.append(True)
-
-        mock_client_err = SimpleNamespace(
-            get_object=lambda Bucket, Key: {
-                "Body": MockBodyTooBig(),
-                "ContentLength": 500 * 1024 * 1024,
-            }
-        )
-        with self.assertRaises(ValueError):
-            download_s3_dataset("mybucket", "huge.csv", mock_client_err)
-        self.assertEqual(len(closed_err), 1)
-
-    def test_streaming_body_closed_on_unstructured_content(self):
-        from Utils.S3 import download_s3_dataset
-        closed = []
-        class MockBody:
-            def read(self, size):
-                if not hasattr(self, "_done"):
-                    self._done = True
-                    return b"unstructured text"
-                return b""
-            def close(self):
-                closed.append(True)
-        mock_client = SimpleNamespace(
-            get_object=lambda Bucket, Key: {
-                "Body": MockBody(),
-                "ContentLength": 17,
-            }
-        )
-        df, raw_bytes = download_s3_dataset("b", "doc.txt", mock_client)
-        self.assertIsNone(df)
-        self.assertEqual(raw_bytes, b"unstructured text")
-        self.assertEqual(len(closed), 1)
 
 
 class SingleReportChartRowBoundTests(unittest.TestCase):
@@ -2034,21 +1836,6 @@ class MLBundleVersionTests(unittest.TestCase):
                     load_trained_model(m_path, allowed_dir=tmp_path, trusted=True)
 
 
-class S3TruncationNoticeTests(unittest.TestCase):
-    def test_s3_truncation_reported_when_exceeding_20k(self):
-        from Utils.S3 import list_s3_datasets
-        class MockClient:
-            def list_objects_v2(self, **kwargs):
-                return {
-                    "Contents": [{"Key": f"data_{i}.csv"} for i in range(100)],
-                    "IsTruncated": True,
-                    "NextContinuationToken": "token",
-                }
-
-        with patch("Utils.S3.MAX_S3_OBJECTS_SCAN", 50):
-            files, meta = list_s3_datasets("mybucket", MockClient(), return_meta=True)
-            self.assertTrue(meta["truncated"])
-            self.assertGreaterEqual(meta["scanned"], 50)
 
 
 if __name__ == '__main__':

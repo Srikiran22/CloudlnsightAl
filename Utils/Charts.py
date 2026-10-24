@@ -3,11 +3,69 @@ import plotly.express as px
 import plotly.graph_objects as go
 from html import escape
 
-from Utils.theme import plot_template
+from Utils.theme import (
+    chart_palette,
+    get_semantic_tokens,
+    is_dark,
+    plot_template,
+    style_plotly_fig,
+)
 from Utils.sampling import sample_for_visualization
 
 
 MAX_HUE_CATEGORIES = 20
+
+
+def _rgba(hex_color: str, alpha: float) -> str:
+    """Convert a #RRGGBB token to an rgba() string for translucent fills."""
+    value = hex_color.lstrip("#")
+    if len(value) != 6:
+        return hex_color
+    r, g, b = (int(value[i : i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r}, {g}, {b}, {alpha})"
+
+
+def create_hygiene_gauge(value: float, height: int = 230) -> go.Figure:
+    """Themed composite data-hygiene gauge for the Data Overview page.
+
+    Uses the shared design tokens (not Plotly defaults) so the score and axis
+    labels stay legible in both appearances; the surrounding card is painted by
+    the CSS layer, so the figure background stays transparent.
+    """
+    tokens = get_semantic_tokens(is_dark())
+    fig = go.Figure(
+        go.Indicator(
+            mode="gauge+number",
+            value=round(float(value), 1),
+            number={"font": {"size": 38, "color": tokens["text"]}},
+            domain={"x": [0.06, 0.94], "y": [0.10, 0.92]},
+            gauge={
+                "axis": {
+                    "range": [0, 100],
+                    "tickwidth": 1,
+                    "tickcolor": tokens["muted"],
+                    "tickfont": {"size": 11, "color": tokens["muted"]},
+                },
+                "bar": {"color": tokens["accent"], "thickness": 0.72},
+                "bgcolor": "rgba(0,0,0,0)",
+                "borderwidth": 0,
+                "steps": [
+                    {"range": [0, 50], "color": _rgba(tokens["danger"], 0.16)},
+                    {"range": [50, 80], "color": _rgba(tokens["warning"], 0.16)},
+                    {"range": [80, 100], "color": _rgba(tokens["success"], 0.16)},
+                ],
+                "threshold": {
+                    "line": {"color": tokens["success"], "width": 3},
+                    "thickness": 0.8,
+                    "value": 90,
+                },
+            },
+        )
+    )
+    # Text colours are intentionally left to Streamlit's native chart theme so
+    # the gauge re-colours instantly when the user switches appearance.
+    fig.update_layout(height=height, margin={"l": 24, "r": 24, "t": 28, "b": 8})
+    return fig
 
 
 def _cap_hue_column(df, hue_col, max_categories=MAX_HUE_CATEGORIES):
@@ -23,8 +81,14 @@ def _cap_hue_column(df, hue_col, max_categories=MAX_HUE_CATEGORIES):
     return df
 
 
-def create_histogram_plot(df, x_col, hue_col=None, nbins=30, marginal="box",
-                          color_discrete_sequence=None):
+def create_histogram_plot(
+    df: pd.DataFrame,
+    x_col: str,
+    hue_col: str | None = None,
+    nbins: int = 30,
+    marginal: str = "box",
+    color_discrete_sequence: list[str] | None = None,
+) -> go.Figure:
     df_sample, is_sampled, _ = sample_for_visualization(df)
     plot_df = _cap_hue_column(df_sample, hue_col)
     fig = px.histogram(
@@ -35,7 +99,7 @@ def create_histogram_plot(df, x_col, hue_col=None, nbins=30, marginal="box",
         marginal=marginal,
         barmode="overlay" if hue_col else "relative",
         opacity=0.75,
-        color_discrete_sequence=color_discrete_sequence or px.colors.qualitative.Plotly,
+        color_discrete_sequence=color_discrete_sequence or chart_palette(),
         template=plot_template()
     )
     safe_x = escape(str(x_col))
@@ -49,11 +113,17 @@ def create_histogram_plot(df, x_col, hue_col=None, nbins=30, marginal="box",
         yaxis_title="Count / Frequency",
         bargap=0.05
     )
-    return fig
+    return style_plotly_fig(fig)
 
 
-def create_box_violin_plot(df, y_col, x_col=None, hue_col=None, plot_type="Box",
-                           points="outliers"):
+def create_box_violin_plot(
+    df: pd.DataFrame,
+    y_col: str,
+    x_col: str | None = None,
+    hue_col: str | None = None,
+    plot_type: str = "Box",
+    points: str = "outliers",
+) -> go.Figure:
     df_sample, is_sampled, _ = sample_for_visualization(df)
     plot_df = _cap_hue_column(df_sample, hue_col)
     if x_col and x_col in plot_df.columns:
@@ -86,11 +156,17 @@ def create_box_violin_plot(df, y_col, x_col=None, hue_col=None, plot_type="Box",
         fig.update_layout(title=f"Box Plot of <b>{safe_y}</b>" + (f" across {safe_x}" if x_col else "") + sample_suffix)
 
     fig.update_layout(yaxis_title=str(y_col), xaxis_title=str(x_col or ""))
-    return fig
+    return style_plotly_fig(fig)
 
 
-def create_scatter_plot(df, x_col, y_col, hue_col=None, size_col=None,
-                        add_trendline=False):
+def create_scatter_plot(
+    df: pd.DataFrame,
+    x_col: str,
+    y_col: str,
+    hue_col: str | None = None,
+    size_col: str | None = None,
+    add_trendline: bool = False,
+) -> go.Figure:
     df_sample, is_sampled, _ = sample_for_visualization(df)
     # OLS only makes sense when both axes are numeric and finite
     can_fit_trendline = (
@@ -158,11 +234,17 @@ def create_scatter_plot(df, x_col, y_col, hue_col=None, size_col=None,
         xaxis_title=str(x_col),
         yaxis_title=str(y_col)
     )
-    return fig
+    return style_plotly_fig(fig)
 
 
-def create_bar_count_plot(df, x_col, y_col=None, agg_func="Count", hue_col=None,
-                          orientation="v"):
+def create_bar_count_plot(
+    df: pd.DataFrame,
+    x_col: str,
+    y_col: str | None = None,
+    agg_func: str = "Count",
+    hue_col: str | None = None,
+    orientation: str = "v",
+) -> go.Figure:
     df_sample, is_sampled, _ = sample_for_visualization(df)
     # Defend against unhashable elements (e.g. lists/dicts in cells)
     plot_df = _cap_hue_column(df_sample, hue_col)
@@ -187,7 +269,7 @@ def create_bar_count_plot(df, x_col, y_col=None, agg_func="Count", hue_col=None,
             x=x_col if orientation == "v" else val_col,
             y=val_col if orientation == "v" else x_col,
             color=hue_col,
-            color_discrete_sequence=[px.colors.qualitative.Plotly[0]] if not hue_col else None,
+            color_discrete_sequence=[chart_palette()[0]] if not hue_col else None,
             orientation=orientation,
             template=plot_template()
         )
@@ -198,7 +280,7 @@ def create_bar_count_plot(df, x_col, y_col=None, agg_func="Count", hue_col=None,
             x=x_col if orientation == "v" else None,
             y=x_col if orientation == "h" else None,
             color=hue_col,
-            color_discrete_sequence=[px.colors.qualitative.Plotly[0]] if not hue_col else None,
+            color_discrete_sequence=[chart_palette()[0]] if not hue_col else None,
             orientation=orientation,
             template=plot_template()
         )
@@ -211,7 +293,7 @@ def create_bar_count_plot(df, x_col, y_col=None, agg_func="Count", hue_col=None,
         fig.update_xaxes(type="category")
     else:
         fig.update_yaxes(type="category")
-    return fig
+    return style_plotly_fig(fig)
 
 
 def downsample_timeseries(df: pd.DataFrame, x_col: str, y_col: str, max_points: int = 25000, hue_col: str = None) -> pd.DataFrame:
@@ -286,9 +368,11 @@ def downsample_timeseries(df: pd.DataFrame, x_col: str, y_col: str, max_points: 
     return _downsample_single_series(df, max_points)
 
 
-def create_line_chart(df, x_col, y_col, hue_col=None, markers=True):
+def create_line_chart(
+    df: pd.DataFrame, x_col: str, y_col: str, hue_col: str | None = None, markers: bool = True
+) -> go.Figure:
     if df is None or df.empty:
-        return px.line(title="Empty Dataset", template=plot_template())
+        return style_plotly_fig(px.line(title="Empty Dataset", template=plot_template()))
     sorted_df = _cap_hue_column(df, hue_col)
     if x_col in sorted_df.columns:
         if pd.api.types.is_datetime64_any_dtype(sorted_df[x_col]):
@@ -325,10 +409,12 @@ def create_line_chart(df, x_col, y_col, hue_col=None, markers=True):
         xaxis_title=str(x_col),
         yaxis_title=str(y_col)
     )
-    return fig
+    return style_plotly_fig(fig)
 
 
-def create_pie_treemap_plot(df, names_col, values_col=None, plot_type="Pie"):
+def create_pie_treemap_plot(
+    df: pd.DataFrame, names_col: str, values_col: str | None = None, plot_type: str = "Pie"
+) -> go.Figure:
     df_sample, _, _ = sample_for_visualization(df)
     plot_df = df_sample
     # Defend against unhashable elements in names_col
@@ -390,10 +476,10 @@ def create_pie_treemap_plot(df, names_col, values_col=None, plot_type="Pie"):
             template=plot_template()
         )
         fig.update_layout(title=f"Pie Chart of <b>{safe_names}</b>")
-    return fig
+    return style_plotly_fig(fig)
 
 
-def create_correlation_heatmap(df, colorscale="RdBu_r"):
+def create_correlation_heatmap(df: pd.DataFrame, colorscale: str = "RdBu_r") -> go.Figure | None:
     from Utils.sampling import sample_for_analysis
     sample_df, is_sampled, _ = sample_for_analysis(df, max_rows=50_000)
     num_df = sample_df.select_dtypes(include="number")
@@ -430,4 +516,4 @@ def create_correlation_heatmap(df, colorscale="RdBu_r"):
         yaxis_showgrid=False,
         yaxis_autorange="reversed"
     )
-    return fig
+    return style_plotly_fig(fig)

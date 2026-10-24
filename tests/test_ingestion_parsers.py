@@ -20,7 +20,6 @@ from Utils.ML import (
     train_and_evaluate_model,
 )
 from Utils.PDF import generate_pdf_report
-from Utils.S3 import S3_CLIENT_CONFIG, get_s3_client
 from Utils.paths import (
     AIConversionRequired,
     MAX_INGESTION_COLUMNS,
@@ -385,50 +384,6 @@ class GeminiHardeningTests(unittest.TestCase):
         self.assertFalse(retryable)
 
 
-class S3StorageHardeningTests(unittest.TestCase):
-    """S3 client timeouts and session token support."""
-
-    def test_get_s3_client_configuration_and_session_token(self):
-        """get_s3_client configures bounded timeouts and passes session token when provided."""
-        with patch("boto3.client") as mock_boto:
-            get_s3_client("key", "secret", region_name="us-west-2", aws_session_token="token123")
-            mock_boto.assert_called_once()
-            _, kwargs = mock_boto.call_args
-            self.assertEqual(kwargs["aws_access_key_id"], "key")
-            self.assertEqual(kwargs["aws_secret_access_key"], "secret")
-            self.assertEqual(kwargs["aws_session_token"], "token123")
-            self.assertEqual(kwargs["region_name"], "us-west-2")
-            self.assertEqual(kwargs["config"], S3_CLIENT_CONFIG)
-            self.assertEqual(kwargs["config"].connect_timeout, 10)
-            self.assertEqual(kwargs["config"].read_timeout, 30)
-
-    def test_get_s3_client_ambient_credentials_fallback(self):
-        """get_s3_client omits credentials when not provided to allow ambient IAM / env resolution."""
-        with patch("boto3.client") as mock_boto:
-            get_s3_client(None, None, region_name="eu-west-1")
-            mock_boto.assert_called_once()
-            _, kwargs = mock_boto.call_args
-            self.assertNotIn("aws_access_key_id", kwargs)
-            self.assertNotIn("aws_secret_access_key", kwargs)
-            self.assertEqual(kwargs["region_name"], "eu-west-1")
-
-    def test_describe_s3_error_action_diagnostics(self):
-        """describe_s3_error provides action-specific IAM permission guidance."""
-        from botocore.exceptions import ClientError
-        from Utils.S3 import describe_s3_error
-
-        err = ClientError({"Error": {"Code": "AccessDenied", "Message": "Forbidden"}}, "ListObjectsV2")
-        msg_list = describe_s3_error(err, action="list", bucket="my-bucket")
-        self.assertIn("s3:ListBucket", msg_list)
-        self.assertIn("arn:aws:s3:::my-bucket", msg_list)
-
-        msg_dl = describe_s3_error(err, action="download", bucket="my-bucket")
-        self.assertIn("s3:GetObject", msg_dl)
-        self.assertIn("arn:aws:s3:::my-bucket/*", msg_dl)
-
-        msg_up = describe_s3_error(err, action="upload", bucket="my-bucket")
-        self.assertIn("s3:PutObject", msg_up)
-        self.assertIn("arn:aws:s3:::my-bucket/*", msg_up)
 
 
 class PDFHardeningTests(unittest.TestCase):
