@@ -69,10 +69,10 @@ class SecurityViolationError(ValueError):
 class SandboxedASTValidator(ast.NodeVisitor):
     """AST visitor enforcing strict sandbox isolation."""
 
-    def visit_Import(self, node: ast.Import) -> None:
+    def visit_Import(self, _node: ast.Import) -> None:
         raise SecurityViolationError("Dynamic imports are forbidden in the sandboxed analytical engine.")
 
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+    def visit_ImportFrom(self, _node: ast.ImportFrom) -> None:
         raise SecurityViolationError("Dynamic imports are forbidden in the sandboxed analytical engine.")
 
     def visit_Call(self, node: ast.Call) -> None:
@@ -89,13 +89,13 @@ class SandboxedASTValidator(ast.NodeVisitor):
             raise SecurityViolationError(f"Access to module '{node.value.id}' is forbidden.")
         self.generic_visit(node)
 
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+    def visit_AsyncFunctionDef(self, _node: ast.AsyncFunctionDef) -> None:
         raise SecurityViolationError("Asynchronous functions are unsupported in sandbox execution.")
 
-    def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
+    def visit_AsyncFor(self, _node: ast.AsyncFor) -> None:
         raise SecurityViolationError("Asynchronous loops are unsupported in sandbox execution.")
 
-    def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+    def visit_AsyncWith(self, _node: ast.AsyncWith) -> None:
         raise SecurityViolationError("Asynchronous context managers are unsupported in sandbox execution.")
 
 

@@ -271,14 +271,6 @@ class BoundedDatasetMemoryCache:
 _DATASET_MEMORY_CACHE = BoundedDatasetMemoryCache()
 
 
-def get_cache_memory_stats():
-    return _DATASET_MEMORY_CACHE.stats()
-
-
-def clear_dataset_memory_cache():
-    _DATASET_MEMORY_CACHE.clear()
-
-
 def load_dataset_cached(dataset: str, max_rows: int | None = None) -> pd.DataFrame:
     path = resolve_dataset_path(dataset)
     fp = dataset_fingerprint(dataset)

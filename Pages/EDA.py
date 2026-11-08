@@ -4,7 +4,7 @@ import streamlit as st
 from scipy import stats
 
 from Utils.dataset_ui import render_sidebar, select_working_dataset
-from Utils.eda_logic import audit_outliers, calculate_vif
+from Utils.eda_logic import audit_outliers, calculate_anova, calculate_vif
 from Utils.logsys import get_logger
 from Utils.sampling import sample_for_analysis
 from Utils.theme import metric_card, page_header, section_card_header
@@ -208,27 +208,18 @@ with tab_hypothesis, st.container(border=True):
         with h_c2:
             num_target = st.selectbox("Numerical Metric", num_cols, key="h_target")
 
-        group_counts = analysis_df[group_col].value_counts()
-        valid_groups = group_counts[group_counts >= 3].index.tolist()
-
-        if len(valid_groups) < 2:
-            st.warning(f"Categorical variable `{group_col}` needs at least 2 distinct groups with ≥ 3 records each.")
-        else:
-            group_data = [analysis_df[analysis_df[group_col] == g][num_target].dropna().values for g in valid_groups]
-            f_stat, p_val = stats.f_oneway(*group_data)
+        try:
+            f_stat, p_val, p_formatted, grp_summary = calculate_anova(analysis_df, group_col, num_target)
 
             m_h1, m_h2, m_h3 = st.columns(3)
             with m_h1:
                 metric_card("F-Statistic", f"{f_stat:.3f}")
             with m_h2:
-                p_formatted = "< 0.001" if p_val < 0.001 else f"{p_val:.4f}"
                 metric_card("p-value", p_formatted)
             with m_h3:
                 sig_label = "Statistically Significant" if p_val < 0.05 else "Not Significant"
                 metric_card("Verdict (α = 0.05)", sig_label, subtext="H₀: All group means equal")
 
-            # Group breakdown summary
-            grp_summary = analysis_df[analysis_df[group_col].isin(valid_groups)].groupby(group_col)[num_target].agg(
-                ["count", "mean", "std", "median"]
-            ).reset_index()
             st.dataframe(grp_summary.round(3), width="stretch", hide_index=True)
+        except ValueError as err:
+            st.warning(str(err))

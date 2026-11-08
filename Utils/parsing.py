@@ -7,7 +7,6 @@ import json
 import re
 import xml.parsers.expat
 from html.parser import HTMLParser
-from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
 
@@ -19,17 +18,6 @@ from Utils.limits import CSV_ENCODINGS, AIConversionRequired, ResourcePolicy
 from Utils.logsys import get_logger
 
 logger = get_logger("Parsing")
-
-
-def parse_file(
-    source: io.BytesIO | io.IOBase | bytes | bytearray | str | Path,
-    filename: str | None = None,
-    max_rows: int | None = None,
-    sep: str | None = None,
-) -> pd.DataFrame:
-    from Utils.paths import read_tabular
-
-    return read_tabular(source, filename=filename, max_rows=max_rows, sep=sep)
 
 
 def _inspect_delimited_header_width(
@@ -894,7 +882,7 @@ class _TranscodingStream:
 
 
 def _reject_dtd(payload: bytes | bytearray | io.BytesIO | io.IOBase | Any) -> None:
-    def _prohibit(*args, **kwargs):
+    def _prohibit(*_args, **_kwargs):
         raise ValueError(
             "XML datasets must not contain DTD/entity declarations "
             "(they enable resource-exhaustion attacks); export plain elements."
@@ -910,7 +898,7 @@ def _reject_dtd(payload: bytes | bytearray | io.BytesIO | io.IOBase | Any) -> No
             p.EntityDeclHandler = _prohibit
             root_started = False
 
-            def _start_element(name, attrs):
+            def _start_element(_name, _attrs):
                 nonlocal root_started
                 root_started = True
 

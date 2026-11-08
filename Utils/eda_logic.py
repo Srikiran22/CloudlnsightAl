@@ -157,31 +157,6 @@ def detect_tukey_outliers(
     }
 
 
-def detect_outliers_zscore(
-    df: pd.DataFrame,
-    column: str,
-    threshold: float = 3.0,
-) -> dict[str, Any]:
-    """Detect univariate outliers strictly using parametric standard deviation score."""
-    if column not in df.columns:
-        raise KeyError(f"Column '{column}' not found in DataFrame.")
-
-    series = df[column].dropna()
-    if len(series) < 2 or series.std() == 0:
-        return {"feature": column, "threshold": threshold, "outlier_count": 0, "indices": []}
-
-    z_scores = np.abs(stats.zscore(series))
-    outlier_mask = z_scores >= threshold
-    outliers = series[outlier_mask]
-
-    return {
-        "feature": column,
-        "threshold": threshold,
-        "outlier_count": int(len(outliers)),
-        "indices": outliers.index.tolist(),
-    }
-
-
 def audit_outliers(
     df: pd.DataFrame,
     columns: list[str],
