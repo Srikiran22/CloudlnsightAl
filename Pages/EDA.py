@@ -1,18 +1,18 @@
-import streamlit as st
 import numpy as np
 import pandas as pd
+import streamlit as st
 from scipy import stats
-import plotly.express as px
 
 from Utils.dataset_ui import render_sidebar, select_working_dataset
+from Utils.eda_logic import audit_outliers, calculate_vif
 from Utils.logsys import get_logger
 from Utils.sampling import sample_for_analysis
-from Utils.theme import page_header, section_card_header, metric_card
+from Utils.theme import metric_card, page_header, section_card_header
 
 logger = get_logger("EDA")
 
 page_header(
-    "Statistical Diagnostics & EDA",
+    "Statistical Diagnostics",
     "Comprehensive parametric and non-parametric exploratory data analysis, normality screening, VIF multicollinearity, and hypothesis tests.",
     badge="STATISTICAL AUDIT"
 )
@@ -155,132 +155,80 @@ with tab_corr:
 # -----------------------------------------------------------------------------
 # TAB 3: MULTICOLLINEARITY (VIF)
 # -----------------------------------------------------------------------------
-with tab_vif:
-    with st.container(border=True):
-        section_card_header(
-            "Variance Inflation Factor (VIF) Diagnostic",
-            "Identify severe multicollinearity among predictor variables (VIF ≥ 10 indicates high redundancy)."
-        )
-        if len(num_cols) < 2:
-            st.info("Need at least 2 numerical features to evaluate multicollinearity.")
+with tab_vif, st.container(border=True):
+    section_card_header(
+        "Variance Inflation Factor (VIF) Diagnostic",
+        "Identify severe multicollinearity among predictor variables (VIF ≥ 10 indicates high redundancy)."
+    )
+    if len(num_cols) < 2:
+        st.info("Need at least 2 numerical features to evaluate multicollinearity.")
+    else:
+        vif_candidates = [c for c in num_cols if analysis_df[c].nunique() > 1]
+        if len(vif_candidates) < 2:
+            st.info("Not enough non-constant numeric features to compute VIF.")
         else:
-            from sklearn.linear_model import LinearRegression
+            if st.button("Compute Variance Inflation Factors", type="primary", key="btn_run_vif"):
+                with st.spinner("Calculating VIF across feature matrix..."):
+                    vif_df = calculate_vif(analysis_df, vif_candidates)
+                    st.session_state["vif_results"] = vif_df
 
-            vif_candidates = [c for c in num_cols if analysis_df[c].nunique() > 1]
-            if len(vif_candidates) < 2:
-                st.info("Not enough non-constant numeric features to compute VIF.")
-            else:
-                if st.button("Compute Variance Inflation Factors", type="primary", key="btn_run_vif"):
-                    with st.spinner("Calculating VIF across feature matrix..."):
-                        clean_data = analysis_df[vif_candidates].dropna()
-                        if len(clean_data) < len(vif_candidates) + 1:
-                            clean_data = analysis_df[vif_candidates].fillna(analysis_df[vif_candidates].mean())
-
-                        vif_records = []
-                        X_mat = clean_data.values
-                        for i, col_name in enumerate(vif_candidates):
-                            y_i = X_mat[:, i]
-                            X_others = np.delete(X_mat, i, axis=1)
-                            lr = LinearRegression()
-                            lr.fit(X_others, y_i)
-                            r2 = lr.score(X_others, y_i)
-                            vif_val = 1.0 / (1.0 - r2) if (1.0 - r2) > 1e-6 else 999.99
-                            severity = "Low (< 5)" if vif_val < 5 else "Moderate (5 - 10)" if vif_val < 10 else "High (≥ 10)"
-                            vif_records.append({
-                                "Feature": col_name,
-                                "R² with other features": round(r2, 4),
-                                "VIF": round(vif_val, 2),
-                                "Multicollinearity Severity": severity
-                            })
-
-                        vif_df = pd.DataFrame(vif_records).sort_values(by="VIF", ascending=False)
-                        st.session_state["vif_results"] = vif_df
-
-                if "vif_results" in st.session_state:
-                    st.dataframe(st.session_state["vif_results"], width="stretch", hide_index=True)
+            if "vif_results" in st.session_state:
+                st.dataframe(st.session_state["vif_results"], width="stretch", hide_index=True)
 
 
 # -----------------------------------------------------------------------------
 # TAB 4: OUTLIER DIAGNOSTICS
 # -----------------------------------------------------------------------------
-with tab_outliers:
-    with st.container(border=True):
-        section_card_header(
-            "Tukey's IQR & Z-Score Outlier Audit",
-            "Screen for abnormal observations exceeding 1.5 × IQR bounds or |Z| ≥ 3.0 standard deviations."
-        )
-        if not num_cols:
-            st.info("No numerical features available for outlier detection.")
-        else:
-            outlier_results = []
-            for column in num_cols:
-                series = analysis_df[column].dropna()
-                if len(series) < 4:
-                    continue
-                q1 = series.quantile(0.25)
-                q3 = series.quantile(0.75)
-                iqr = q3 - q1
-                lb = q1 - (1.5 * iqr)
-                ub = q3 + (1.5 * iqr)
-
-                iqr_outliers = series[(series < lb) | (series > ub)]
-                z_scores = np.abs(stats.zscore(series)) if series.std() > 0 else np.zeros_like(series)
-                z_outliers = (z_scores >= 3.0).sum()
-
-                outlier_results.append({
-                    "Feature": column,
-                    "Q1 (25%)": round(q1, 3),
-                    "Q3 (75%)": round(q3, 3),
-                    "IQR": round(iqr, 3),
-                    "Lower Bound": round(lb, 3),
-                    "Upper Bound": round(ub, 3),
-                    "IQR Outlier Count": len(iqr_outliers),
-                    "IQR Outlier %": f"{(len(iqr_outliers) / len(series)) * 100:.2f}%",
-                    "Z-Score (|Z| ≥ 3) Count": int(z_outliers)
-                })
-
-            st.dataframe(pd.DataFrame(outlier_results), width="stretch", hide_index=True)
+with tab_outliers, st.container(border=True):
+    section_card_header(
+        "Tukey's IQR & Z-Score Outlier Audit",
+        "Screen for abnormal observations exceeding 1.5 × IQR bounds or |Z| ≥ 3.0 standard deviations."
+    )
+    if not num_cols:
+        st.info("No numerical features available for outlier detection.")
+    else:
+        outlier_df = audit_outliers(analysis_df, num_cols, k=1.5)
+        st.dataframe(outlier_df, width="stretch", hide_index=True)
 
 
 # -----------------------------------------------------------------------------
 # TAB 5: GROUP HYPOTHESIS TESTING
 # -----------------------------------------------------------------------------
-with tab_hypothesis:
-    with st.container(border=True):
-        section_card_header(
-            "Statistical Hypothesis Testing Across Groups",
-            "Evaluate whether numerical feature means differ significantly across categories (One-Way ANOVA F-Test)."
-        )
-        if not num_cols or not cat_cols:
-            st.info("Requires at least one numerical variable and one categorical grouping variable.")
+with tab_hypothesis, st.container(border=True):
+    section_card_header(
+        "Statistical Hypothesis Testing Across Groups",
+        "Evaluate whether numerical feature means differ significantly across categories (One-Way ANOVA F-Test)."
+    )
+    if not num_cols or not cat_cols:
+        st.info("Requires at least one numerical variable and one categorical grouping variable.")
+    else:
+        h_c1, h_c2 = st.columns(2)
+        with h_c1:
+            group_col = st.selectbox("Categorical Grouping Variable", cat_cols, key="h_group")
+        with h_c2:
+            num_target = st.selectbox("Numerical Metric", num_cols, key="h_target")
+
+        group_counts = analysis_df[group_col].value_counts()
+        valid_groups = group_counts[group_counts >= 3].index.tolist()
+
+        if len(valid_groups) < 2:
+            st.warning(f"Categorical variable `{group_col}` needs at least 2 distinct groups with ≥ 3 records each.")
         else:
-            h_c1, h_c2 = st.columns(2)
-            with h_c1:
-                group_col = st.selectbox("Categorical Grouping Variable", cat_cols, key="h_group")
-            with h_c2:
-                num_target = st.selectbox("Numerical Metric", num_cols, key="h_target")
+            group_data = [analysis_df[analysis_df[group_col] == g][num_target].dropna().values for g in valid_groups]
+            f_stat, p_val = stats.f_oneway(*group_data)
 
-            group_counts = analysis_df[group_col].value_counts()
-            valid_groups = group_counts[group_counts >= 3].index.tolist()
+            m_h1, m_h2, m_h3 = st.columns(3)
+            with m_h1:
+                metric_card("F-Statistic", f"{f_stat:.3f}")
+            with m_h2:
+                p_formatted = "< 0.001" if p_val < 0.001 else f"{p_val:.4f}"
+                metric_card("p-value", p_formatted)
+            with m_h3:
+                sig_label = "Statistically Significant" if p_val < 0.05 else "Not Significant"
+                metric_card("Verdict (α = 0.05)", sig_label, subtext="H₀: All group means equal")
 
-            if len(valid_groups) < 2:
-                st.warning(f"Categorical variable `{group_col}` needs at least 2 distinct groups with ≥ 3 records each.")
-            else:
-                group_data = [analysis_df[analysis_df[group_col] == g][num_target].dropna().values for g in valid_groups]
-                f_stat, p_val = stats.f_oneway(*group_data)
-
-                m_h1, m_h2, m_h3 = st.columns(3)
-                with m_h1:
-                    metric_card("F-Statistic", f"{f_stat:.3f}")
-                with m_h2:
-                    p_formatted = "< 0.001" if p_val < 0.001 else f"{p_val:.4f}"
-                    metric_card("p-value", p_formatted)
-                with m_h3:
-                    sig_label = "Statistically Significant" if p_val < 0.05 else "Not Significant"
-                    metric_card("Verdict (α = 0.05)", sig_label, subtext="H₀: All group means equal")
-
-                # Group breakdown summary
-                grp_summary = analysis_df[analysis_df[group_col].isin(valid_groups)].groupby(group_col)[num_target].agg(
-                    ["count", "mean", "std", "median"]
-                ).reset_index()
-                st.dataframe(grp_summary.round(3), width="stretch", hide_index=True)
+            # Group breakdown summary
+            grp_summary = analysis_df[analysis_df[group_col].isin(valid_groups)].groupby(group_col)[num_target].agg(
+                ["count", "mean", "std", "median"]
+            ).reset_index()
+            st.dataframe(grp_summary.round(3), width="stretch", hide_index=True)

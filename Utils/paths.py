@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import contextlib
 import csv
 import hashlib
 import io
@@ -7,12 +10,23 @@ import re
 import threading
 import time
 import uuid
-from pathlib import Path
 import zipfile
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
+import openpyxl
 import pandas as pd
+import pyarrow.parquet as pq
+
+from Utils.frames import (  # noqa: F401  (re-exported)
+    _decode_text_buffer,
+    _sanitize_formula_val,
+    _sanitize_unhashable_cells,
+    _serialize_cell,
+    normalize_and_deduplicate_columns,
+    sanitize_for_csv_export,
+)
 
 # ---------------------------------------------------------------------------
 # Public API compatibility layer
@@ -32,39 +46,32 @@ from Utils.limits import (  # noqa: F401  (re-exported)
     MAX_INGESTION_ROWS,
     MAX_UPLOAD_BYTES,
     MAX_UPLOAD_FILES,
-    PROJECT_ROOT,
-    REPORTS_DIR,
-    REPORT_TEMPLATES_DIR,
     MODELS_DIR,
+    PROJECT_ROOT,
+    REPORT_TEMPLATES_DIR,
+    REPORTS_DIR,
     SUPPORTED_DATASET_EXTENSIONS,
     TABULAR_EXTENSIONS,
     TEXT_EXTENSIONS,
     AIConversionRequired,
     ResourcePolicy,
 )
-from Utils.frames import (  # noqa: F401  (re-exported)
-    _decode_text_buffer,
-    _sanitize_formula_val,
-    _sanitize_unhashable_cells,
-    _serialize_cell,
-    normalize_and_deduplicate_columns,
-    sanitize_for_csv_export,
-)
+from Utils.logsys import get_logger  # noqa: E402  (kept below the re-exports)
 from Utils.parsing import (  # noqa: F401  (re-exported)
     MAX_PDF_EXTRACT_CHARS,
     MAX_PDF_PAGES,
     MAX_TEXT_EXTRACT_CHARS,
     MAX_XML_DEPTH,
-    _HTMLTableParser,
-    _TranscodingStream,
     _check_string_cardinality_amplification,
     _detect_csv_delimiter,
     _detect_xml_encoding,
     _flatten_xml_element,
+    _HTMLTableParser,
     _inspect_delimited_header_width,
     _inspect_jsonl_header_width,
     _read_chunked_delimited_buffer,
     _read_csv_from_buffer,
+    _read_delimited_buffer,
     _read_delimited_text,
     _read_html_from_buffer,
     _read_json_from_buffer,
@@ -76,9 +83,8 @@ from Utils.parsing import (  # noqa: F401  (re-exported)
     _reject_dtd,
     _stream_json_array,
     _stream_json_from_buffer,
+    _TranscodingStream,
 )
-
-from Utils.logsys import get_logger  # noqa: E402  (kept below the re-exports)
 
 logger = get_logger("Paths")
 
@@ -149,10 +155,8 @@ def release_filename_reservation(filename: str, directory: Path | str = DATASETS
         dir_key = str(target_dir.resolve()) if target_dir.exists() else str(target_dir)
         safe_name = Path(filename).name
         _RESERVED_FILENAMES.pop((dir_key, safe_name), None)
-        try:
+        with contextlib.suppress(OSError):
             (target_dir / f".{safe_name}.reserve").unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 def get_unique_filename(
@@ -241,7 +245,11 @@ def enforce_size_limit(size_in_bytes: int, label: str = "File") -> None:
         )
 
 
-def _check_zip_bomb(buffer, max_uncompressed_bytes=MAX_UPLOAD_BYTES, max_ratio=100.0):
+def _check_zip_bomb(
+    buffer: io.BytesIO | io.IOBase | Any,
+    max_uncompressed_bytes: int = MAX_UPLOAD_BYTES,
+    max_ratio: float = 100.0,
+) -> None:
     """Inspect zip archive members (e.g. XLSX) for dangerous expansion ratios."""
     try:
         if hasattr(buffer, "seek"):
@@ -289,10 +297,8 @@ def atomic_write(
                 with _FILENAME_LOCK:
                     dir_key = str(p.parent.resolve()) if p.parent.exists() else str(p.parent)
                     _RESERVED_FILENAMES.pop((dir_key, p.name), None)
-                    try:
+                    with contextlib.suppress(OSError):
                         (p.parent / f".{p.name}.reserve").unlink(missing_ok=True)
-                    except OSError:
-                        pass
                 break
             except PermissionError:
                 if attempt == 9:
@@ -300,10 +306,8 @@ def atomic_write(
                 time.sleep(0.005 * (2 ** attempt))
     except Exception:
         if tmp_path.exists():
-            try:
+            with contextlib.suppress(OSError):
                 tmp_path.unlink()
-            except OSError:
-                pass
         raise
 
 
@@ -313,7 +317,11 @@ PROMPT_POLICY_VERSION = "2.0"
 RECONCILIATION_POLICY_VERSION = "2.0"
 
 
-def compute_conversion_provenance(raw_text, model_name=None, extra_instructions=None):
+def compute_conversion_provenance(
+    raw_text: str,
+    model_name: str | None = None,
+    extra_instructions: str | None = None,
+) -> str:
     """Deterministic hash incorporating source content, model, instructions, and policy versions."""
     norm_model = (model_name or "").strip().lower()
     norm_instr = (extra_instructions or "").strip()
@@ -324,7 +332,7 @@ def compute_conversion_provenance(raw_text, model_name=None, extra_instructions=
     hasher.update(b"|")
     hasher.update(norm_instr.encode("utf-8"))
     hasher.update(b"|")
-    hasher.update(f"{CONVERSION_MANIFEST_VERSION}:{PARSER_POLICY_VERSION}:{PROMPT_POLICY_VERSION}:{RECONCILIATION_POLICY_VERSION}".encode("utf-8"))
+    hasher.update(f"{CONVERSION_MANIFEST_VERSION}:{PARSER_POLICY_VERSION}:{PROMPT_POLICY_VERSION}:{RECONCILIATION_POLICY_VERSION}".encode())
     return hasher.hexdigest()[:32]
 
 
@@ -332,14 +340,14 @@ _MANIFEST_LOCK = threading.Lock()
 
 
 def record_conversion(
-    converted_name,
-    source_name,
-    raw_text,
-    model_name=None,
-    extra_instructions=None,
-    manifest_path=None,
-    datasets_dir=None,
-):
+    converted_name: str,
+    source_name: str,
+    raw_text: str,
+    model_name: str | None = None,
+    extra_instructions: str | None = None,
+    manifest_path: Path | str | None = None,
+    datasets_dir: Path | str | None = None,
+) -> None:
     """Record provenance metadata for an AI-converted file in the manifest."""
     ensure_project_directories()
     manifest_file = Path(manifest_path) if manifest_path is not None else CONVERSIONS_MANIFEST
@@ -394,21 +402,19 @@ def record_conversion(
             os.replace(tmp_manifest, manifest_file)
         except Exception:
             if tmp_manifest.exists():
-                try:
+                with contextlib.suppress(OSError):
                     tmp_manifest.unlink()
-                except OSError:
-                    pass
             raise
 
 
 def get_valid_conversion(
-    source_name,
-    raw_text,
-    model_name=None,
-    extra_instructions=None,
-    manifest_path=None,
-    datasets_dir=None,
-):
+    source_name: str,
+    raw_text: str,
+    model_name: str | None = None,
+    extra_instructions: str | None = None,
+    manifest_path: Path | str | None = None,
+    datasets_dir: Path | str | None = None,
+) -> str | None:
     """Return existing converted filename if it matches source content, model, and instructions, else None."""
     manifest_file = Path(manifest_path) if manifest_path is not None else CONVERSIONS_MANIFEST
     target_dir = Path(datasets_dir) if datasets_dir is not None else DATASETS_DIR
@@ -437,7 +443,7 @@ def get_valid_conversion(
         if meta_ext and req_ext and meta_ext != req_ext:
             continue
 
-        is_name_match = (meta_source == norm_source or meta_source == source_name)
+        is_name_match = (meta_source in (norm_source, source_name))
         is_prov_match = bool(meta.get("provenance_hash") and meta.get("provenance_hash") == prov_hash)
         if not (is_name_match or is_prov_match):
             continue
@@ -472,13 +478,13 @@ def get_valid_conversion(
 
 
 def cleanup_storage(
-    directory=DATASETS_DIR,
-    max_age_seconds=None,
-    max_age_days=None,
-    max_files=None,
-    preserve_names=None,
-    include_temp_only=False,
-):
+    directory: Path | str = DATASETS_DIR,
+    max_age_seconds: float | int | None = None,
+    max_age_days: float | int | None = None,
+    max_files: int | None = None,
+    preserve_names: Iterable[str] | None = None,
+    include_temp_only: bool = False,
+) -> list[str]:
     """Safely prune old or temporary files from a managed directory (retention control)."""
     target_dir = Path(directory)
     if not target_dir.exists():
@@ -502,9 +508,7 @@ def cleanup_storage(
         name = p.name
         if re.search(r"\.tmp\.[0-9a-fA-F]+$", name):
             return True
-        if name.startswith(".") and name.endswith(".reserve"):
-            return True
-        return False
+        return bool(name.startswith(".") and name.endswith(".reserve"))
 
     def _safe_unlink(p_to_del: Path):
         try:
@@ -520,7 +524,7 @@ def cleanup_storage(
 
     dir_key = str(target_dir.resolve()) if target_dir.exists() else str(target_dir)
     with _FILENAME_LOCK:
-        active_reservations = {cand for (d, cand) in _RESERVED_FILENAMES.keys() if d == dir_key}
+        active_reservations = {cand for (d, cand) in _RESERVED_FILENAMES if d == dir_key}
 
     # Clean orphaned temporary files and orphan signatures
     for p in files:
@@ -606,10 +610,8 @@ def delete_dataset(filename: str, directory: Path | str = DATASETS_DIR) -> bool:
                             os.replace(tmp_manifest, manifest_file)
                         except Exception:
                             if tmp_manifest.exists():
-                                try:
+                                with contextlib.suppress(OSError):
                                     tmp_manifest.unlink()
-                                except OSError:
-                                    pass
                             raise
                 except Exception as exc:
                     logger.debug("suppressed error in %s: %s", "delete_dataset", exc)
@@ -650,7 +652,6 @@ def get_dataset_row_count(dataset: str) -> int:
 
     elif suffix == ".parquet":
         try:
-            import pyarrow.parquet as pq
             meta = pq.read_metadata(path)
             row_count = meta.num_rows
         except Exception as exc:
@@ -665,7 +666,6 @@ def get_dataset_row_count(dataset: str) -> int:
 
     elif suffix in {".xlsx", ".xls"}:
         try:
-            import openpyxl
             wb = openpyxl.load_workbook(path, read_only=True)
             sheet = wb.worksheets[0] if wb.worksheets else wb.active
             rows = max(sheet.max_row - 1, 0) if sheet.max_row is not None else None
@@ -738,7 +738,10 @@ def resolve_dataset_path(dataset: str) -> Path:
 
 
 def read_tabular(
-    source: Any, filename: str | None = None, max_rows: int | None = None
+    source: Any,
+    filename: str | None = None,
+    max_rows: int | None = None,
+    sep: str | None = None,
 ) -> pd.DataFrame:
     """Read any supported dataset from a path, file-like object, or bytes.
 
@@ -751,29 +754,32 @@ def read_tabular(
     name = Path(filename or getattr(source, "name", "dataset.csv")).name
     suffix = Path(name).suffix.lower()
 
-    if hasattr(source, "size"):
-        enforce_size_limit(source.size, label=f"File '{name}'")
+    if isinstance(source, str):
+        enforce_size_limit(len(source.encode("utf-8")), label=f"File '{name}'")
+        buffer = io.BytesIO(source.encode("utf-8"))
+    elif isinstance(source, io.StringIO):
+        payload_bytes = source.getvalue().encode("utf-8")
+        enforce_size_limit(len(payload_bytes), label=f"File '{name}'")
+        buffer = io.BytesIO(payload_bytes)
     elif isinstance(source, (bytes, bytearray)):
         enforce_size_limit(len(source), label=f"File '{name}'")
-    elif hasattr(source, "fileno"):
-        try:
-            enforce_size_limit(os.fstat(source.fileno()).st_size, label=f"File '{name}'")
-        except (OSError, io.UnsupportedOperation):
-            pass
-    elif hasattr(source, "seek") and hasattr(source, "tell"):
-        try:
-            cur_pos = source.tell()
-            source.seek(0, io.SEEK_END)
-            stream_len = source.tell()
-            source.seek(cur_pos)
-            enforce_size_limit(stream_len, label=f"File '{name}'")
-        except (OSError, io.UnsupportedOperation, AttributeError):
-            pass
-
-    if isinstance(source, (bytes, bytearray)):
         buffer = io.BytesIO(source)
     else:
         buffer = source
+        if hasattr(source, "size"):
+            enforce_size_limit(source.size, label=f"File '{name}'")
+        elif hasattr(source, "fileno"):
+            with contextlib.suppress(OSError, io.UnsupportedOperation):
+                enforce_size_limit(os.fstat(source.fileno()).st_size, label=f"File '{name}'")
+        elif hasattr(source, "seek") and hasattr(source, "tell"):
+            try:
+                cur_pos = source.tell()
+                source.seek(0, io.SEEK_END)
+                stream_len = source.tell()
+                source.seek(cur_pos)
+                enforce_size_limit(stream_len, label=f"File '{name}'")
+            except (OSError, io.UnsupportedOperation, AttributeError):
+                pass
         if hasattr(buffer, "seek"):
             buffer.seek(0)
 
@@ -781,7 +787,19 @@ def read_tabular(
     fetch_rows = (MAX_INGESTION_ROWS + 1) if limit_check else min(max_rows, MAX_INGESTION_ROWS)
 
     df = None
-    if suffix == ".csv" or suffix == "":
+    if sep is not None:
+        num_cols = 1
+        for encoding in CSV_ENCODINGS:
+            try:
+                num_cols = _inspect_delimited_header_width(buffer, encoding, sep=sep)
+                break
+            except UnicodeDecodeError:
+                continue
+        max_cell_rows = (MAX_INGESTION_CELLS // max(1, num_cols)) + 1
+        effective_rows = min(fetch_rows, max_cell_rows) if limit_check else fetch_rows
+        df = _read_delimited_buffer(buffer, sep=sep, nrows=effective_rows)
+
+    elif suffix == ".csv" or suffix == "":
         num_cols = 1
         for encoding in CSV_ENCODINGS:
             try:
@@ -934,3 +952,11 @@ def read_dataset(dataset: str, max_rows: int | None = None) -> pd.DataFrame:
     enforce_size_limit(path.stat().st_size, label=f"Dataset '{path.name}'")
     with path.open("rb") as handle:
         return read_tabular(handle, filename=path.name, max_rows=max_rows)
+
+
+def save_and_activate_dataset(df: Any, filename: str, sanitize: bool = True) -> Path:
+    """Delegate to Utils.dataset_ui.save_and_activate_dataset."""
+    from Utils.dataset_ui import save_and_activate_dataset as _save_and_activate
+
+    return _save_and_activate(df, filename, sanitize=sanitize)
+

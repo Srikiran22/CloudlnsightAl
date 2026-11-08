@@ -1,27 +1,28 @@
 """Regression tests for audit findings and implementation fixes."""
 
 import unittest
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
 import numpy as np
 import pandas as pd
 
+from Utils.Gemini import (
+    DEFAULT_GEMINI_MODEL,
+    GEMINI_MODELS,
+    resolve_gemini_model,
+)
 from Utils.ML import (
-    train_and_evaluate_model,
-    save_trained_model,
     load_trained_model,
+    save_trained_model,
+    train_and_evaluate_model,
 )
 from Utils.privacy import (
     detect_sensitive_columns,
     detect_sensitive_text,
 )
 from Utils.secrets import drop
-from Utils.Gemini import (
-    DEFAULT_GEMINI_MODEL,
-    GEMINI_MODELS,
-    resolve_gemini_model,
-)
 
 
 class TestAuditRegressions(unittest.TestCase):
@@ -172,6 +173,7 @@ class TestAuditRegressions(unittest.TestCase):
     def test_below_baseline_verdict_rendered_in_ml_page(self):
         """P1: Pages/ML.py must display Below baseline warning when accuracy < majority class baseline."""
         from streamlit.testing.v1 import AppTest
+
         from Utils.dataset_ui import dataframe_fingerprint
         ml_script = str(Path(__file__).resolve().parent.parent / "Pages" / "ML.py")
         at = AppTest.from_file(ml_script, default_timeout=30)
@@ -205,8 +207,8 @@ class TestAuditRegressions(unittest.TestCase):
             f"Expected 'Below baseline performance' warning, got: {warning_texts}",
         )
 
-    @patch("Pages.Predict.list_saved_models")
-    @patch("Pages.Predict.load_trained_model")
+    @patch("Utils.ML.list_saved_models")
+    @patch("Utils.ML.load_trained_model")
     def test_predict_displays_actual_target_column(self, mock_load, mock_list):
         """P1: Pages/Predict.py must display actual target name instead of generic 'Target'."""
         from streamlit.testing.v1 import AppTest
@@ -259,6 +261,7 @@ class TestAuditRegressions(unittest.TestCase):
     def test_style_plotly_fig_dark_theme(self):
         """P1: style_plotly_fig applies dark template and transparent background in dark mode."""
         import plotly.express as px
+
         from Utils.theme import style_plotly_fig
         fig = px.scatter(x=[1, 2], y=[3, 4])
         styled = style_plotly_fig(fig)
@@ -298,6 +301,7 @@ class TestAuditRegressions(unittest.TestCase):
     def test_predict_apptest_renders_overlap_warning(self, mock_load, mock_list):
         """P1: Predict.py displays training-data overlap warning when scoring dataset matches training fingerprint."""
         from streamlit.testing.v1 import AppTest
+
         from Utils.dataset_ui import dataframe_fingerprint
 
         mock_list.return_value = [("test_model.joblib", "Trusted")]
@@ -400,6 +404,7 @@ class TestAuditRegressions(unittest.TestCase):
     def test_model_fingerprint_incorporates_hmac_signature(self):
         """Phase 2: Model cache fingerprint binds to HMAC-SHA256 signature when present."""
         import tempfile
+
         import Pages.Predict as predict_mod
 
         # Test with a mock signature file

@@ -15,28 +15,33 @@ import numpy as np
 import pandas as pd
 
 from Utils.AIConvert import (
-    build_conversion_prompt, parse_ai_csv, convert_to_dataframe,
     MAX_CONVERTED_COLUMNS,
+    build_conversion_prompt,
+    convert_to_dataframe,
+    parse_ai_csv,
 )
 from Utils.batch import merge_frames
 from Utils.Charts import create_scatter_plot
 from Utils.compare_logic import column_drift_rows, schema_diff
 from Utils.Gemini import (
-    get_dataset_summary_context, GeminiError, chat_with_gemini_dataset,
     MAX_MESSAGE_CHARS,
+    GeminiError,
+    chat_with_gemini_dataset,
+    get_dataset_summary_context,
 )
 from Utils.ML import (
-    detect_problem_type, train_and_evaluate_model,
-    save_trained_model, load_trained_model, predict_with_model,
+    detect_problem_type,
+    load_trained_model,
+    predict_with_model,
+    save_trained_model,
+    train_and_evaluate_model,
 )
-from Utils.Preprocessing import fill_missing_values, remove_duplicates, drop_missing_values
-from Utils.quality import quality_metrics, quality_index
+from Utils.paths import AIConversionRequired, read_tabular, resolve_dataset_path
 from Utils.PDF import generate_pdf_report
-from Utils.secrets import ask, value_of
-from Utils.paths import AIConversionRequired, resolve_dataset_path, read_tabular
+from Utils.Preprocessing import drop_missing_values, fill_missing_values, remove_duplicates
 from Utils.privacy import apply_exclusions, detect_sensitive_columns
-
-
+from Utils.quality import quality_index, quality_metrics
+from Utils.secrets import ask, value_of
 
 
 class CoreUtilityTests(unittest.TestCase):
@@ -153,12 +158,12 @@ class UniversalIngestionTests(unittest.TestCase):
         self.assertEqual(len(df), 2)
 
     def test_delimited_plain_text_parses_natively(self):
-        payload = "x|y\n1|2\n3|4\n".encode("utf-8")
+        payload = b"x|y\n1|2\n3|4\n"
         df = read_tabular(payload, filename="pipe.txt")
         self.assertEqual(df.shape, (2, 2))
 
     def test_unstructured_text_requests_ai_conversion(self):
-        payload = "The quick brown fox jumps over the lazy dog.\n".encode("utf-8")
+        payload = b"The quick brown fox jumps over the lazy dog.\n"
         with self.assertRaises(AIConversionRequired) as ctx:
             read_tabular(payload, filename="notes.txt")
         self.assertIn("fox", ctx.exception.raw_text)
@@ -588,9 +593,8 @@ class AIConvertSafetyTests(unittest.TestCase):
         with patch(
             "Utils.AIConvert._generate_content",
             side_effect=GeminiError("Check your Google Gemini API key.", "auth"),
-        ):
-            with self.assertRaisesRegex(GeminiError, "API key"):
-                convert_to_dataframe(api_key="bad", raw_text="content", filename="f.txt")
+        ), self.assertRaisesRegex(GeminiError, "API key"):
+            convert_to_dataframe(api_key="bad", raw_text="content", filename="f.txt")
 
     def test_chat_prompt_truncates_oversized_messages(self):
         captured = {}
@@ -662,8 +666,9 @@ class GeminiErrorClassificationTests(unittest.TestCase):
         self.assertNotIn(fake_key, joined)
 
     def test_requests_timeout_is_real_network_retryable(self):
-        from Utils.Gemini import _classify
         import requests.exceptions
+
+        from Utils.Gemini import _classify
         kind, retryable = _classify(requests.exceptions.ReadTimeout("timed out"))
         self.assertEqual(kind, "network")
         self.assertTrue(retryable)
@@ -706,15 +711,16 @@ class GeminiTimeoutWiringTests(unittest.TestCase):
 
     def test_generate_once_fails_closed_when_genai_not_installed(self):
         import sys
+
         from Utils.Gemini import GeminiError, _generate_once
-        with patch.dict(sys.modules, {"google.genai": None}):
-            with self.assertRaises(GeminiError) as ctx:
-                _generate_once("key", "gemini-3.8-flash", "prompt")
+        with patch.dict(sys.modules, {"google.genai": None}), self.assertRaises(GeminiError) as ctx:
+            _generate_once("key", "gemini-3.8-flash", "prompt")
         self.assertEqual(ctx.exception.kind, "sdk")
         self.assertFalse(ctx.exception.retryable)
 
     def test_retry_still_works_after_timeout_change(self):
         import requests.exceptions
+
         from Utils.Gemini import _generate_content
         attempts = {"n": 0}
 
@@ -1002,6 +1008,7 @@ class PDFQualityFlagUnitTests(unittest.TestCase):
 class DatasetCacheBehaviorTests(unittest.TestCase):
     def test_row_limits_apply_without_breaking_full_load(self):
         import uuid
+
         from Utils.dataset_ui import load_dataset_cached
         from Utils.paths import DATASETS_DIR
         DATASETS_DIR.mkdir(parents=True, exist_ok=True)
@@ -1137,7 +1144,6 @@ class ModelProvenanceTests(unittest.TestCase):
 """Regression tests for core dataset state, isolation, and lifecycle invariants."""
 
 import unittest
-
 
 from Utils.dataset_ui import (
     dataframe_fingerprint,
@@ -1510,7 +1516,7 @@ class FingerprintCacheRealLookupTests(unittest.TestCase):
 
 class CleaningUploadDiskCollisionTests(unittest.TestCase):
     def test_upload_with_same_name_as_disk_file_uses_dataframe_fingerprint(self):
-        from Utils.dataset_ui import dataset_fingerprint, dataframe_fingerprint
+        from Utils.dataset_ui import dataframe_fingerprint, dataset_fingerprint
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             disk_file = tmp_path / "data.csv"
@@ -1526,7 +1532,7 @@ class CleaningUploadDiskCollisionTests(unittest.TestCase):
 
 class MLInMemoryDatasetTests(unittest.TestCase):
     def test_ml_results_match_in_memory_dataset_via_dataframe_fingerprint(self):
-        from Utils.dataset_ui import results_match_active, dataframe_fingerprint
+        from Utils.dataset_ui import dataframe_fingerprint, results_match_active
         df = pd.DataFrame({"feat": [1, 2, 3], "target": [0, 1, 0]})
         fp = dataframe_fingerprint(df)
         results = {
@@ -1575,7 +1581,7 @@ class GeminiClientLifecycleTests(unittest.TestCase):
 
 class ConversionManifestIntegrityTests(unittest.TestCase):
     def test_output_tampering_invalidates_conversion_cache(self):
-        from Utils.paths import record_conversion, get_valid_conversion
+        from Utils.paths import get_valid_conversion, record_conversion
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             manifest = tmp_path / ".conversions.json"
@@ -1611,7 +1617,7 @@ class ConversionManifestIntegrityTests(unittest.TestCase):
             self.assertIsNone(tampered)
 
     def test_conversion_lookup_does_not_reuse_prompted_conversion_when_unprompted(self):
-        from Utils.paths import record_conversion, get_valid_conversion
+        from Utils.paths import get_valid_conversion, record_conversion
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             manifest = tmp_path / ".conversions.json"

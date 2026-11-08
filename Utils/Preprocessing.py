@@ -1,5 +1,8 @@
+from __future__ import annotations
+
+import numpy as np
 import pandas as pd
-from pandas.api.types import is_numeric_dtype, is_datetime64_any_dtype
+from pandas.api.types import is_datetime64_any_dtype, is_numeric_dtype
 
 
 def remove_duplicates(df: pd.DataFrame) -> pd.DataFrame:
@@ -45,7 +48,6 @@ def fill_missing_values(
 
     for column in cleaned_df.columns:
         if is_numeric_dtype(cleaned_df[column]):
-            import numpy as np
             has_inf = np.isinf(cleaned_df[column]).any()
             if cleaned_df[column].isnull().sum() == 0 and not has_inf:
                 continue

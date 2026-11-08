@@ -1,29 +1,32 @@
 import hashlib
 from pathlib import Path
+
 import streamlit as st
 
-from Utils.secrets import ask, value_of, keep_box, release
-from Utils.Gemini import GEMINI_MODELS, DEFAULT_GEMINI_MODEL, GeminiError
 from Utils.AIConvert import convert_to_dataframe
-from Utils.paths import (
-    AIConversionRequired,
-    DATASETS_DIR,
-    atomic_write,
-    get_unique_filename,
-    read_tabular,
-    sanitize_for_csv_export,
-    SUPPORTED_DATASET_EXTENSIONS,
+from Utils.dataset_ui import (
+    render_sidebar,
+    save_and_activate_dataset,
 )
-from Utils.dataset_ui import render_sidebar, set_active_dataset, invalidate_dataset_cache
-from Utils.privacy import detect_sensitive_text
-from Utils.theme import page_header, section_card_header
+from Utils.Gemini import DEFAULT_GEMINI_MODEL, GEMINI_MODELS, GeminiError
 from Utils.logsys import get_logger
+from Utils.paths import (
+    SUPPORTED_DATASET_EXTENSIONS,
+    AIConversionRequired,
+    read_tabular,
+    safe_stem,
+    sanitize_for_csv_export,
+)
+from Utils.privacy import detect_sensitive_text
+from Utils.secrets import ask, keep_box, release, value_of
+from Utils.theme import page_header, section_card_header
 
 logger = get_logger("AIConverter")
 
 page_header(
     "AI File Converter",
-    "Extract structured CSV tables from unstructured documents (PDFs, text notes, logs, or pasted text) using Google Gemini."
+    "Extract structured CSV tables from unstructured documents (PDFs, text notes, logs, or pasted text) using Google Gemini.",
+    badge="AI CONVERSION"
 )
 
 render_sidebar()
@@ -72,7 +75,7 @@ with st.container(border=True):
         "[2026-03-01 10:22:10] Host: srv-app-03 | Tier: Pro        | Event: MEMORY_LEAK | RAM_MB: 7680 | Action: Container recycled"
     )
 
-    def _load_sample_log_cb():
+    def _load_sample_log_cb() -> None:
         st.session_state["conv_input_mode"] = "Paste Raw Text"
         st.session_state["conv_text_area"] = SAMPLE_LOG_TEXT
 
@@ -151,7 +154,7 @@ if raw_text.strip():
             if not api_key:
                 st.error("Google Gemini API Key is required. Please enter it above or in the sidebar.")
             else:
-                with st.spinner("Gemini is extracting and structuring records into a table..."):
+                with st.spinner("Extracting schema and structuring records via Gemini API..."):
                     try:
                         conv_df = convert_to_dataframe(
                             api_key=api_key,
@@ -160,11 +163,11 @@ if raw_text.strip():
                             model_name=chosen_model,
                             extra_instructions=hints.strip() if hints else None,
                         )
-                        input_fp = hashlib.sha256(f"{source_filename}:{raw_text.strip()}:{hints.strip()}".encode("utf-8")).hexdigest()[:16]
+                        input_fp = hashlib.sha256(f"{source_filename}:{raw_text.strip()}:{hints.strip()}".encode()).hexdigest()[:16]
                         st.session_state["conv_result_df"] = conv_df
                         st.session_state["conv_source_name"] = source_filename
                         st.session_state["conv_result_fingerprint"] = input_fp
-                        st.success(f"Successfully extracted {conv_df.shape[0]:,} rows × {conv_df.shape[1]} columns!")
+                        st.success(f"Extracted {conv_df.shape[0]:,} rows × {conv_df.shape[1]} columns.")
                     except GeminiError as ge:
                         st.error(f"Gemini conversion error: {ge}")
                     except Exception as e:
@@ -177,7 +180,7 @@ if raw_text.strip():
 converted_df = st.session_state.get("conv_result_df")
 saved_conv_fp = st.session_state.get("conv_result_fingerprint")
 current_conv_fp = (
-    hashlib.sha256(f"{source_filename}:{raw_text.strip()}:{hints.strip() if 'hints' in locals() and hints else ''}".encode("utf-8")).hexdigest()[:16]
+    hashlib.sha256(f"{source_filename}:{raw_text.strip()}:{hints.strip() if 'hints' in locals() and hints else ''}".encode()).hexdigest()[:16]
     if raw_text.strip()
     else None
 )
@@ -190,7 +193,7 @@ if converted_df is not None and not converted_df.empty:
 
             col_s1, col_s2, col_s3 = st.columns([1.8, 1.1, 1.1])
             with col_s1:
-                default_stem = Path(st.session_state.get("conv_source_name", "converted_data.txt")).stem
+                default_stem = safe_stem(Path(st.session_state.get("conv_source_name", "converted_data.txt")).stem, fallback="converted_data")
                 save_name_input = st.text_input(
                     "Save dataset as",
                     value=f"{default_stem}_structured.csv",
@@ -199,16 +202,12 @@ if converted_df is not None and not converted_df.empty:
             with col_s2:
                 st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
                 if st.button("Save as active dataset", type="primary", key="btn_save_conv_active"):
-                    clean_target = save_name_input.strip() or f"{default_stem}_structured.csv"
-                    if not clean_target.lower().endswith(".csv"):
-                        clean_target += ".csv"
-                    target_filename = get_unique_filename(clean_target, directory=DATASETS_DIR)
-                    DATASETS_DIR.mkdir(parents=True, exist_ok=True)
-                    target_path = DATASETS_DIR / target_filename
-                    atomic_write(target_path, converted_df.to_csv(index=False), mode="w", encoding="utf-8")
-                    invalidate_dataset_cache(target_filename)
-                    set_active_dataset(converted_df, target_filename)
-                    st.success(f"Saved `{target_filename}` and loaded as active dataset! Navigate to Data Overview or Explore Columns to inspect.")
+                    try:
+                        clean_target = save_name_input.strip() or f"{default_stem}_structured.csv"
+                        saved_path = save_and_activate_dataset(converted_df, clean_target, sanitize=True)
+                        st.success(f"Saved `{saved_path.name}` and registered as active dataset. Navigate to Data Health & Profiler or Statistical Diagnostics to inspect.")
+                    except Exception as save_err:
+                        st.error(f"Save failed: {save_err}")
             with col_s3:
                 st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
                 csv_bytes = sanitize_for_csv_export(converted_df).to_csv(index=False).encode("utf-8")

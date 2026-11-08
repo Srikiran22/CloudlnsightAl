@@ -5,6 +5,20 @@ All notable changes to CloudInsight AI are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Restored AI Subsystem in UI Navigation:** Connected `Pages/AIConverter.py` (AI File Converter), `Pages/AI.py` (AI Summary & Insights), and `Pages/AIChat.py` (Ask AI Chat) into `App.py` under the dedicated "AI & Gemini Assistant" navigation group.
+- **Feature Engineering Pipeline State Persistence:** Resolved state reset in `Pages/FeatureEngineering.py` Tab 1 (Numerical Scaling), ensuring that chained transformations (such as prior categorical encodings or polynomial terms) in `st.session_state["fe_working_df"]` are preserved and accumulated rather than overwritten with `df.copy()`.
+- **Hardened Catalog Save in Data Cleaning:** Refactored "Save to Workspace Catalog" in `Pages/Cleaning.py` to use `sanitize_for_csv_export()`, `atomic_write()`, `get_unique_filename()`, and `invalidate_dataset_cache()`, preventing CSV formula injection and file corruption during save operations.
+- **Harmonized Cross-Page UI Terminology:** Updated stale cross-page textual references ("Import Files" -> "Data Hub & Ingest", "Train Model" -> "Model Studio & Training", "Open Predict & Score page" -> "Open Batch Scoring & Simulation") across `Pages/Cleaning.py`, `Pages/Predict.py`, `Pages/ML.py`, `Pages/AI.py`, and `Utils/dataset_ui.py`.
+- **Feature Engineering Dataset Boundary Guard & Discard Action:** Added dataset origin tracking (`fe_dataset_origin`) to purge stale transformed features when switching active datasets in `Pages/FeatureEngineering.py`, and added a "Discard Changes" control.
+- **Accessible Primary Button Contrast:** Introduced `--ci-accent-text` token in `Utils/theme.py` to ensure dark-mode primary buttons render with high-contrast text (`#0B0F19` on `#3B82F6`, 4.53:1 ratio), achieving WCAG 2.1 AA/AAA compliance across both themes.
+
+### Added
+- **Diátaxis Technical Documentation Architecture:** Authored comprehensive architectural guides in `docs/`: `ARCHITECTURE.md` (C4 models and boundaries), `SETUP.md` (reproducible setup and troubleshooting), `TESTING.md` (test strategy and mock design), `SECURITY.md` (threat model and cryptographic signing), and `API.md` (internal interfaces and contracts).
+- **Technical Audit & Walkthrough Briefs:** Added root `AUDIT_REPORT.md` with full P0-P3 classifications, and `PROJECT_WALKTHROUGH.md` for technical review preparation.
+
 ## [2.2.0] - 2026-10-18
 
 ### Fixed

@@ -1,10 +1,10 @@
+import contextlib
 import random
 import time
 
 import pandas as pd
 
 from Utils.logsys import get_logger
-
 
 logger = get_logger("Gemini")
 
@@ -217,10 +217,8 @@ def _generate_once(api_key, model_name, prompt):
         return client.models.generate_content(model=model_name, contents=prompt)
     finally:
         if hasattr(client, "close"):
-            try:
+            with contextlib.suppress(Exception):
                 client.close()
-            except Exception:
-                pass
 
 
 def _generate_content(api_key, model_name, prompt):

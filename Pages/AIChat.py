@@ -1,15 +1,19 @@
 import hashlib
+
 import streamlit as st
 
-from Utils.Gemini import (
-    chat_with_gemini_dataset,
-    GEMINI_MODELS, DEFAULT_GEMINI_MODEL, GeminiError, MAX_CHAT_HISTORY,
-    MAX_MESSAGE_CHARS, prune_ai_contexts,
-)
-from Utils.privacy import apply_exclusions, detect_sensitive_columns
-from Utils.secrets import ask, value_of, keep_box, release
-from Utils.logsys import get_logger
+from Utils.ai_agent import run_local_deterministic_query, run_neuro_symbolic_query
 from Utils.dataset_ui import dataframe_fingerprint, dataset_fingerprint, render_sidebar, select_working_dataset
+from Utils.Gemini import (
+    DEFAULT_GEMINI_MODEL,
+    GEMINI_MODELS,
+    MAX_CHAT_HISTORY,
+    MAX_MESSAGE_CHARS,
+    prune_ai_contexts,
+)
+from Utils.logsys import get_logger
+from Utils.privacy import apply_exclusions, detect_sensitive_columns
+from Utils.secrets import ask, keep_box, release, value_of
 from Utils.theme import page_header, section_card_header
 
 logger = get_logger("AIChat")
@@ -18,7 +22,8 @@ MAX_TOTAL_CHAT_CHARS = 100_000
 
 page_header(
     "Ask AI (Chat)",
-    "Interactive conversational Q&A with your dataset in plain English, powered by Google Gemini."
+    "Statistical natural language dialogue and diagnostic queries over screened dataset context.",
+    badge="GOVERNED CHAT"
 )
 
 df, selected_file = select_working_dataset("Active dataset")
@@ -58,9 +63,9 @@ with st.container(border=True):
         f"PII detection and column context boundary for {selected_file}"
     )
     if api_key:
-        st.success("Gemini API key active for this session.")
+        st.success("Gemini API key active — Neuro-Symbolic Safe Code Execution engine enabled.")
     else:
-        st.warning("Gemini API key required — add it under **Gemini settings** in the sidebar.")
+        st.info("Local Deterministic Engine active (Air-Gapped). Queries execute locally with zero cloud dependencies. Enter Gemini API key in sidebar to enable neuro-symbolic code generation.")
 
     gov_col1, gov_col2 = st.columns([1.5, 1])
     with gov_col1:
@@ -101,61 +106,92 @@ if chat_key not in st.session_state:
     st.session_state[chat_key] = []
 
 with st.container(border=True):
-    section_card_header("Starter Questions for Beginners", "Click any prompt to ask immediately")
+    section_card_header("Guided Diagnostic Inquiries", "Select a structured analytical inquiry to evaluate dataset properties")
     btn_q1, btn_q2, btn_q3 = st.columns(3)
     clicked_question = None
     with btn_q1:
-        if st.button("What are the 3 most important patterns in this dataset?", key="q1_btn", use_container_width=True):
-            clicked_question = "What are the 3 most important patterns in this dataset?"
+        if st.button("Analyze feature covariance structures and identify potential collinearity bottlenecks.", key="q1_btn", use_container_width=True):
+            clicked_question = "Analyze feature covariance structures and identify potential collinearity bottlenecks."
     with btn_q2:
-        if st.button("Are there any data quality issues or unusual outliers I should fix?", key="q2_btn", use_container_width=True):
-            clicked_question = "Are there any data quality issues or unusual outliers I should fix?"
+        if st.button("Evaluate missingness mechanisms, sparsity patterns, and extreme value outliers.", key="q2_btn", use_container_width=True):
+            clicked_question = "Evaluate missingness mechanisms, sparsity patterns, and extreme value outliers."
     with btn_q3:
-        if st.button("What are the most important relationships between columns?", key="q3_btn", use_container_width=True):
-            clicked_question = "What are the most important relationships between columns?"
+        if st.button("Assess target distribution, class balance, and candidate predictor signal.", key="q3_btn", use_container_width=True):
+            clicked_question = "Assess target distribution, class balance, and candidate predictor signal."
 
 with st.container(border=True):
     section_card_header("Conversation History", f"Chat with {selected_file}")
     if not st.session_state[chat_key]:
-        st.info("No messages yet. Ask a question below or click one of the starter questions above to begin!")
+        st.info("Session initialized. Submit a query below or select a diagnostic question above.")
     for msg in st.session_state[chat_key]:
         with st.chat_message(msg["role"]):
+            if msg.get("engine"):
+                st.caption(f"**Execution Engine:** `{msg['engine']}`")
             st.markdown(msg["content"])
+            if msg.get("fig") is not None:
+                st.plotly_chart(msg["fig"], use_container_width=True)
+            if msg.get("result_df") is not None and not msg["result_df"].empty:
+                st.dataframe(msg["result_df"], use_container_width=True)
+            if msg.get("code"):
+                with st.expander("Inspected & Verified Python Code"):
+                    st.code(msg["code"], language="python")
 
-user_prompt = st.chat_input("Ask a question about your dataset...")
+user_prompt = st.chat_input("Enter analytical query or statistical hypothesis...")
 prompt_to_run = clicked_question or user_prompt
 
 if prompt_to_run:
-    if not api_key:
-        st.error("Google Gemini API key is required to chat. Enter your key in the sidebar.")
-    else:
-        if len(prompt_to_run) > MAX_MESSAGE_CHARS:
-            prompt_to_run = f"{prompt_to_run[:MAX_MESSAGE_CHARS]}... [truncated]"
+    if len(prompt_to_run) > MAX_MESSAGE_CHARS:
+        prompt_to_run = f"{prompt_to_run[:MAX_MESSAGE_CHARS]}... [truncated]"
 
-        st.session_state[chat_key].append({"role": "user", "content": prompt_to_run})
-        del st.session_state[chat_key][:-MAX_CHAT_HISTORY]
+    st.session_state[chat_key].append({"role": "user", "content": prompt_to_run})
+    del st.session_state[chat_key][:-MAX_CHAT_HISTORY]
 
-        with st.chat_message("user"):
-            st.markdown(prompt_to_run)
+    with st.chat_message("user"):
+        st.markdown(prompt_to_run)
 
-        with st.chat_message("assistant"):
-            with st.spinner("Gemini is analyzing your data..."):
-                try:
-                    reply = chat_with_gemini_dataset(
-                        api_key=api_key,
+    with st.chat_message("assistant"):
+        spinner_msg = (
+            "Generating sandboxed code & evaluating query via Gemini..."
+            if api_key
+            else "Executing local statistical diagnostics (Air-Gapped)..."
+        )
+        with st.spinner(spinner_msg):
+            try:
+                if api_key:
+                    res = run_neuro_symbolic_query(
                         df=ai_df,
+                        query=prompt_to_run,
+                        api_key=api_key,
+                        model_name=chosen_model,
                         dataset_name=selected_file,
-                        messages=st.session_state[chat_key],
-                        model_name=chosen_model
                     )
-                    st.markdown(reply)
-                    st.session_state[chat_key].append({"role": "assistant", "content": reply})
-                    del st.session_state[chat_key][:-MAX_CHAT_HISTORY]
-                except GeminiError as e:
-                    st.error(f"Gemini error — {e}")
-                except Exception as e:
-                    logger.warning("chat failed: %s: %s", type(e).__name__, e)
-                    st.error(f"Error: {str(e)}")
-                finally:
-                    if release("gemini", keep_key="gemini_keep"):
-                        st.toast("Gemini key released from session state.")
+                else:
+                    res = run_local_deterministic_query(df=ai_df, query=prompt_to_run)
+
+                st.caption(f"**Execution Engine:** `{res.engine}`")
+                st.markdown(res.insights)
+                if res.fig is not None:
+                    st.plotly_chart(res.fig, use_container_width=True)
+                if res.result_df is not None and not res.result_df.empty:
+                    st.dataframe(res.result_df, use_container_width=True)
+                if res.code:
+                    with st.expander("Inspected & Verified Python Code"):
+                        st.code(res.code, language="python")
+
+                assistant_msg = {
+                    "role": "assistant",
+                    "content": res.insights,
+                    "engine": res.engine,
+                    "code": res.code,
+                    "fig": res.fig,
+                    "result_df": res.result_df,
+                    "result_metric": res.result_metric,
+                }
+                st.session_state[chat_key].append(assistant_msg)
+                del st.session_state[chat_key][:-MAX_CHAT_HISTORY]
+            except Exception as e:
+                logger.warning("Query execution failed: %s: %s", type(e).__name__, e)
+                st.error(f"Execution Error: {str(e)}")
+            finally:
+                if api_key and release("gemini", keep_key="gemini_keep"):
+                    st.toast("Gemini key released from session state.")

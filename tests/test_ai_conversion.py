@@ -22,10 +22,11 @@ from pathlib import Path
 import pandas as pd
 from streamlit.testing.v1 import AppTest
 
-from Utils.paths import DATASETS_DIR, MAX_COMBINED_ROWS, compute_upload_signature as _compute_upload_signature
 from Utils.AIConvert import parse_ai_csv
 from Utils.Charts import create_bar_count_plot, create_pie_treemap_plot
 from Utils.ML import train_and_evaluate_model
+from Utils.paths import DATASETS_DIR, MAX_COMBINED_ROWS
+from Utils.paths import compute_upload_signature as _compute_upload_signature
 
 
 class UploadSignatureAdversarialTests(unittest.TestCase):
@@ -380,10 +381,7 @@ class UploadPostAICombinedRowLimitTests(unittest.TestCase):
         # Ensure the resource check prevents merge_frames from being invoked
         with unittest.mock.patch("Utils.batch.merge_frames") as mock_merge:
             # Emulate logic from Pages/Upload.py
-            if total_rows > MAX_COMBINED_ROWS:
-                merged_df = None
-            else:
-                merged_df = mock_merge(parsed)
+            merged_df = None if total_rows > MAX_COMBINED_ROWS else mock_merge(parsed)
             self.assertIsNone(merged_df)
             mock_merge.assert_not_called()
 
@@ -526,7 +524,6 @@ class UploadMixedBatchLifecycleTests(unittest.TestCase):
 
 import unittest
 import unittest.mock
-
 
 from Utils.paths import (
     MAX_INGESTION_ROWS,
@@ -829,6 +826,7 @@ class OversizedMergeRerunAppTest(unittest.TestCase):
 
     def setUp(self):
         import tempfile
+
         from Utils import paths
         self.orig_datasets_dir = paths.DATASETS_DIR
         self.temp_dir = tempfile.mkdtemp()
@@ -842,6 +840,7 @@ class OversizedMergeRerunAppTest(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         from Utils import paths
         paths.DATASETS_DIR = self.orig_datasets_dir
         if self.orig_upload_datasets_dir is not None:

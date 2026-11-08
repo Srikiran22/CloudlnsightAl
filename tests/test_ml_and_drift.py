@@ -4,33 +4,46 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
 
-from Utils.paths import (
-    get_unique_filename, enforce_size_limit, MAX_UPLOAD_BYTES,
-    record_conversion, get_valid_conversion, read_tabular,
-    DATASETS_DIR, ensure_project_directories,
-)
 from Utils.AIConvert import _field_count_quote_aware
-from Utils.dataset_ui import (
-    dataset_fingerprint, dataframe_fingerprint, load_dataset_cached,
-)
-from Utils.Gemini import (
-    DEFAULT_GEMINI_MODEL, GEMINI_MODELS, resolve_gemini_model,
-    chat_with_gemini_dataset,
-)
-from Utils.ML import (
-    train_and_evaluate_model, save_trained_model, load_trained_model,
+from Utils.Charts import (
+    create_correlation_heatmap,
+    create_line_chart,
+    create_pie_treemap_plot,
 )
 from Utils.compare_logic import column_drift_rows
-from Utils.Charts import (
-    create_line_chart, create_pie_treemap_plot, create_correlation_heatmap,
+from Utils.dataset_ui import (
+    dataframe_fingerprint,
+    dataset_fingerprint,
+    load_dataset_cached,
 )
-from Utils.quality import quality_metrics, quality_index
+from Utils.Gemini import (
+    DEFAULT_GEMINI_MODEL,
+    GEMINI_MODELS,
+    chat_with_gemini_dataset,
+    resolve_gemini_model,
+)
+from Utils.ML import (
+    load_trained_model,
+    save_trained_model,
+    train_and_evaluate_model,
+)
+from Utils.paths import (
+    DATASETS_DIR,
+    MAX_UPLOAD_BYTES,
+    enforce_size_limit,
+    ensure_project_directories,
+    get_unique_filename,
+    get_valid_conversion,
+    read_tabular,
+    record_conversion,
+)
 from Utils.PDF import generate_pdf_report
+from Utils.quality import quality_index, quality_metrics
 
 ensure_project_directories()
 
@@ -306,6 +319,7 @@ class GeminiHardeningTests(unittest.TestCase):
 
     def test_ai_convert_uses_default_gemini_model(self):
         import inspect
+
         from Utils.AIConvert import convert_to_dataframe
         sig = inspect.signature(convert_to_dataframe)
         self.assertEqual(sig.parameters["model_name"].default, DEFAULT_GEMINI_MODEL)
@@ -324,6 +338,7 @@ class GeminiHardeningTests(unittest.TestCase):
     def test_new_sdk_client_fails_closed_when_timeout_unsupported(self):
         import sys
         import types
+
         from Utils.Gemini import GeminiError, _new_sdk_client
         fake_genai = types.ModuleType("google.genai")
         class OldClient:
@@ -345,6 +360,7 @@ class GeminiHardeningTests(unittest.TestCase):
 
     def test_generate_once_fails_closed_when_genai_missing(self):
         import sys
+
         from Utils.Gemini import GeminiError, _generate_once
         with patch.dict(sys.modules, {"google.genai": None}):
             with self.assertRaises(GeminiError) as ctx:
@@ -353,8 +369,9 @@ class GeminiHardeningTests(unittest.TestCase):
             self.assertFalse(ctx.exception.retryable)
 
     def test_primary_google_genai_sdk_client_initialization(self):
-        from Utils.Gemini import _new_sdk_client, REQUEST_TIMEOUT_SECONDS
         import google.genai as genai
+
+        from Utils.Gemini import REQUEST_TIMEOUT_SECONDS, _new_sdk_client
         client = _new_sdk_client("fake-key-0123456789")
         self.assertIsInstance(client, genai.Client)
         http_opts = getattr(client._api_client, "_http_options", None)
@@ -468,6 +485,7 @@ class ComparisonAndAnalyticsTests(unittest.TestCase):
 class DependencyCompatibilityTests(unittest.TestCase):
     def test_streamlit_minimum_version_and_stretch_width(self):
         import inspect
+
         import streamlit as st
         # Requirements specify streamlit>=1.52.0 for width="stretch" support
         version_parts = [int(p) for p in st.__version__.split(".")[:2]]
@@ -485,10 +503,10 @@ class DependencyCompatibilityTests(unittest.TestCase):
 
 import unittest
 
-from Utils.paths import _reject_dtd
 from Utils.AIConvert import _split_into_chunks, reconcile_chunk_frames
-from Utils.dataset_ui import BoundedDatasetMemoryCache
 from Utils.Charts import downsample_timeseries
+from Utils.dataset_ui import BoundedDatasetMemoryCache
+from Utils.paths import _reject_dtd
 
 
 class TestBoundedJSONParsing(unittest.TestCase):
@@ -502,8 +520,8 @@ class TestBoundedJSONParsing(unittest.TestCase):
         payload = (valid_part + malformed_tail).encode("utf-8")
 
         # Full json.loads must fail on malformed tail
-        with self.assertRaises(Exception):
-            import json
+        import json
+        with self.assertRaises(json.JSONDecodeError):
             json.loads(payload.decode("utf-8"))
 
         # Streaming parser with max_rows=2 must succeed and yield exactly 2 rows
@@ -516,8 +534,8 @@ class TestBoundedJSONParsing(unittest.TestCase):
         # Columnar JSON with valid start and malformed tail
         payload = b'{"col_a": [1, 2, 3, 4, 5], "col_b": [10, 20, 30, 40, 50], TRUNCATED_TAIL'
 
-        with self.assertRaises(Exception):
-            import json
+        import json
+        with self.assertRaises(json.JSONDecodeError):
             json.loads(payload.decode("utf-8"))
 
         df = read_tabular(payload, filename="columnar_stream.json", max_rows=3)
@@ -799,7 +817,7 @@ class TestAtomicFilenameReservation(unittest.TestCase):
     """Concurrency-safe atomic kernel filesystem reservations."""
 
     def test_concurrent_reservations_do_not_collide(self):
-        from Utils.paths import get_unique_filename, release_filename_reservation, atomic_write
+        from Utils.paths import atomic_write, get_unique_filename, release_filename_reservation
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
             f1 = get_unique_filename("data.csv", directory=tmp_path)
@@ -840,7 +858,7 @@ class TestChartHueAndCategoryCapping(unittest.TestCase):
     """High-cardinality hue and category capping preventing UI hang."""
 
     def test_histogram_and_box_plots_cap_high_cardinality(self):
-        from Utils.Charts import create_histogram_plot, create_box_violin_plot
+        from Utils.Charts import create_box_violin_plot, create_histogram_plot
         np.random.seed(42)
         df = pd.DataFrame({
             "val": np.random.randn(500),
@@ -895,9 +913,10 @@ class TestCredentialSessionStateSecurity(unittest.TestCase):
     """Honest session state security terminology."""
 
     def test_secrets_terminology_and_clearing(self):
-        from Utils.secrets import release
         from types import SimpleNamespace
         from unittest.mock import patch
+
+        from Utils.secrets import release
         state = {"gemini_secret": "secret_abc", "gemini_ver": 0}
         with patch("Utils.secrets.st", SimpleNamespace(session_state=state)):
             cleared = release("gemini")
