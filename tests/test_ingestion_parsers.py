@@ -93,15 +93,33 @@ class PathsHardeningTests(unittest.TestCase):
         self.assertLessEqual(len(ctx.exception.raw_text), MAX_TEXT_EXTRACT_CHARS)
 
     def test_excel_zip_bomb_check_catches_suspicious_archive(self):
-        """_check_zip_bomb rejects zip files with excessive uncompressed size."""
+        """_check_zip_bomb rejects zip files with excessive uncompressed size or expansion ratio."""
         import zipfile
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("xl/worksheets/sheet1.xml", b"0" * 2000)
-        buf.seek(0)
-        with self.assertRaises(ValueError) as ctx:
-            _check_zip_bomb(buf, max_uncompressed_bytes=500)
-        self.assertIn("safety limit", str(ctx.exception).lower())
+
+        # 1. Assert uncompressed size limit (e.g. 100 MB ceiling)
+        buf_size = io.BytesIO()
+        with zipfile.ZipFile(buf_size, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("xl/worksheets/sheet1.xml", b"0" * (105 * 1024 * 1024))
+        buf_size.seek(0)
+        with self.assertRaises(ValueError) as ctx_size:
+            _check_zip_bomb(buf_size, max_uncompressed_bytes=100 * 1024 * 1024)
+        self.assertIn("exceeds safety limit of 100 mb", str(ctx_size.exception).lower())
+
+        # 2. Assert expansion ratio limit (>100:1 ratio and >50 MB uncompressed)
+        buf_ratio = io.BytesIO()
+        with zipfile.ZipFile(buf_ratio, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("xl/worksheets/sheet1.xml", b"0" * (55 * 1024 * 1024))
+        buf_ratio.seek(0)
+        with self.assertRaises(ValueError) as ctx_ratio:
+            _check_zip_bomb(buf_ratio, max_uncompressed_bytes=100 * 1024 * 1024, max_ratio=100.0)
+        self.assertIn("expansion ratio", str(ctx_ratio.exception).lower())
+
+        # 3. Control case: small normal archive passes without error
+        buf_control = io.BytesIO()
+        with zipfile.ZipFile(buf_control, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("xl/worksheets/sheet1.xml", b"x" * 1024)
+        buf_control.seek(0)
+        _check_zip_bomb(buf_control, max_uncompressed_bytes=100 * 1024 * 1024, max_ratio=100.0)
 
     def test_atomic_write_success_and_cleanup(self):
         """atomic_write safely writes files and cleans up temp files upon failure."""
