@@ -27,7 +27,7 @@ logger = get_logger("ML_Page")
 
 page_header(
     "Model Studio & Training",
-    "Train, evaluate, and benchmark Scikit-Learn classification and regression models with leak-free cross-validation.",
+    "Train, evaluate, and benchmark Scikit-Learn classification and regression models with cross-validation.",
     badge="MACHINE LEARNING"
 )
 
