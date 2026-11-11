@@ -1,8 +1,8 @@
 # CloudInsight AI
 
-> **A local-first, privacy-governed analytical workbench for bounded tabular ingestion, statistical hypothesis auditing, leak-free AutoML modeling, and cryptographic artifact verification.**
+> **A local-first, privacy-governed analytical workbench for bounded tabular ingestion, statistical hypothesis auditing, scikit-learn pipeline modeling, and cryptographic artifact verification.**
 
-CloudInsight AI is an enterprise-grade tabular analytics and machine learning studio engineered to operate strictly within a secure local workstation sandbox (`127.0.0.1:8501`). Designed to eliminate data residency risks associated with multi-tenant SaaS platforms, it enforces hard ingestion ceilings (200 MB files, 20M cells, 400 MB DataFrame RAM), executes non-parametric distribution drift tests (Kolmogorov-Smirnov with Benjamini-Hochberg FDR control, Total Variation Distance), trains leak-free Scikit-Learn pipelines via 5-fold cross-validation, and secures serialized model artifacts with HMAC-SHA256 tamper-evident cryptographic signatures. External AI interaction via Google Gemini is entirely optional, strictly ephemeral in memory, and guarded by automated PII and identifier screening.
+CloudInsight AI is a tabular analytics and machine learning application that runs locally on a workstation (`127.0.0.1:8501`). Designed to eliminate data residency risks associated with multi-tenant SaaS platforms, it enforces hard ingestion ceilings (200 MB files, 20M cells, 400 MB DataFrame RAM), executes distribution drift tests (Kolmogorov-Smirnov with Benjamini-Hochberg FDR control, Total Variation Distance), trains scikit-learn pipelines with 5-fold cross-validation, and secures serialized model artifacts with HMAC-SHA256 cryptographic signatures. External AI interaction via Google Gemini is optional, in-memory only, and guarded by automated PII and identifier screening.
 
 ---
 
@@ -27,7 +27,7 @@ flowchart LR
         EDA["Statistical Diagnostics &\nPeak-Preserving Charts"]
         Drift["Drift Engine\n(KS + BH-FDR & TVD)"]
         ML["Scikit-Learn AutoML Pipelines\n(HMAC-SHA256 Signed .joblib)"]
-        PDF["ReportLab PDF Generator\n(Publication-Grade Reports)"]
+        PDF["ReportLab PDF Generator\n(PDF Reports)"]
         GenAI["Gemini Insights & Chat\n(PII-Screened Context)"]
     end
 
@@ -79,7 +79,7 @@ CloudInsight AI enforces centralized resource boundaries in `Utils/limits.py` to
 | `MAX_DATAFRAME_MEMORY_BYTES` | **400 MB** (419,430,400 B) | `Utils/limits.py`, `Utils/parsing.py` | Deep memory inspection ceiling (`df.memory_usage(deep=True).sum()`); fails closed if object overhead exceeds RAM budget. |
 | `MAX_HIGH_CARDINALITY_STRING_CELLS` | **5,000,000 cells** | `Utils/parsing.py::read_tabular` | Pre-allocation guard against high-cardinality string columns which incur massive pointer indirection overhead in CPython. |
 | `MAX_MODEL_FILE_SIZE` | **100 MB** (104,857,600 B) | `Utils/ML.py::load_trained_model` | Model deserialization guard; rejects bloated binary archives before HMAC verification. |
-| `MAX_VISUALIZATION_ROWS` | **25,000 rows** | `Utils/sampling.py::sample_for_chart` | Interactive Plotly rendering limit; downsamples continuous series via Largest Triangle Three Buckets (LTTB) / stratified sampling to maintain 60 FPS UI responsiveness. |
+| `MAX_VISUALIZATION_ROWS` | **25,000 rows** | `Utils/sampling.py::sample_for_visualization` | Interactive Plotly rendering limit; selects a deterministic uniform pseudo-random sample (`df.sample(n=25000, random_state=42)`) when row count exceeds the ceiling to maintain UI responsiveness. |
 | `MAX_ANALYSIS_ROWS` | **50,000 rows** | `Utils/compare_logic.py` | Statistical diagnostics and drift computation ceiling (`COMPARE_MAX_ANALYSIS_ROWS`); bounds $O(N \log N)$ sorting and pairwise distance operations. |
 | **Decompression Ratio Ceiling** | **100:1 ratio** (100 MB uncompressed) | `Utils/paths.py::_check_zip_bomb` | Pre-extraction inspection of `.xlsx` archive headers to defend against recursive decompression bombs. |
 
@@ -105,25 +105,31 @@ CloudInsight AI enforces centralized resource boundaries in `Utils/limits.py` to
 - Correlation matrices (Pearson and Spearman) with significance filtering.
 - Variance Inflation Factor (VIF) multicollinearity auditing.
 - Group hypothesis testing (One-Way ANOVA F-tests).
-- Publication-ready Plotly visualizations: histograms, box/violin plots, scatter/bubble plots with OLS trendlines, downsampled time series (25k points), and composition treemaps.
+- Plotly visualizations: histograms, box/violin plots, scatter/bubble plots with OLS trendlines, sampled time series (25k points), and treemaps.
 
 ### 3.6 AutoML Studio & Cryptographic Artifact Verification
 - Automatic problem framing (binary/multi-class classification vs. continuous regression).
 - Algorithms: Random Forest, Gradient Boosting, Decision Trees, Logistic Regression, Linear Regression, Ridge Regression.
-- **Leak-Free Pipelines:** Preprocessing is strictly encapsulated in scikit-learn `Pipeline` and `ColumnTransformer` objects.
-- **Validation:** 5-fold cross-validation with standard deviation bounds, compared against naive majority or mean dummy baselines. Supports `TimeSeriesSplit` for chronological sequences.
+- **Pipeline Encapsulation:** Preprocessing is encapsulated in scikit-learn `Pipeline` and `ColumnTransformer` objects.
+- **Validation:** 5-fold cross-validation with standard deviation bounds, compared against dummy baselines. Supports `TimeSeriesSplit` for chronological sequences.
 - **HMAC-SHA256 Signing:** Model bundles serialized via `joblib` are signed with HMAC-SHA256. Unsigned or modified bundles are rejected before deserialization to eliminate arbitrary code execution risks.
 - **Batch Inference:** Predict on new datasets with automated category drift warnings.
 
-### 3.7 Executive PDF Reporting
-- Compiles publication-ready PDF audit reports via ReportLab.
+### 3.7 PDF Reporting
+- Compiles PDF audit reports via ReportLab.
 - Embeds Data Hygiene Index gauges, descriptive statistics, outlier tables, correlation matrices, and optional high-DPI matplotlib figures.
 - Reusable report template configurations with overwrite guards.
 
-### 3.8 AI Assistant & Conversational Q&A (Optional)
-- Executive dataset insights and natural language chat powered by Google Gemini.
-- PII screening heuristically detects emails, phone numbers, credit cards, IBANs, and identifiers (`customer_id`, `ssn`, `uuid`), auto-excluding them from AI context.
-- Ephemeral in-memory API key handling (`st.session_state`).
+### 3.8 AI Assistant, Code Execution & Conversational Analysis (Optional)
+- Dataset insights and natural language dialogue powered by Google Gemini with local offline fallback.
+- **Dual Query Engines:**
+  - Online Neuro-Symbolic Engine (`Utils/ai_agent.py::run_neuro_symbolic_query`): Requests Python/pandas snippets from Gemini and executes them inside an AST-filtered scope (`Utils/ai_sandbox.py::execute_sandboxed_code`).
+  - Air-Gapped Local Deterministic Engine (`Utils/ai_agent.py::run_local_deterministic_query`): Operates offline without external network calls, computing descriptive statistics, correlation matrices, and distributions via local pandas/numpy algorithms.
+- **AST Code Execution Guardrail & Limitations:**
+  - AST filtering before `exec()` inspects code syntax trees to reject dynamic imports (`import`, `__import__`), dunder attribute access (`__`), and banned functions (`eval`, `exec`, `open`, `compile`, `os`, `sys`).
+  - **Important:** AST static filtering is a best-effort guardrail, not an operating system isolation boundary or secure sandbox. It does not stop CPU exhaustion (infinite loops), excessive memory allocation, algorithmic complexity denial of service, thread blocking, or object traversal through exposed DataFrame/Series methods.
+- **PII and Identifier Screening:** Heuristically detects emails, phone numbers, credit cards (Luhn valid), IBANs, and identifiers (`customer_id`, `ssn`, `uuid`), auto-excluding them from AI prompt context.
+- **Credential Lifecycle:** In-memory API key handling via `st.session_state` and `temporary_secret` context managers; keys do not touch disk or logs.
 
 ---
 
@@ -144,7 +150,7 @@ CloudInsight AI enforces centralized resource boundaries in `Utils/limits.py` to
 | **AI & Gemini Assistant**| AI Summary & Insights | Statistical summaries and natural language executive diagnostics |
 | **AI & Gemini Assistant**| Ask AI (Chat) | Conversational dataset Q&A with PII-screened context boundaries |
 | **Audit & Reports** | Dataset Drift & Compare | Kolmogorov-Smirnov test (BH-FDR corrected) & TVD drift analysis |
-| **Audit & Reports** | Data Science Audit Report | Publication-ready PDF audit report compilation and templates |
+| **Audit & Reports** | Data Science Audit Report | PDF audit report compilation and templates |
 
 ---
 
@@ -183,26 +189,24 @@ Open `http://localhost:8501` in your browser.
 
 ## 6. Testing, Quality Assurance & Offline Verification
 
-CloudInsight AI maintains an 8-module, >470-test suite executed **100% offline** without requiring external network connectivity or live AI API keys (all external endpoints are strictly mocked at the boundary):
+CloudInsight AI maintains a test suite executed offline without requiring external network connectivity or live AI API keys (external endpoints are mocked at the boundary):
 
 ```bash
-# Run full test suite with pytest (primary runner)
-pytest tests/ -v
-
-# Run full test suite with test coverage analysis
-pytest tests/ --cov=Utils --cov=Pages --cov=App --cov-report=term-missing
-
-# Run headless Streamlit AppTest smoke checks (verifies all 13 pages boot with zero exceptions)
-pytest tests/test_page_smoke.py -v
-
-# Run adversarial security boundary checks (XXE, zip bombs, formula injection, HMAC tampering)
-pytest tests/test_security_boundaries.py -v
-
-# Run statistical diagnostics, drift engine (KS, BH-FDR, TVD), and AutoML pipeline tests
-pytest tests/test_ml_and_drift.py -v
-
-# Alternative execution via standard library unittest (zero test dependencies)
+# Run full test suite with standard library unittest
 python -m unittest discover -s tests -v
+
+# Run test suite with coverage reporting
+coverage run -m unittest discover -s tests
+coverage report --show-missing
+
+# Run headless Streamlit AppTest smoke checks
+python -m unittest tests/test_page_smoke.py -v
+
+# Run security boundary checks (XXE, zip decompression, formula injection, HMAC tampering)
+python -m unittest tests/test_security_boundaries.py -v
+
+# Run statistical diagnostics, drift tests, and model pipeline tests
+python -m unittest tests/test_ml_and_drift.py -v
 ```
 
 *For test architecture, coverage configs, and mock boundaries, see [docs/TESTING.md](docs/TESTING.md).*
@@ -218,7 +222,7 @@ python -m unittest discover -s tests -v
 - **Injection Defenses:** Hardened against XXE, zip decompression bombs, and CSV formula injection.
 - **Privacy Shield:** PII detection flags sensitive columns before transmission to external AI services.
 
-*For threat models, attack payloads, and OWASP ASVS verification details, see [docs/SECURITY.md](docs/SECURITY.md).*
+*For threat models, attack payloads, and OWASP ASVS verification details, see [SECURITY.md](SECURITY.md).*
 
 ---
 
@@ -227,7 +231,7 @@ python -m unittest discover -s tests -v
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — System architecture, C4 diagrams, and component breakdown.
 - [docs/SETUP.md](docs/SETUP.md) — Local installation, virtual environment setup, and troubleshooting.
 - [docs/TESTING.md](docs/TESTING.md) — Test suite organization, headless smoke checks, and coverage.
-- [docs/SECURITY.md](docs/SECURITY.md) — Threat modeling, cryptographic model signing, and injection defenses.
+- [SECURITY.md](SECURITY.md) — Threat modeling, cryptographic model signing, and injection defenses.
 - [docs/API.md](docs/API.md) — Internal API reference and module contracts.
 - [AUDIT_REPORT.md](AUDIT_REPORT.md) — Senior engineering audit report with P0–P3 classifications.
 - [PROJECT_WALKTHROUGH.md](PROJECT_WALKTHROUGH.md) — Recruiter and engineering interview walkthrough brief.
