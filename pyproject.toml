@@ -7,6 +7,7 @@ name = "cloudinsight-ai"
 version = "2.2.0"
 description = "Analytics workspace for ingesting, understanding, and modeling tabular data with Gemini-assisted conversion."
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.12"
 authors = [
     { name = "Srikiran" }
@@ -19,6 +20,12 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Information Analysis",
     "Security :: Security Evaluation",
 ]
+
+[tool.setuptools.packages.find]
+include = ["Utils*", "Pages*"]
+
+[tool.setuptools]
+py-modules = ["App"]
 
 [tool.ruff]
 line-length = 120
