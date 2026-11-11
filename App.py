@@ -1,3 +1,7 @@
+import tomllib
+from importlib import metadata
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -8,6 +12,26 @@ from Utils.paths import DATASETS_DIR, atomic_write
 from Utils.theme import apply_theme, brand_logo_svg, section_card_header
 
 logger = get_logger("App")
+
+
+def _get_version() -> str:
+    """Resolve package version from distribution metadata or pyproject.toml."""
+    try:
+        return metadata.version("cloudinsight-ai")
+    except metadata.PackageNotFoundError:
+        pyproject_path = Path(__file__).resolve().parent / "pyproject.toml"
+        if pyproject_path.is_file():
+            with open(pyproject_path, "rb") as fp:
+                data = tomllib.load(fp)
+                version = data.get("project", {}).get("version")
+                if version:
+                    return str(version)
+        raise RuntimeError(
+            "Could not resolve package version from distribution metadata or pyproject.toml"
+        ) from None
+
+
+app_version = _get_version()
 
 st.set_page_config(
     page_title="CloudInsight | Data Science Studio",
@@ -102,17 +126,17 @@ def render_home() -> None:
     # Workspace Header Card
     with st.container(border=True):
         st.markdown(
-            """
+            f"""
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
               <h1 style="margin: 0; font-size: 1.65rem; font-weight: 750; letter-spacing: -0.02em;">
                 CloudInsight <span style="color: var(--ci-accent);">Data Science Studio</span>
               </h1>
               <span style="font-size: 0.78rem; font-weight: 650; padding: 4px 10px; border-radius: 999px; background: var(--ci-tint); border: 1px solid var(--ci-border); color: var(--ci-accent);">
-                PRODUCTION WORKBENCH v2.2
+                v{app_version}
               </span>
             </div>
             <p style="margin: 0.2rem 0 0 0; color: var(--ci-text-2); font-size: 0.95rem; line-height: 1.55;">
-              A local-first analytics & machine learning workbench for rigorous data profiling, statistical hypothesis testing, automated feature engineering, leak-free Scikit-Learn model pipelines, and audit reporting.
+              A local-first analytics and machine learning workbench for data profiling, statistical hypothesis testing, automated feature engineering, scikit-learn model pipelines, and audit reporting.
             </p>
             """,
             unsafe_allow_html=True,
@@ -158,15 +182,15 @@ def render_home() -> None:
                 2. **Data Profiling & Hygiene** — Evaluate completeness, uniqueness, duplicate patterns, and composite Data Hygiene Index.
                 3. **Data Cleaning & Imputation** — Statistical imputation (mean/median/constant/complete-case), outlier screening (Tukey IQR, Z-score bounds), and sanitized catalog export.
                 4. **Feature Engineering Studio** — Standard/MinMax/Robust scalers, categorical encodings, log transforms, and Mutual Information feature selection.
-                5. **Exploratory Analysis & Visuals** — Statistical tests, correlation matrices with significance filtering, and publication-ready Plotly charts.
-                6. **Machine Learning & Inference** — Train, validate, and compare classification or regression algorithms with leak-free cross-validation, batch prediction, and executive PDF reports.
+                5. **Exploratory Analysis & Visuals** — Statistical tests, correlation matrices with significance filtering, and Plotly charts.
+                6. **Machine Learning & Inference** — Train, validate, and compare classification or regression algorithms with cross-validation, batch prediction, and PDF reports.
                 """
             )
     with right:
         with st.container(border=True):
             section_card_header("Quick Start Benchmarks", "Instant domain datasets for exploration")
             st.markdown(
-                "Load production-grade benchmark datasets to evaluate modeling, data cleaning, and statistical drift:"
+                "Load benchmark datasets to evaluate modeling, data cleaning, and statistical drift:"
             )
 
             if st.button(
