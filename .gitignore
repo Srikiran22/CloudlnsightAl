@@ -99,6 +99,7 @@ logs/
 *.tmp
 *.temp
 tmp/
+*VERIFICATION_REPORT*
 
 # Antigravity / AI assistant / indexing caches
 .agent/
