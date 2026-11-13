@@ -1,17 +1,19 @@
-import streamlit as st
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import streamlit as st
 
+from Utils.Charts import create_box_violin_plot, create_histogram_plot, create_hygiene_gauge
 from Utils.dataset_ui import dataframe_fingerprint, render_sidebar, select_working_dataset
 from Utils.quality import quality_metrics
-from Utils.Charts import create_histogram_plot, create_box_violin_plot, create_hygiene_gauge
 from Utils.sampling import sample_for_visualization
-from Utils.theme import chart_palette, page_header, section_card_header, metric_card
+from Utils.theme import chart_palette, metric_card, page_header, section_card_header
 
 page_header(
     "Data Health & Profiler",
-    "Overall data hygiene score, structural integrity audit, missingness matrix, and interactive slice-and-dice filter.",
+    "Composite Data Hygiene Index, structural completeness diagnostics, null pattern matrix, and interactive slice-and-dice partitioning.",
     badge="DATA AUDIT"
 )
 
@@ -33,30 +35,28 @@ health_index = metrics["index"]
 
 col_gauge_card, col_metrics_card = st.columns([1.2, 1.8])
 
-with col_gauge_card:
-    with st.container(border=True):
-        section_card_header("Data Hygiene Index", "Composite quality score (completeness & uniqueness)")
-        st.plotly_chart(create_hygiene_gauge(health_index), width="stretch", theme="streamlit")
+with col_gauge_card, st.container(border=True):
+    section_card_header("Data Hygiene Index", "Composite quality score (completeness & uniqueness)")
+    st.plotly_chart(create_hygiene_gauge(health_index), width="stretch", theme="streamlit")
 
-with col_metrics_card:
-    with st.container(border=True):
-        section_card_header("Quality & Hygiene Audit", f"Structural diagnostics for `{selected_file}`")
-        kpi_r1_1, kpi_r1_2, kpi_r1_3 = st.columns(3)
-        with kpi_r1_1:
-            metric_card("Completeness", f"{completeness_score:.1f}%", subtext="Non-null cell ratio")
-        with kpi_r1_2:
-            metric_card("Uniqueness", f"{uniqueness_score:.1f}%", subtext="Distinct row ratio")
-        with kpi_r1_3:
-            metric_card("Total Rows", f"{rows:,}", subtext=f"{cols} attributes")
+with col_metrics_card, st.container(border=True):
+    section_card_header("Quality & Hygiene Audit", f"Structural diagnostics for `{selected_file}`")
+    kpi_r1_1, kpi_r1_2, kpi_r1_3 = st.columns(3)
+    with kpi_r1_1:
+        metric_card("Completeness", f"{completeness_score:.1f}%", subtext="Non-null cell ratio")
+    with kpi_r1_2:
+        metric_card("Uniqueness", f"{uniqueness_score:.1f}%", subtext="Distinct row ratio")
+    with kpi_r1_3:
+        metric_card("Total Rows", f"{rows:,}", subtext=f"{cols} attributes")
 
-        kpi_r2_1, kpi_r2_2, kpi_r2_3 = st.columns(3)
-        with kpi_r2_1:
-            metric_card("Missing Cells", f"{missing_cells:,}", subtext="Null / NaN values")
-        with kpi_r2_2:
-            metric_card("Duplicate Rows", f"{dup_rows:,}", subtext="Exact identical rows")
-        with kpi_r2_3:
-            mem_mb = df.memory_usage(deep=True).sum() / (1024 * 1024) if not df.empty else 0.0
-            metric_card("Memory Footprint", f"{mem_mb:.2f} MB", subtext="Deep RAM usage")
+    kpi_r2_1, kpi_r2_2, kpi_r2_3 = st.columns(3)
+    with kpi_r2_1:
+        metric_card("Missing Cells", f"{missing_cells:,}", subtext="Null / NaN values")
+    with kpi_r2_2:
+        metric_card("Duplicate Rows", f"{dup_rows:,}", subtext="Exact identical rows")
+    with kpi_r2_3:
+        mem_mb = df.memory_usage(deep=True).sum() / (1024 * 1024) if not df.empty else 0.0
+        metric_card("Memory Footprint", f"{mem_mb:.2f} MB", subtext="Deep RAM usage")
 
 tab_profiler, tab_filter, tab_dist = st.tabs([
     "Column Profiler & Missingness",
@@ -85,7 +85,7 @@ with tab_profiler:
             "Cardinality": ["Single Value (Constant)" if u == 1 else "Binary (2)" if u == 2 else "Low (3-20)" if u <= 20 else "High (>20)" for u in uniques.values]
         }).sort_values(by="Missing Count", ascending=False)
 
-        def style_missing(series):
+        def style_missing(series: pd.Series) -> list[str]:
             styles = []
             for val in series:
                 if val > 15:
@@ -113,10 +113,10 @@ with tab_profiler:
                 color="Missing %",
                 color_continuous_scale="Reds",
             )
-            fig_miss.update_layout(height=280, margin=dict(l=20, r=20, t=40, b=20))
+            fig_miss.update_layout(height=280, margin={"l": 20, "r": 20, "t": 40, "b": 20})
             st.plotly_chart(fig_miss, width="stretch", theme="streamlit")
         else:
-            st.success("Perfect data integrity: zero missing values detected across all columns!")
+            st.success("Complete record matrix: zero missing values observed across all attributes.")
 
 
 # -----------------------------------------------------------------------------

@@ -1,16 +1,26 @@
+from __future__ import annotations
+
+import collections
 import hashlib
 import threading
+from html import escape
+from pathlib import Path
 from typing import Any
+
 import pandas as pd
 import streamlit as st
-from html import escape
 
 from Utils.logsys import get_logger
 from Utils.paths import (
+    DATASETS_DIR,
     _sanitize_unhashable_cells,
+    atomic_write,
+    get_unique_filename,
     list_dataset_files,
     read_dataset,
     resolve_dataset_path,
+    safe_stem,
+    sanitize_for_csv_export,
 )
 from Utils.theme import render_appearance_note
 
@@ -199,7 +209,6 @@ class BoundedDatasetMemoryCache:
     """
 
     def __init__(self, max_bytes=MAX_DATASET_CACHE_BYTES):
-        import collections
         self.max_bytes = max_bytes
         self.current_bytes = 0
         self._cache = collections.OrderedDict()
@@ -262,14 +271,6 @@ class BoundedDatasetMemoryCache:
 _DATASET_MEMORY_CACHE = BoundedDatasetMemoryCache()
 
 
-def get_cache_memory_stats():
-    return _DATASET_MEMORY_CACHE.stats()
-
-
-def clear_dataset_memory_cache():
-    _DATASET_MEMORY_CACHE.clear()
-
-
 def load_dataset_cached(dataset: str, max_rows: int | None = None) -> pd.DataFrame:
     path = resolve_dataset_path(dataset)
     fp = dataset_fingerprint(dataset)
@@ -299,7 +300,7 @@ def render_sidebar() -> None:
         else:
             st.markdown(
                 '<div class="ci-dataset"><div class="ci-dataset-meta">Nothing loaded yet — start at '
-                '<b>Import Files</b>.</div></div>',
+                '<b>Data Hub & Ingest</b>.</div></div>',
                 unsafe_allow_html=True,
             )
         render_appearance_note()
@@ -319,7 +320,7 @@ def select_working_dataset(
     options.extend(files)
 
     if not options:
-        st.warning("No dataset loaded. Ingest one on the **Import Files** page first.")
+        st.warning("No dataset loaded. Ingest one on the **Data Hub & Ingest** page first.")
         st.stop()
 
     selected_option = st.selectbox(selectbox_label, options)
@@ -362,3 +363,44 @@ def select_working_dataset(
     except Exception as error:
         st.error(f"Failed to load `{selected_option}`: {error}")
         st.stop()
+
+
+def save_and_activate_dataset(
+    df: pd.DataFrame,
+    filename: str,
+    sanitize: bool = True,
+) -> Path:
+    """Sanitize CSV formulas, write atomically to disk, and register in active session catalog.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Dataset to persist.
+    filename : str
+        Target or suggested filename (e.g. 'engineered_data.csv').
+    sanitize : bool, default True
+        Whether to neutralize CSV formula injection prefixes (=, +, -, @, \\t, \\r).
+
+    Returns
+    -------
+    Path
+        Absolute Path of the persisted dataset file in DATASETS_DIR.
+    """
+    if df is None:
+        raise ValueError("Cannot persist None DataFrame to catalog.")
+    stem = safe_stem(Path(filename).stem if filename else "dataset", fallback="dataset")
+    clean_name = f"{stem}.csv"
+
+    DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+    unique_name = get_unique_filename(clean_name, directory=DATASETS_DIR)
+    target_path = DATASETS_DIR / unique_name
+
+    out_df = sanitize_for_csv_export(df) if sanitize else df
+    csv_payload = out_df.to_csv(index=False)
+    atomic_write(target_path, csv_payload, mode="w", encoding="utf-8")
+
+    invalidate_dataset_cache(unique_name)
+    set_active_dataset(df, unique_name)
+
+    return target_path
+

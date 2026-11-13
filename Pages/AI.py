@@ -1,16 +1,27 @@
+from __future__ import annotations
+
 import hashlib
+
 import streamlit as st
 
-from Utils.Gemini import (
-    generate_executive_insights, chat_with_gemini_dataset,
-    GEMINI_MODELS, DEFAULT_GEMINI_MODEL, GeminiError, MAX_CHAT_HISTORY,
-    MAX_MESSAGE_CHARS, prune_ai_contexts,
+from Utils.ai_agent import (
+    apply_remediation_blueprint,
+    generate_autonomous_remediation_blueprint,
 )
-
-from Utils.privacy import apply_exclusions, detect_sensitive_columns
-from Utils.secrets import ask, value_of, keep_box, release, drop
-from Utils.logsys import get_logger
 from Utils.dataset_ui import dataframe_fingerprint, dataset_fingerprint, render_sidebar, select_working_dataset
+from Utils.Gemini import (
+    DEFAULT_GEMINI_MODEL,
+    GEMINI_MODELS,
+    MAX_CHAT_HISTORY,
+    MAX_MESSAGE_CHARS,
+    GeminiError,
+    chat_with_gemini_dataset,
+    generate_executive_insights,
+    prune_ai_contexts,
+)
+from Utils.logsys import get_logger
+from Utils.privacy import apply_exclusions, detect_sensitive_columns
+from Utils.secrets import ask, drop, keep_box, release, value_of
 from Utils.theme import page_header, section_card_header
 
 logger = get_logger("AI")
@@ -18,8 +29,9 @@ logger = get_logger("AI")
 MAX_TOTAL_CHAT_CHARS = 100_000
 
 page_header(
-    "AI Summary",
-    "Executive summaries, natural language diagnostics, and statistical insights over the active dataset."
+    "AI Summary & Insights",
+    "Executive summaries, natural language diagnostics, and statistical insights over the active dataset.",
+    badge="GOVERNED AI"
 )
 
 df, selected_file = select_working_dataset("Active dataset")
@@ -107,7 +119,7 @@ chat_key = f"chat_messages_{ctx_hash}"
 prune_ai_contexts(st.session_state, ctx_hash)
 
 
-def render_executive_summary():
+def render_executive_summary() -> None:
     with st.container(border=True):
         section_card_header(
             "Executive Data Summary",
@@ -118,7 +130,7 @@ def render_executive_summary():
             if not api_key:
                 st.error("Google Gemini API key is required to generate new insights. Enter your key in the sidebar.")
             else:
-                with st.spinner("Gemini is analyzing your dataset structure, metrics, and distributions..."):
+                with st.spinner("Generating statistical executive summary via Gemini API..."):
                     try:
                         insights_text = generate_executive_insights(
                             api_key=api_key,
@@ -131,7 +143,7 @@ def render_executive_summary():
                             "dataset_name": selected_file,
                             "dataset_fingerprint": active_fp,
                             "model_name": chosen_model,
-                            "excluded_cols": sorted(list(excluded_cols)),
+                            "excluded_cols": sorted(excluded_cols),
                             "ctx_hash": ctx_hash,
                             "text": insights_text,
                         }
@@ -156,7 +168,7 @@ def render_executive_summary():
             )
 
 
-def render_chat_tab():
+def render_chat_tab() -> None:
     st.markdown(
         "Ask questions about your dataset based on column structures, summary metrics, "
         "and sample records."
@@ -185,7 +197,7 @@ def render_chat_tab():
                 st.markdown(user_prompt)
 
             with st.chat_message("assistant"):
-                with st.spinner("Thinking..."):
+                with st.spinner("Synthesizing response from screened dataset context..."):
                     try:
                         reply = chat_with_gemini_dataset(
                             api_key=api_key,
@@ -211,12 +223,52 @@ def render_chat_tab():
                             st.toast("Gemini key released from session state.")
 
 
+def render_remediation_blueprint() -> None:
+    with st.container(border=True):
+        section_card_header(
+            "Autonomous Data Remediation & Engineering Blueprint",
+            "Deterministic diagnosis of data hygiene, outlier fences, skewness transforms, and one-click pipeline application"
+        )
+        bp = generate_autonomous_remediation_blueprint(df, selected_file)
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Data Hygiene Index", f"{bp.dhi_score:.1f} / 100")
+        with col2:
+            st.metric("Imputation Actions", f"{len(bp.imputation_plan)} features")
+        with col3:
+            st.metric("Winsorization Fences", f"{len(bp.outlier_clipping)} features")
+
+        st.markdown("#### Diagnostic Findings & Proposed Actions")
+        for item in bp.rationale:
+            st.markdown(f"- {item}")
+
+        st.markdown("---")
+        apply_col1, apply_col2 = st.columns([1.5, 1])
+        with apply_col1:
+            st.caption("Applying this blueprint deterministically cleans missing values, clips extreme outliers, and stabilizes variance.")
+            if st.button("Apply Remediation Blueprint to Pipeline", type="primary", key="apply_blueprint_btn"):
+                cleaned = apply_remediation_blueprint(df, bp)
+                st.session_state["fe_working_df"] = cleaned
+                st.session_state["current_df"] = cleaned
+                st.success(f"Successfully applied remediation! {len(cleaned):,} records sanitized and active in Feature Engineering pipeline.")
+        with apply_col2:
+            if bp.skew_transforms:
+                st.info(f"Log1p variance stabilization planned for: {', '.join(f'`{c}`' for c in bp.skew_transforms)}")
+
+
 has_chat_history = bool(st.session_state.get(chat_key))
 if has_chat_history:
-    tab_insights, tab_chat = st.tabs(["Executive summary", "Chat"])
+    tab_insights, tab_blueprint, tab_chat = st.tabs(["Executive summary", "Remediation Blueprint", "Chat"])
     with tab_insights:
         render_executive_summary()
+    with tab_blueprint:
+        render_remediation_blueprint()
     with tab_chat:
         render_chat_tab()
 else:
-    render_executive_summary()
+    tab_insights, tab_blueprint = st.tabs(["Executive summary", "Autonomous Remediation Blueprint"])
+    with tab_insights:
+        render_executive_summary()
+    with tab_blueprint:
+        render_remediation_blueprint()

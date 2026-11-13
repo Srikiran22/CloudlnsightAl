@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import contextlib
 import datetime
 import hashlib
 import hmac
@@ -5,43 +8,150 @@ import io
 import json
 import os
 import re
+import secrets
 import sys
 import threading
 import time
 import uuid
 from math import ceil
 from pathlib import Path
+from typing import Any, Literal, TypedDict
 
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split, StratifiedKFold, KFold, TimeSeriesSplit, cross_validate
-from sklearn.dummy import DummyClassifier, DummyRegressor
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
+import sklearn
 from sklearn.compose import ColumnTransformer
-from sklearn.impute import SimpleImputer
-from sklearn.pipeline import Pipeline
-from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score, f1_score,
-    confusion_matrix, classification_report,
-    r2_score, mean_absolute_error, mean_squared_error
-)
-from sklearn.linear_model import LogisticRegression, LinearRegression, Ridge
+from sklearn.dummy import DummyClassifier, DummyRegressor
 from sklearn.ensemble import (
-    RandomForestClassifier, RandomForestRegressor,
-    GradientBoostingClassifier, GradientBoostingRegressor
+    GradientBoostingClassifier,
+    GradientBoostingRegressor,
+    RandomForestClassifier,
+    RandomForestRegressor,
 )
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LinearRegression, LogisticRegression, Ridge
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+    mean_absolute_error,
+    mean_squared_error,
+    precision_score,
+    r2_score,
+    recall_score,
+)
+from sklearn.model_selection import (
+    KFold,
+    StratifiedKFold,
+    TimeSeriesSplit,
+    cross_validate,
+    train_test_split,
+)
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.tree import DecisionTreeClassifier
 
 from Utils.logsys import get_logger
-from Utils.paths import MODELS_DIR, safe_stem, get_unique_filename
-
+from Utils.paths import MODELS_DIR, get_unique_filename, safe_stem
 
 logger = get_logger("ML")
 
 # joblib bundles unpickle arbitrary Python -- only ever load files you (or a
 # trusted trainer) produced. See the security notes in Readme.md.
 MODEL_BUNDLE_VERSION = 1
+
+
+class ModelEvaluationMetrics(TypedDict, total=False):
+    """Evaluation metrics dictionary recorded during model training and cross-validation."""
+    accuracy: float | None
+    precision: float | None
+    recall: float | None
+    f1_score: float | None
+    f1_macro: float | None
+    positive_class: str | None
+    positive_precision: float | None
+    positive_recall: float | None
+    positive_f1: float | None
+    positive_support: int | None
+    r2_score: float | None
+    rmse: float | None
+    mae: float | None
+    mse: float | None
+    cv_accuracy_mean: float | None
+    cv_accuracy_std: float | None
+    cv_f1_macro_mean: float | None
+    cv_f1_macro_std: float | None
+    cv_r2_mean: float | None
+    cv_r2_std: float | None
+    cv_rmse_mean: float | None
+    cv_rmse_std: float | None
+    baseline_accuracy: float | None
+    baseline_f1_macro: float | None
+    baseline_r2: float | None
+    baseline_rmse: float | None
+    baseline_mae: float | None
+
+
+class ModelArtifactBundle(TypedDict, total=False):
+    """Authoritative typed contract for serialized and in-memory model bundles.
+
+    Satisfies PROJECT.md § Interface Contracts:
+      model: Any (Scikit-Learn estimator or pipeline)
+      scaler: Any | None
+      features: list[str]
+      target: str
+      task: Literal["classification", "regression"]
+      metrics: dict[str, float]
+      model_name: str
+      model_id: str
+      created_at: str
+
+    Also preserves backwards and runtime compatibility with CloudInsight AI's
+    existing bundle keys used by Pages/Predict.py and tests/.
+    """
+    # Canonical Interface Contract (PROJECT.md § Interface Contracts)
+    model: Any
+    scaler: Any | None
+    features: list[str]
+    target: str
+    task: Literal["classification", "regression"]
+    metrics: dict[str, float] | ModelEvaluationMetrics
+    model_name: str
+    model_id: str
+    created_at: str
+
+    # Serialization & Runtime Schema Keys
+    bundle_version: int
+    sklearn_version: str | None
+    sklearn_version_mismatch: bool
+    python_version: str
+    pandas_version: str
+    numpy_version: str
+    random_state: int | None
+    test_size: float | int | None
+    test_size_fraction: float | None
+    train_rows: int | None
+    test_rows: int | None
+    pipeline: Any
+    problem_type: Literal["Classification", "Regression"] | str | None
+    algorithm: str | None
+    target_col: str | None
+    target_column: str | None
+    feature_cols: list[str]
+    numeric_features: list[str]
+    categorical_features: list[str]
+    feature_dtypes: dict[str, str]
+    categories: dict[str, list[str]]
+    nullable: dict[str, bool]
+    importance_type: str | None
+    feature_importances: dict[str, float]
+    grouped_feature_importances: dict[str, float]
+    dataset_name: str | None
+    dataset_fingerprint: str | None
+    hyperparameters: dict[str, Any]
+    training_config: dict[str, Any]
 
 # training cells above this risk multi-minute hangs in a blocking spinner;
 # users can sample or raise the constant consciously
@@ -54,7 +164,7 @@ _MODEL_KEY_LOCK = threading.Lock()
 _CACHED_MODEL_KEY = None
 
 
-def _get_or_create_model_signing_key(directory=None) -> bytes:
+def _get_or_create_model_signing_key(directory: Path | str | None = None) -> bytes:
     """Thread-safe and cross-process atomic acquisition of the HMAC model signing key.
 
     Uses O_CREAT | O_EXCL kernel semantics so concurrent initialization attempts
@@ -79,7 +189,6 @@ def _get_or_create_model_signing_key(directory=None) -> bytes:
         except OSError:
             pass
 
-    import secrets
     new_key = secrets.token_bytes(32)
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
     if hasattr(os, "O_BINARY"):
@@ -91,15 +200,13 @@ def _get_or_create_model_signing_key(directory=None) -> bytes:
             os.write(fd, new_key)
         finally:
             os.close(fd)
-        try:
+        with contextlib.suppress(OSError):
             os.chmod(key_path, 0o600)
-        except OSError:
-            pass
         if directory is None:
             with _MODEL_KEY_LOCK:
                 _CACHED_MODEL_KEY = new_key
         return new_key
-    except (FileExistsError, OSError):
+    except (FileExistsError, OSError) as err:
         # A concurrent worker created the key first; wait for bytes to flush
         for attempt in range(25):
             if key_path.is_file() and key_path.stat().st_size == 32:
@@ -115,10 +222,10 @@ def _get_or_create_model_signing_key(directory=None) -> bytes:
             time.sleep(0.005 * (1.5 ** min(attempt, 8)))
         if key_path.is_file():
             return key_path.read_bytes()
-        raise RuntimeError(f"Failed to initialize or read model signing key at {key_path}")
+        raise RuntimeError(f"Failed to initialize or read model signing key at {key_path}") from err
 
 
-def sign_model_artifact(model_path: Path) -> Path:
+def sign_model_artifact(model_path: Path | str) -> Path:
     """Compute and store a cryptographic HMAC-SHA256 signature for a saved model file."""
     p = Path(model_path).resolve()
     if not p.is_file():
@@ -138,7 +245,7 @@ def sign_model_artifact(model_path: Path) -> Path:
     return sig_path
 
 
-def verify_model_artifact_signature(model_path: Path, content: bytes = None) -> bool:
+def verify_model_artifact_signature(model_path: Path | str, content: bytes | None = None) -> bool:
     """Verify cryptographic authenticity and integrity of a model file before deserialization."""
     p = Path(model_path).resolve()
     sig_path = p.with_suffix(".joblib.sig")
@@ -146,7 +253,15 @@ def verify_model_artifact_signature(model_path: Path, content: bytes = None) -> 
         return False
     try:
         sig_data = json.loads(sig_path.read_text(encoding="utf-8"))
+        if not isinstance(sig_data, dict):
+            return False
+        if sig_data.get("algo") != "hmac-sha256":
+            return False
+        if sig_data.get("model_file") != p.name:
+            return False
         expected_sig = sig_data.get("signature", "")
+        if not isinstance(expected_sig, str) or not expected_sig:
+            return False
         key_dir = p.parent if (p.parent / ".model_signing_key").is_file() else MODELS_DIR
         key = _get_or_create_model_signing_key(directory=key_dir)
         if content is None:
@@ -158,7 +273,7 @@ def verify_model_artifact_signature(model_path: Path, content: bytes = None) -> 
         return False
 
 
-def save_trained_model(res, model_name, directory=None):
+def save_trained_model(res: dict[str, Any], model_name: str, directory: Path | str | None = None) -> Path:
     if not res or "pipeline" not in res:
         raise ValueError("No trained model is available to save.")
 
@@ -168,7 +283,21 @@ def save_trained_model(res, model_name, directory=None):
     unique_filename = get_unique_filename(f"{safe_name}.joblib", directory=target_dir)
     path = target_dir / unique_filename
 
-    bundle = {
+    prob_type_str = str(res.get("problem_type") or "").lower()
+    canonical_task: Literal["classification", "regression"] = (
+        "classification" if "classif" in prob_type_str else "regression"
+    )
+
+    bundle: ModelArtifactBundle = {
+        # Canonical Interface Contract (PROJECT.md § Interface Contracts)
+        "model": res["pipeline"],
+        "scaler": None,
+        "features": res.get("feature_cols", []),
+        "target": str(res.get("target_col") or res.get("target_column") or ""),
+        "task": canonical_task,
+        "model_name": model_name,
+        "model_id": safe_name,
+        # Runtime Schema Keys
         "bundle_version": MODEL_BUNDLE_VERSION,
         "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "sklearn_version": _sklearn_version(),
@@ -234,15 +363,18 @@ def save_trained_model(res, model_name, directory=None):
         sign_model_artifact(path)
     except Exception:
         if tmp_path.exists():
-            try:
+            with contextlib.suppress(OSError):
                 tmp_path.unlink()
-            except OSError:
-                pass
         raise
     return path
 
 
-def load_trained_model(path, require_signature=True, allowed_dir=None, trusted=False):
+def load_trained_model(
+    path: Path | str,
+    require_signature: bool = True,
+    allowed_dir: Path | str | None = None,
+    trusted: bool = False,
+) -> ModelArtifactBundle:
     """Load a saved model bundle from disk with cryptographic authenticity checks.
 
     Security & Trust Boundary:
@@ -328,15 +460,14 @@ def load_trained_model(path, require_signature=True, allowed_dir=None, trusted=F
     return bundle
 
 
-def _sklearn_version():
+def _sklearn_version() -> str | None:
     try:
-        from sklearn import __version__ as version
-        return str(version)
+        return str(sklearn.__version__)
     except Exception:
         return None
 
 
-def list_saved_models(include_trust_status=False):
+def list_saved_models(include_trust_status: bool = False) -> list[str] | list[tuple[str, str]]:
     if not MODELS_DIR.exists():
         return []
     models = sorted(
@@ -359,7 +490,7 @@ def list_saved_models(include_trust_status=False):
     return results
 
 
-def _datetime_to_epoch(df):
+def _datetime_to_epoch(df: pd.DataFrame) -> None:
     # models can't handle datetime64 directly; epoch floats behave better than strings.
     # normalize to Unix seconds to ensure invariant scale across datetime resolutions (s, ms, us, ns)
     # and convert timezone-aware series to UTC before localization.
@@ -376,7 +507,11 @@ def _datetime_to_epoch(df):
             df[column] = epoch
 
 
-def predict_with_model(bundle, df, feature_cols=None):
+def predict_with_model(
+    bundle: ModelArtifactBundle | dict[str, Any],
+    df: pd.DataFrame,
+    feature_cols: list[str] | None = None,
+) -> pd.DataFrame:
     features = feature_cols or bundle.get("feature_cols") or []
     missing = [col for col in features if col not in df.columns]
     if missing:
@@ -415,7 +550,7 @@ def predict_with_model(bundle, df, feature_cols=None):
     for col, known_vals in known_categories.items():
         if col in X.columns:
             observed_vals = set(X[col].dropna().astype(str).unique())
-            unseen = sorted(list(observed_vals - set(str(v) for v in known_vals)))
+            unseen = sorted(observed_vals - {str(v) for v in known_vals})
             if unseen:
                 category_drift[col] = unseen
 
@@ -433,7 +568,9 @@ def predict_with_model(bundle, df, feature_cols=None):
     return output
 
 
-def detect_problem_type(df, target_col):
+def detect_problem_type(
+    df: pd.DataFrame | None, target_col: str | None
+) -> Literal["Classification", "Regression"]:
     """Heuristic classification-vs-regression choice for a target column.
 
     Non-numeric or boolean targets are always Classification. Integer-like
@@ -469,7 +606,7 @@ def detect_problem_type(df, target_col):
 
 
 
-def is_likely_id_column(df, col):
+def is_likely_id_column(df: pd.DataFrame | None, col: str | None) -> bool:
     """Identify columns that are identifiers or near-unique keys unsuitable as ML predictors."""
     if df is None or not col or col not in df.columns:
         return False
@@ -486,7 +623,7 @@ def is_likely_id_column(df, col):
     return False
 
 
-def _non_finite_columns(frame, columns):
+def _non_finite_columns(frame: pd.DataFrame, columns: list[str]) -> list[str]:
     """Columns whose numeric values contain inf/overflow-sized entries."""
     bad = []
     for column in columns:
@@ -499,15 +636,15 @@ def _non_finite_columns(frame, columns):
 
 
 def train_and_evaluate_model(
-    df,
-    target_col,
-    feature_cols,
-    model_name,
-    problem_type,
-    test_size=0.2,
-    random_state=42,
-    time_series_cv=False,
-):
+    df: pd.DataFrame | None,
+    target_col: str,
+    feature_cols: list[str],
+    model_name: str,
+    problem_type: Literal["Classification", "Regression"] | str,
+    test_size: float = 0.2,
+    random_state: int = 42,
+    time_series_cv: bool = False,
+) -> dict[str, Any]:
     if problem_type not in {"Classification", "Regression"}:
         raise ValueError("Problem type must be either Classification or Regression.")
     if df is None or df.empty:
@@ -559,10 +696,7 @@ def train_and_evaluate_model(
         raw_y = clean_df[target_col]
         try:
             num_y = pd.to_numeric(raw_y, errors="raise")
-            if (num_y % 1 == 0).all():
-                y = num_y.astype(int)
-            else:
-                y = raw_y.astype(str)
+            y = num_y.astype(int) if (num_y % 1 == 0).all() else raw_y.astype(str)
         except Exception:
             y = raw_y.astype(str)
 
@@ -853,10 +987,7 @@ def train_and_evaluate_model(
 
         # Cross-validation: TimeSeriesSplit or KFold
         # Evaluate CV strictly on the training population (X_train, y_train) to keep test holdout untouched
-        if time_series_cv:
-            cv_folds = min(5, max(0, len(X_train) - 1))
-        else:
-            cv_folds = min(5, len(X_train))
+        cv_folds = min(5, max(0, len(X_train) - 1)) if time_series_cv else min(5, len(X_train))
 
         cv_r2_mean, cv_r2_std, cv_rmse_mean, cv_rmse_std = None, None, None, None
         cv_sampled = False

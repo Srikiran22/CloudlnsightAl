@@ -13,6 +13,7 @@ import pandas as pd
 
 from Utils.limits import CSV_ENCODINGS
 
+
 def _decode_text_buffer(buffer: Any) -> str:
     for encoding in CSV_ENCODINGS:
         try:
@@ -28,7 +29,7 @@ def _serialize_cell(value: Any) -> Any:
     if isinstance(value, np.ndarray):
         return json.dumps(value.tolist())
     if isinstance(value, set):
-        return json.dumps(sorted(list(value)))
+        return json.dumps(sorted(value))
     if isinstance(value, (list, dict)):
         return json.dumps(value, sort_keys=True)
     return value
@@ -70,9 +71,10 @@ def _sanitize_unhashable_cells(df: pd.DataFrame) -> pd.DataFrame:
         col_data = df[column]
         if isinstance(col_data, pd.DataFrame):
             col_data = col_data.iloc[:, 0]
-        if col_data.dtype == object or pd.api.types.is_string_dtype(col_data):
-            if col_data.map(lambda value: isinstance(value, (list, dict, set, np.ndarray))).any():
-                df[column] = col_data.map(_serialize_cell)
+        if (col_data.dtype == object or pd.api.types.is_string_dtype(col_data)) and col_data.map(
+            lambda value: isinstance(value, (list, dict, set, np.ndarray))
+        ).any():
+            df[column] = col_data.map(_serialize_cell)
     return df
 
 

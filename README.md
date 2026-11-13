@@ -1,14 +1,12 @@
 # CloudInsight AI
 
-![CI Status](https://github.com/Srikiran22/CloudInsightAI/actions/workflows/tests.yml/badge.svg)
-![Python 3.12 | 3.13](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
-![Platform: Windows | macOS | Linux](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
+> **A local-first, privacy-governed analytical workbench for bounded tabular ingestion, statistical hypothesis auditing, scikit-learn pipeline modeling, and cryptographic artifact verification.**
 
-CloudInsight AI is a local-first data analytics application built with Streamlit, pandas, scikit-learn, Plotly, ReportLab, and Google Gemini.
+CloudInsight AI is a tabular analytics and machine learning application that runs locally on a workstation (`127.0.0.1:8501`). Designed to eliminate data residency risks associated with multi-tenant SaaS platforms, it enforces hard ingestion ceilings (200 MB files, 20M cells, 400 MB DataFrame RAM), executes distribution drift tests (Kolmogorov-Smirnov with Benjamini-Hochberg FDR control, Total Variation Distance), trains scikit-learn pipelines with 5-fold cross-validation, and secures serialized model artifacts with HMAC-SHA256 cryptographic signatures. External AI interaction via Google Gemini is optional, in-memory only, and guarded by automated PII and identifier screening.
 
-It brings common data-analysis tasks into one workspace: ingest a dataset, clean it, compare it with another dataset, explore it, train a machine-learning model, and export an executive PDF report. Google Gemini is an optional integration.
+---
 
-## System Architecture
+## 1. System Architecture
 
 ```mermaid
 flowchart LR
@@ -18,16 +16,18 @@ flowchart LR
         RawDoc["Unstructured Docs\n(PDF, TXT, Logs)"]
     end
 
-    subgraph Guards ["2. Security & Memory Governance"]
-        Parser["Streaming Parser\n(200MB / 20M Cell Ceiling)"]
+    subgraph Guards ["2. Security & Governance"]
+        Parser["Streaming Parser\n(200 MB / 20M Cell Ceiling)"]
         AIConv["Gemini Table Extractor\n(Chunked + Schema Reconciled)"]
         Cache["Bounded LRU Cache\n(SHA-256 Fingerprinted)"]
+        Privacy["PII & Identifier Shield\n(Heuristic Detection & Exclusion)"]
     end
 
-    subgraph Analytics ["3. Analytics, Drift & AutoML"]
-        EDA["EDA, Cleaning &\nPeak-Preserving Charts"]
+    subgraph Analytics ["3. Analytics, Modeling & Audit"]
+        EDA["Statistical Diagnostics &\nPeak-Preserving Charts"]
         Drift["Drift Engine\n(KS + BH-FDR & TVD)"]
-        ML["Scikit-Learn Pipelines\n(HMAC-SHA256 Signed .joblib)"]
+        ML["Scikit-Learn AutoML Pipelines\n(HMAC-SHA256 Signed .joblib)"]
+        PDF["ReportLab PDF Generator\n(PDF Reports)"]
         GenAI["Gemini Insights & Chat\n(PII-Screened Context)"]
     end
 
@@ -35,313 +35,205 @@ flowchart LR
     DB --> Parser
     RawDoc --> AIConv --> Parser
     Parser --> Cache
-    Cache --> EDA & Drift & ML & GenAI
+    Cache --> Privacy
+    Privacy --> GenAI
+    Cache --> EDA & Drift & ML & PDF
 ```
 
-## Key Features
+*For complete architectural specifications, container diagrams, and design trade-offs, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).*
 
-### Data ingestion
+---
 
-CloudInsight AI can load:
+## 2. Principal Architectural Decisions & Engineering Trade-offs
 
-- CSV and TSV
-- Excel (`.xlsx` and legacy `.xls`)
-- JSON (including nested records)
-- JSONL / NDJSON
-- Parquet
-- XML (hardened against DTD/entity expansion)
-- HTML tables
-- Delimited text
-- PDF documents with extractable text (via optional `pypdf`)
+| # | Architectural Decision | Alternative Considered | Chosen Design & Implementation | Principal Trade-off Analysis |
+|---|---|---|---|---|
+| **1** | **Local-First Workstation Sovereignty vs. Multi-Tenant SaaS** | Cloud-hosted multi-tenant SaaS (AWS/GCP/Snowflake) with centralized object storage and API proxies. | Single-process local execution bound to `127.0.0.1:8501`. All parsing, caching, and model training occur strictly in workstation RAM and local disk (`Datasets/`, `Models/`). | **Gain:** Eliminates corporate data residency risks (GDPR, HIPAA, SOC 2 Type II); eliminates cloud ingress/egress transit costs and latency; zero persistence of proprietary data on remote servers.<br>**Sacrifice:** Lacks real-time multi-user simultaneous editing and horizontal compute auto-scaling; memory capacity is bounded by local workstation physical RAM. |
+| **2** | **Cryptographic HMAC-SHA256 Model Integrity vs. ONNX Runtime vs. Unrestricted Pickle** | (a) Unrestricted `pickle`/`joblib` deserialization.<br>(b) ONNX runtime compilation.<br>(c) Custom JSON weight serializers. | Symmetric HMAC-SHA256 cryptographic signatures stored in `.joblib.sig`. Load routines compute digest and verify against `Models/.model_signing_key` (`0600` permissions, `O_CREAT \| O_EXCL`) before calling `joblib.load()`. | **Gain:** Eliminates arbitrary Python bytecode execution (RCE) via `__reduce__` from untrusted or corrupted model files; avoids heavy C++ runtime dependencies (`onnxruntime`); preserves native Scikit-Learn custom pipeline estimators without translation loss.<br>**Sacrifice:** Assumes single-user OS boundary security; a local root attacker with write permissions to `Models/.model_signing_key` could forge signatures. |
+| **3** | **Bounded Streaming Pre-Inspection & Memory Ceilings vs. Unbounded Loading** | Eager in-memory loading via default `pandas.read_csv()` or unbounded Polars lazy evaluation. | Multi-tier bounded streaming pre-inspection: 200 MB file cap, dialect sniffing, pre-parse row/col/cell counting (1M rows, 200 cols, 20M cells), 5M high-cardinality string guard, and deep DataFrame memory ceiling (400 MB). | **Gain:** Eliminates workstation Out-Of-Memory (OOM) operating system freezes; prevents zip bombs and XML entity expansion denial-of-service; deterministic memory budgeting.<br>**Sacrifice:** Rejects arbitrarily massive big-data workloads (>1M rows, >400 MB RAM) that require distributed compute clusters (Spark/Ray). |
+| **4** | **Encapsulated Scikit-Learn `Pipeline` & `ColumnTransformer` vs. Ad-Hoc Preprocessing** | Manual preprocessing (scaling, imputation, one-hot encoding) performed across the full dataset prior to train/test splitting. | Strict encapsulation of transformers and estimators within unified Scikit-Learn `Pipeline` and `ColumnTransformer` objects. All transformations are fitted strictly on training folds inside 5-fold cross-validation. | **Gain:** Mathematically guarantees zero data leakage from validation/holdout sets into training folds; produces atomic, self-contained model artifacts that directly score raw un-preprocessed inference data without custom glue code.<br>**Sacrifice:** Higher pipeline serialization complexity; requires rigid column schema alignment during batch inference. |
+| **5** | **Ephemeral In-Memory Secret Isolation vs. Disk/Database Vaults** | Local `.env` files, SQLite secret tables, or operating system keyring services. | Pure in-memory credential storage in Streamlit `st.session_state["gemini_secret"]` wrapped in `temporary_secret` context managers that purge secrets upon task completion. Automated PII detection excludes sensitive attributes before prompt dispatch. | **Gain:** Zero secret persistence footprint; API keys never touch persistent media, logs, or backups; leak prevention is absolute across Git workflows.<br>**Sacrifice:** Requires analysts to provide API keys per session; keys do not persist across browser restarts unless cached in active session memory. |
 
-Structured formats are handled locally. Files without a native table structure can be passed to Google Gemini for conversion into a validated CSV dataset.
+---
 
-Multiple local files can be loaded together and merged with source filename provenance retained.
+## 3. Core Capabilities
 
-### Data cleaning
+### 3.1 Multi-Format Ingestion & Bounded Guards
+- Ingests **CSV**, **TSV**, **Excel** (`.xlsx`, `.xls`), **Parquet**, **JSON**, **JSONL**, **XML**, and **HTML tables** locally.
+- Unstructured files (**PDF**, text logs, markdown notes) can be passed to Google Gemini for schema extraction into structured CSV tables.
+- **Hardened Parsers:** XML external entity (XXE) and DTD injection rejection, ZIP decompression bomb ratio checks (<100x), and strict path traversal containment.
 
-The Cleaning page supports:
+#### System Resource Ceilings & Boundary Guarantees
 
-- Duplicate removal
-- Mean, median, or zero imputation for numeric columns
-- Mode or `Unknown` handling for categorical data
-- Dropping rows with missing values
-- Leaving missing values unchanged
-- Saving cleaned datasets as new CSV files with deterministic collision-safe naming
+CloudInsight AI enforces centralized resource boundaries in `Utils/limits.py` to guarantee predictable workstation performance:
 
-### Dataset comparison
+| Boundary Parameter | Ceiling | Enforcement Point | Technical Rationale & Failure Mode Defended |
+|---|---|---|---|
+| `MAX_UPLOAD_BYTES` | **200 MB** (209,715,200 B) | `Utils/parsing.py::read_tabular` | Matches Streamlit buffer ceiling; prevents socket buffer memory exhaustion. |
+| `MAX_AGGREGATE_UPLOAD_BYTES` | **250 MB** (262,144,000 B) | `Utils/parsing.py::read_tabular_multi` | Batch upload ceiling for multi-file merges; bounds staging I/O buffers. |
+| `MAX_UPLOAD_FILES` | **20 files** | `Pages/Upload.py` | Caps batch file descriptor allocation and merge overhead. |
+| `MAX_INGESTION_ROWS` | **1,000,000 rows** | `Utils/parsing.py::read_tabular` | Streaming chunk validation rejects oversized tables before DataFrame materialization. |
+| `MAX_INGESTION_COLUMNS` | **200 columns** | `Utils/parsing.py::read_tabular` | Header parser guard; protects against horizontal dimension explosion and $O(N^2)$ correlation matrices. |
+| `MAX_INGESTION_CELLS` | **20,000,000 cells** | `Utils/parsing.py::read_tabular` | Global cell matrix ceiling ($rows \times columns$); bounds memory footprint regardless of aspect ratio. |
+| `MAX_COMBINED_ROWS` | **1,000,000 rows** | `Utils/parsing.py::read_tabular_multi` | Total row ceiling across concatenated multi-file tabular uploads. |
+| `MAX_DATAFRAME_MEMORY_BYTES` | **400 MB** (419,430,400 B) | `Utils/limits.py`, `Utils/parsing.py` | Deep memory inspection ceiling (`df.memory_usage(deep=True).sum()`); fails closed if object overhead exceeds RAM budget. |
+| `MAX_HIGH_CARDINALITY_STRING_CELLS` | **5,000,000 cells** | `Utils/parsing.py::read_tabular` | Pre-allocation guard against high-cardinality string columns which incur massive pointer indirection overhead in CPython. |
+| `MAX_MODEL_FILE_SIZE` | **100 MB** (104,857,600 B) | `Utils/ML.py::load_trained_model` | Model deserialization guard; rejects bloated binary archives before HMAC verification. |
+| `MAX_VISUALIZATION_ROWS` | **25,000 rows** | `Utils/sampling.py::sample_for_visualization` | Interactive Plotly rendering limit; selects a deterministic uniform pseudo-random sample (`df.sample(n=25000, random_state=42)`) when row count exceeds the ceiling to maintain UI responsiveness. |
+| `MAX_ANALYSIS_ROWS` | **50,000 rows** | `Utils/compare_logic.py` | Statistical diagnostics and drift computation ceiling (`COMPARE_MAX_ANALYSIS_ROWS`); bounds $O(N \log N)$ sorting and pairwise distance operations. |
+| **Decompression Ratio Ceiling** | **100:1 ratio** (100 MB uncompressed) | `Utils/paths.py::_check_zip_bomb` | Pre-extraction inspection of `.xlsx` archive headers to defend against recursive decompression bombs. |
 
-The Compare page compares two datasets at the schema and column level, including:
+### 3.2 Data Profiling & Hygiene Auditing
+- Computes composite **Data Hygiene Index** (completeness and uniqueness metrics).
+- Deep RAM footprint measurement, missingness breakdown, and cardinality inspection.
+- Interactive slice-and-dice data filtering.
 
-- Row and column counts
-- Common and missing columns
-- Missing-value changes
-- Summary metric shifts (mean and dispersion / std)
-- Distribution drift detection via two-sample Kolmogorov-Smirnov tests (numeric) and Total Variation Distance (categorical)
-- Duplicate profiles
+### 3.3 Cleaning & Preprocessing
+- Exact row deduplication.
+- Statistical imputation: mean, median, zero, mode, or custom value.
+- Outlier filtering (IQR and Z-score) and deterministic, collision-safe dataset export.
 
-### Exploratory analysis and visualization
+### 3.4 Feature Engineering Studio
+- Numerical scaling: `StandardScaler`, `MinMaxScaler`, `RobustScaler`.
+- Categorical encoding: One-Hot encoding (with dummy variable trap prevention) and Ordinal encoding.
+- Distribution transforms: Log1p, Square Root, Yeo-Johnson Power Transform.
+- Mutual Information non-linear feature screening relative to target variables.
+- Interaction feature generation ($A \times B$, $A / B$, $A - B$).
 
-The EDA and Visualization pages provide:
+### 3.5 Statistical Diagnostics & Visual Analytics
+- Univariate normality screening (D'Agostino-Pearson tests, skewness, kurtosis).
+- Correlation matrices (Pearson and Spearman) with significance filtering.
+- Variance Inflation Factor (VIF) multicollinearity auditing.
+- Group hypothesis testing (One-Way ANOVA F-tests).
+- Plotly visualizations: histograms, box/violin plots, scatter/bubble plots with OLS trendlines, sampled time series (25k points), and treemaps.
 
-- Column and data-type summaries
-- Descriptive statistics (mean, std, min, quartiles, max)
-- Pearson correlations with column caps to prevent layout freeze
-- Tukey IQR outlier analysis
-- Interactive charts: histograms, box/violin plots, scatter/bubble (with 25k sampling for responsiveness), bar/pie/treemap, heatmaps
-- Categorical distribution analysis
+### 3.6 AutoML Studio & Cryptographic Artifact Verification
+- Automatic problem framing (binary/multi-class classification vs. continuous regression).
+- Algorithms: Random Forest, Gradient Boosting, Decision Trees, Logistic Regression, Linear Regression, Ridge Regression.
+- **Pipeline Encapsulation:** Preprocessing is encapsulated in scikit-learn `Pipeline` and `ColumnTransformer` objects.
+- **Validation:** 5-fold cross-validation with standard deviation bounds, compared against dummy baselines. Supports `TimeSeriesSplit` for chronological sequences.
+- **HMAC-SHA256 Signing:** Model bundles serialized via `joblib` are signed with HMAC-SHA256. Unsigned or modified bundles are rejected before deserialization to eliminate arbitrary code execution risks.
+- **Batch Inference:** Predict on new datasets with automated category drift warnings.
 
-### Machine learning
+### 3.7 PDF Reporting
+- Compiles PDF audit reports via ReportLab.
+- Embeds Data Hygiene Index gauges, descriptive statistics, outlier tables, correlation matrices, and optional high-DPI matplotlib figures.
+- Reusable report template configurations with overwrite guards.
 
-The ML workflow uses scikit-learn pipelines for preprocessing, training, evaluation, persistence, and prediction.
+### 3.8 AI Assistant, Code Execution & Conversational Analysis (Optional)
+- Dataset insights and natural language dialogue powered by Google Gemini with local offline fallback.
+- **Dual Query Engines:**
+  - Online Neuro-Symbolic Engine (`Utils/ai_agent.py::run_neuro_symbolic_query`): Requests Python/pandas snippets from Gemini and executes them inside an AST-filtered scope (`Utils/ai_sandbox.py::execute_sandboxed_code`).
+  - Air-Gapped Local Deterministic Engine (`Utils/ai_agent.py::run_local_deterministic_query`): Operates offline without external network calls, computing descriptive statistics, correlation matrices, and distributions via local pandas/numpy algorithms.
+- **AST Code Execution Guardrail & Limitations:**
+  - AST filtering before `exec()` inspects code syntax trees to reject dynamic imports (`import`, `__import__`), dunder attribute access (`__`), and banned functions (`eval`, `exec`, `open`, `compile`, `os`, `sys`).
+  - **Important:** AST static filtering is a best-effort guardrail, not an operating system isolation boundary or secure sandbox. It does not stop CPU exhaustion (infinite loops), excessive memory allocation, algorithmic complexity denial of service, thread blocking, or object traversal through exposed DataFrame/Series methods.
+- **PII and Identifier Screening:** Heuristically detects emails, phone numbers, credit cards (Luhn valid), IBANs, and identifiers (`customer_id`, `ssn`, `uuid`), auto-excluding them from AI prompt context.
+- **Credential Lifecycle:** In-memory API key handling via `st.session_state` and `temporary_secret` context managers; keys do not touch disk or logs.
 
-The current implementation includes:
+---
 
-- Logistic Regression
-- Linear Regression
-- Ridge Regression
-- Decision Tree Classifier
-- Random Forest Classifier
-- Random Forest Regressor
-- Gradient Boosting Classifier
-- Gradient Boosting Regressor
+## 4. Application Navigation Overview
 
-Features include automatic classification/regression detection, 5-fold cross-validation with metric variability (mean ± std), dummy baseline comparison, leak-free preprocessing inside pipelines, high-dimension guards against dense one-hot encoding explosions, model persistence with Joblib and HMAC-SHA256 signature verification, prediction from saved models, and model provenance metadata with SHA-256 dataset fingerprinting.
+| Navigation Group | Page | Purpose |
+|---|---|---|
+| **Overview** | Workspace Home | Workbench overview, architecture, and synthetic benchmark loader |
+| **Overview** | Data Health & Profiler | Data Hygiene Index gauge, cardinality inspector, null diagnostics |
+| **Data Management** | Data Hub & Ingest | Multi-format file upload, text paste, catalog management |
+| **Data Management** | Data Cleaning & Imputation | Deduplication, statistical imputation, and sanitized export |
+| **Data Management** | Feature Engineering Studio | Scaling, categorical encoding, transforms, mutual information |
+| **Exploratory Analysis**| Statistical Diagnostics | Normality tests, correlation matrices, VIF multicollinearity, ANOVA |
+| **Exploratory Analysis**| Interactive Visual Analytics | Plotly distribution, relational, categorical, and heatmap charts |
+| **Machine Learning** | Model Studio & Training | Classification/regression pipelines, 5-fold CV, model signing |
+| **Machine Learning** | Batch Scoring & Simulation | HMAC-signed model loading, batch inference, drift detection |
+| **AI & Gemini Assistant**| AI File Converter | Extract structured CSV tables from unstructured documents/logs |
+| **AI & Gemini Assistant**| AI Summary & Insights | Statistical summaries and natural language executive diagnostics |
+| **AI & Gemini Assistant**| Ask AI (Chat) | Conversational dataset Q&A with PII-screened context boundaries |
+| **Audit & Reports** | Dataset Drift & Compare | Kolmogorov-Smirnov test (BH-FDR corrected) & TVD drift analysis |
+| **Audit & Reports** | Data Science Audit Report | PDF audit report compilation and templates |
 
-A training-cell limit is enforced to prevent oversized jobs from blocking the Streamlit process.
+---
 
-### PDF reports
+## 5. Quick Start & Setup
 
-Reports are generated with ReportLab and can include:
+### 5.1 Prerequisites
+- Python **3.12** or **3.13** (64-bit)
+- Modern web browser (Chrome, Edge, Firefox, Safari)
 
-1. Dataset summary and Data Hygiene Index
-2. Column structure and missing-value counts
-3. Numerical statistics
-4. IQR outlier analysis
-5. Categorical analysis
-6. Correlation analysis
-7. Column-level quality flags
-8. Sample records
-9. Optional charts (requires `matplotlib`; isolated per-chart rendering)
-10. Optional Gemini insights
-
-Report templates can be saved with overwrite protection, and batch report generation is supported.
-
-### Gemini integration
-
-Gemini is optional and is used for:
-
-- AI conversion of unstructured text and PDF content into structured CSV tables
-- Executive summary generation in PDF reports
-- Automated dataset insights and conversational chat
-
-The platform defaults to `gemini-3.8-flash` via the primary `google-genai` SDK, while supporting `gemini-3.6-flash`, `gemini-2.5-flash`, and `gemini-2.5-pro` (retired Gemini 1.x/2.0/3.5 models map automatically to supported modern equivalents).
-
-## Requirements
-
-- Python 3.12+ (CI runs the suite on Python 3.12 and 3.13 across Windows, macOS, and Linux)
-- Streamlit 1.52.0+ (the interface is developed and verified against 1.64)
-- A modern browser; Windows 11 is the primary development platform, macOS and Linux are supported
-
-A database is not required. Production dependencies are locked in `requirements-lock.txt` for exact CI-matched reproducibility, with loose ranges in `requirements.txt`.
-
-Optional runtime capabilities:
-
-- `pypdf` for PDF text extraction
-- `matplotlib` for charts in PDF reports
-
-Gemini credentials are only required when using AI features.
-
-## Installation
-
-Create a virtual environment:
+### 5.2 Installation
 
 ```bash
+# 1. Create virtual environment
 python -m venv venv
-```
 
-Activate it:
-
-### Windows
-
-```powershell
-.\venv\Scripts\activate
-```
-
-### macOS / Linux
-
-```bash
+# 2. Activate environment
+# Windows PowerShell:
+.\venv\Scripts\Activate.ps1
+# macOS / Linux:
 source venv/bin/activate
-```
 
-Install dependencies (tested lockfile recommended for exact reproducibility matching CI):
-
-```bash
+# 3. Install dependencies (lockfile recommended for exact reproducibility)
 pip install -r requirements-lock.txt
 ```
 
-Alternatively, to install with unpinned ranges:
+### 5.3 Launch Application
 
 ```bash
-pip install -r requirements.txt
+python -m streamlit run App.py
 ```
+Open `http://localhost:8501` in your browser.
 
-## Run
+*For complete setup options, Windows launch scripts, and environment troubleshooting, see [docs/SETUP.md](docs/SETUP.md).*
+
+---
+
+## 6. Testing, Quality Assurance & Offline Verification
+
+CloudInsight AI maintains a test suite executed offline without requiring external network connectivity or live AI API keys (external endpoints are mocked at the boundary):
 
 ```bash
-streamlit run App.py
-```
-
-Open:
-
-```
-http://localhost:8501
-```
-
-## Credentials and external services
-
-### Google Gemini
-
-Enter the Gemini API key in the application when using AI conversion, insights, or chat.
-
-The application keeps credentials in Streamlit session state only and clears them after an operation unless they are explicitly kept for the current session. Nothing touches disk.
-
-Before Gemini analysis, the privacy screener flags columns that look like emails, phone numbers, financial identifiers, credentials, or tokens so they can be excluded from the model context.
-
-## Application pages
-
-| Page | Purpose |
-|---|---|
-| Home | Workbench overview, system architecture, and benchmark datasets |
-| Ingest & Hub | Multi-format local ingestion (CSV, Parquet, Excel, JSON, TSV, SQLite), paste-in, and catalog |
-| Data Health & Profiler | Hygiene index gauge, cardinality inspector, null diagnostics, and slice-and-dice filter |
-| Clean Data | Deduplication, multivariate imputation, temporal filling, and dataset export |
-| Feature Engineering | Numerical scaling, categorical encoding, non-linear transforms, mutual information, interactions |
-| Compare Datasets | Covariate and target statistical drift diagnostics (KS-test, Chi-square, PSI) |
-| Statistical Diagnostics | Normality tests, correlation rankings, multicollinearity (VIF), Tukey/Z-score outliers, ANOVA |
-| Visual Analytics | Interactive distribution, relationship, composition, and correlation charts |
-| Model Studio | Regression & Classification pipelines, baseline benchmarking, cross-validation, model signing |
-| Batch Scoring | Cryptographically signed model loading, feature alignment, and prediction batch generation |
-| AI Summary | Executive analytical summaries and dataset Q&A |
-| Ask AI (Chat) | Conversational dataset analysis |
-| PDF Report | Publication-ready audit reporting with vector charts |
-
-### Appearance and theming
-
-The app ships a single design system with light and dark palettes. It follows the browser/OS preference by default; pin a mode from the **⋮** menu → **Settings** → **Theme**.
-
-Implementation notes:
-
-- `.streamlit/config.toml` mirrors the palette into Streamlit's native theme, so canvas-rendered widgets (`st.dataframe`, `st.selectbox`, `st.code`) match the hand-styled surfaces.
-- `Utils/theme.py` resolves the live mode from `st.context.theme` and injects both token sets; a zero-height client bridge flips the CSS palette instantly when the theme changes, without waiting for a script rerun.
-- Cards, metrics, buttons and inline code are styled through Streamlit's public test ids (with compatibility selectors for older releases), so the design system keeps working across upgrades.
-- The wordmark is rendered with `st.logo`, which Streamlit places in the sidebar header above the navigation.
-- Charts use `theme="streamlit"` so they re-colour with the rest of the page.
-
-## Repository structure
-
-```text
-CloudInsightAI/
-├── .github/workflows/     # CI workflow configurations (tests, linting)
-├── .streamlit/            # Streamlit theme and runtime configuration
-├── Pages/                 # Multi-page application views
-│   ├── AI.py              # AI insights and conversational dataset Q&A
-│   ├── AIChat.py          # Conversational dataset Q&A workspace
-│   ├── AIConverter.py     # Unstructured document → CSV conversion
-│   ├── Cleaning.py        # Deduplication, missing-value handling, and export
-│   ├── Compare.py         # Schema drift and column-level comparison
-│   ├── Dashboard.py       # Data hygiene index gauge and summary indicators
-│   ├── EDA.py             # Exploratory analysis, correlations, and outliers
-│   ├── FeatureEngineering.py # Scaling, encoding, transforms, mutual information
-│   ├── ML.py              # Model training, evaluation, saving, and prediction
-│   ├── Predict.py         # Signed-model loading and batch scoring
-│   ├── Report.py          # PDF report generation and template management
-│   ├── Upload.py          # Multi-format local ingestion and dataset catalog
-│   └── Visualization.py   # Interactive plotting (Plotly)
-├── Utils/                 # Domain logic, security guards, and utilities
-│   ├── AIConvert.py       # Unstructured data extraction via Gemini
-│   ├── batch.py           # Multi-file merging and schema alignment
-│   ├── Charts.py          # Visualization figure builders
-│   ├── compare_logic.py   # Dataset comparison and drift metrics
-│   ├── dataset_ui.py      # Session state and dataset caching helpers
-│   ├── frames.py          # Column normalisation and export sanitisation
-│   ├── Gemini.py          # Google Gemini client and resilience handling
-│   ├── limits.py          # Resource ceilings, storage roots, supported formats
-│   ├── logsys.py          # Centralized application logging
-│   ├── ML.py              # Scikit-learn pipelines and model persistence
-│   ├── parsing.py         # CSV/JSON/XML/HTML/Excel/Parquet/PDF readers
-│   ├── paths.py           # Storage, filename safety, and ingestion dispatch
-│   ├── PDF.py             # ReportLab PDF generation
-│   ├── Preprocessing.py   # Cleaning and missing-value imputation
-│   ├── privacy.py         # Sensitive column screening and PII detection
-│   ├── quality.py         # Data hygiene index and completeness/uniqueness scoring
-│   ├── sampling.py        # Centralized analytical and visualization sampling policy
-│   ├── secrets.py         # Ephemeral in-memory credential management
-│   └── theme.py           # UI styling, palette tokens, and live theme bridge
-├── tests/                 # Unit, security, and regression test suites
-├── App.py                 # Application entry point and navigation
-├── CHANGELOG.md           # Product release notes and version history
-├── CONTRIBUTING.md        # Contribution guidelines and development checks
-├── pyproject.toml         # Ruff, coverage, and project metadata configuration
-├── README.md              # Project documentation and setup guide
-├── requirements.txt       # Base application dependencies
-├── requirements-lock.txt  # Pinned dependency lockfile
-├── SECURITY.md            # Security policy and vulnerability disclosure
-└── start.bat              # Quickstart launcher script for Windows
-```
-
-## Development
-
-Run tests:
-
-```bash
+# Run full test suite with standard library unittest
 python -m unittest discover -s tests -v
-```
 
-Run the headless page smoke check:
+# Run test suite with coverage reporting
+coverage run -m unittest discover -s tests
+coverage report --show-missing
 
-```bash
+# Run headless Streamlit AppTest smoke checks
 python -m unittest tests/test_page_smoke.py -v
+
+# Run security boundary checks (XXE, zip decompression, formula injection, HMAC tampering)
+python -m unittest tests/test_security_boundaries.py -v
+
+# Run statistical diagnostics, drift tests, and model pipeline tests
+python -m unittest tests/test_ml_and_drift.py -v
 ```
 
-Run the full Ruff check used by CI:
+*For test architecture, coverage configs, and mock boundaries, see [docs/TESTING.md](docs/TESTING.md).*
 
-```bash
-pip install ruff==0.16.4
-ruff check .
-```
+---
 
-GitHub Actions runs the suite, the smoke check, Ruff, and `pip-audit` on Python 3.12 and 3.13 across Windows, macOS, and Linux.
+## 7. Security & Privacy Posture
 
-## Security and privacy
+- **OWASP ASVS & NIST SP 800-218 Alignment:** Architectural controls mapped directly to OWASP ASVS v5.0.0 and NIST Secure Software Development Framework (SSDF v1.1).
+- **No Disk Secrets:** API keys reside in `st.session_state` RAM only; purged by `temporary_secret` context managers upon task completion. Never touch persistent media, logs, or backups.
+- **Model Tamper Evidence:** HMAC-SHA256 model signing prevents arbitrary pickle deserialization of untrusted files.
+- **Path Isolation:** Filesystem operations are strictly bound to `Datasets/`, `Models/`, and `Reports/` with traversal token rejection.
+- **Injection Defenses:** Hardened against XXE, zip decompression bombs, and CSV formula injection.
+- **Privacy Shield:** PII detection flags sensitive columns before transmission to external AI services.
 
-The application is designed for local, single-user use.
+*For threat models, attack payloads, and OWASP ASVS verification details, see [SECURITY.md](SECURITY.md).*
 
-Key safeguards include:
+---
 
-- Strict dataset path containment preventing directory traversal
-- SHA-256 cryptographic dataset content identity with metadata-backed performance caching and fresh byte verification (`force_refresh=True`)
-- XML DTD and external entity rejection preventing XXE attacks
-- Decompression bomb and size guards across ZIP, Excel (100 MB decompressed limit), and Parquet parsers
-- 200 MB upload ceiling, 1,000,000 row limit, 200 column limit, and 20,000,000 cell limit enforced streamingly during ingestion
-- 400 MB deep DataFrame memory budget and continuous 5,000,000 high-cardinality string cell observation monitoring
-- Bounded AI response parsing with column caps (>200 columns rejected)
-- Ephemeral in-memory credential handling (no disk storage or intentional logging of API keys)
-- Sensitive-column screening before Gemini analysis
-- Provenance metadata, dataset fingerprinting, and HMAC-SHA256 tamper-evidence signatures for saved ML models (the signing key is stored beside the model directory, so this detects corruption or partial tampering rather than defending against an attacker who already has write access to `Models/`)
+## 8. Project Documentation Index
 
-## Limitations and architectural considerations
-
-- Local-first architecture: Designed for single-user analytical sessions; no multi-tenant authorization or per-user storage isolation
-- Memory governance: The 400 MB DataFrame memory budget governs pandas in-memory data structures; total process RSS (working set) is higher due to Python runtime heap, openpyxl/parser objects, and temporary intermediate buffers during multi-chunk ingestion
-- Excel memory profile: Excel files (.xlsx / .xls) construct in-memory workbook DOMs; while bounded by decompression limits and row/cell limits, process RSS expands significantly compared to flat delimited text
-- Temporal decimation: Min-max envelope bucketing enforces chronological ordering and captures local extrema and temporal boundaries, but does not guarantee zero aliasing for frequencies exceeding the bucket sampling rate
-- Gemini requires an API key when AI features are used
-- PDF ingestion requires extractable text; scanned image PDFs need a separate OCR workflow
-- Joblib model bundles rely on pickle and execute Python bytecode upon deserialization. Models trained in CloudInsight are signed with HMAC-SHA256 and verified before loading; unsigned or externally supplied `.joblib` files are blocked
-- Production deployment requires an authenticating reverse proxy, storage isolation, and network controls
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development checks and contribution guidance.
-
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — System architecture, C4 diagrams, and component breakdown.
+- [docs/SETUP.md](docs/SETUP.md) — Local installation, virtual environment setup, and troubleshooting.
+- [docs/TESTING.md](docs/TESTING.md) — Test suite organization, headless smoke checks, and coverage.
+- [SECURITY.md](SECURITY.md) — Threat modeling, cryptographic model signing, and injection defenses.
+- [docs/API.md](docs/API.md) — Internal API reference and module contracts.
+- [AUDIT_REPORT.md](AUDIT_REPORT.md) — Senior engineering audit report with P0–P3 classifications.
+- [PROJECT_WALKTHROUGH.md](PROJECT_WALKTHROUGH.md) — Recruiter and engineering interview walkthrough brief.
+- [CHANGELOG.md](CHANGELOG.md) — Verified version history and change logs.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — Contribution standards and development guidelines.

@@ -10,7 +10,6 @@ import logging
 import os
 import sys
 
-
 _LOGGER_NAME = "cloudinsight"
 _configured = False
 

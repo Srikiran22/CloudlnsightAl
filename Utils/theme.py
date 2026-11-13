@@ -17,6 +17,7 @@ import html
 import re
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from Utils.logsys import get_logger
 
@@ -29,6 +30,7 @@ def _palette(dark):
             "__BG__": "#0B0F19",
             "__ACCENT__": "#3B82F6",
             "__ACCENT_HOVER__": "#60A5FA",
+            "__ACCENT_TEXT__": "#0B0F19",
             "__TEXT__": "#F8FAFC",
             "__TEXT2__": "#CBD5E1",
             "__MUTED__": "#94A3B8",
@@ -42,6 +44,7 @@ def _palette(dark):
         "__BG__": "#FFFFFF",
         "__ACCENT__": "#2563EB",
         "__ACCENT_HOVER__": "#1D4ED8",
+        "__ACCENT_TEXT__": "#FFFFFF",
         "__TEXT__": "#0F172A",
         "__TEXT2__": "#334155",
         "__MUTED__": "#64748B",
@@ -59,6 +62,7 @@ _TOKEN_VARS = {
     "__BG__": "--ci-bg",
     "__ACCENT__": "--ci-accent",
     "__ACCENT_HOVER__": "--ci-accent-hover",
+    "__ACCENT_TEXT__": "--ci-accent-text",
     "__TEXT__": "--ci-text",
     "__TEXT2__": "--ci-text-2",
     "__MUTED__": "--ci-muted",
@@ -84,6 +88,7 @@ def _token_block(dark: bool) -> str:
 SEMANTIC_TOKENS = {
     "accent": "#2563EB",
     "accent_hover": "#1D4ED8",
+    "accent_text": "#FFFFFF",
     "success": "#16A34A",
     "warning": "#D97706",
     "danger": "#DC2626",
@@ -98,6 +103,7 @@ SEMANTIC_TOKENS = {
 DARK_SEMANTIC_TOKENS = {
     "accent": "#3B82F6",
     "accent_hover": "#60A5FA",
+    "accent_text": "#0B0F19",
     "success": "#22C55E",
     "warning": "#F59E0B",
     "danger": "#EF4444",
@@ -321,15 +327,15 @@ section[data-testid="stSidebar"] [data-testid="stPageLink-NavLink"]:hover {
   align-items: center;
   justify-content: center;
 }
-.stButton > button[kind="primary"] {
+.stButton > button[kind="primary"], [data-testid="stDownloadButton"] > button[kind="primary"] {
   background: var(--ci-accent) !important;
   border-color: transparent !important;
-  color: #FFFFFF !important;
+  color: var(--ci-accent-text) !important;
 }
-.stButton > button[kind="primary"]:hover {
+.stButton > button[kind="primary"]:hover, [data-testid="stDownloadButton"] > button[kind="primary"]:hover {
   background: var(--ci-accent-hover) !important;
   border-color: transparent !important;
-  color: #FFFFFF !important;
+  color: var(--ci-accent-text) !important;
   box-shadow: 0 2px 4px rgba(37, 99, 235, .25);
 }
 .stButton > button:not([kind="primary"]) {
@@ -820,7 +826,7 @@ def _sync_client_theme() -> None:
         st.iframe(_THEME_BRIDGE, height=1)
     except AttributeError:  # Streamlit < 1.6x has no st.iframe
         try:
-            import streamlit.components.v1 as components
+            pass
 
             components.html(_THEME_BRIDGE, height=0)
         except Exception as exc:  # pragma: no cover - defensive for exotic runtimes
@@ -899,7 +905,7 @@ def style_plotly_fig(fig):
         template=tpl,
         paper_bgcolor=bg_color,
         plot_bgcolor=bg_color,
-        font=dict(color=text_color, family='"Inter", "Segoe UI", system-ui, sans-serif'),
+        font={"color": text_color, "family": '"Inter", "Segoe UI", system-ui, sans-serif'},
     )
     try:
         fig.update_xaxes(gridcolor=grid_color, zerolinecolor=grid_color)

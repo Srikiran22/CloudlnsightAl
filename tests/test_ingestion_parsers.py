@@ -19,12 +19,11 @@ from Utils.ML import (
     save_trained_model,
     train_and_evaluate_model,
 )
-from Utils.PDF import generate_pdf_report
 from Utils.paths import (
-    AIConversionRequired,
     MAX_INGESTION_COLUMNS,
     MAX_INGESTION_ROWS,
     MAX_TEXT_EXTRACT_CHARS,
+    AIConversionRequired,
     _check_zip_bomb,
     _read_delimited_text,
     _read_html_from_buffer,
@@ -35,6 +34,7 @@ from Utils.paths import (
     list_dataset_files,
     read_tabular,
 )
+from Utils.PDF import generate_pdf_report
 from Utils.privacy import detect_sensitive_columns
 
 
@@ -54,7 +54,7 @@ class PathsHardeningTests(unittest.TestCase):
     def test_xml_column_explosion_rejected(self):
         """XML with > MAX_INGESTION_COLUMNS unique child tags must be rejected before normalization."""
         elements = "".join(f"<attr_{i}>{i}</attr_{i}>" for i in range(MAX_INGESTION_COLUMNS + 50))
-        xml_content = f"<root><record>{elements}</record></root>".encode("utf-8")
+        xml_content = f"<root><record>{elements}</record></root>".encode()
         buf = io.BytesIO(xml_content)
         with self.assertRaises(ValueError) as ctx:
             _read_xml_from_buffer(buf)
@@ -64,7 +64,7 @@ class PathsHardeningTests(unittest.TestCase):
         """read_tabular must reject any file producing > MAX_INGESTION_COLUMNS."""
         header = ",".join(f"col_{i}" for i in range(MAX_INGESTION_COLUMNS + 10))
         row = ",".join("1" for _ in range(MAX_INGESTION_COLUMNS + 10))
-        csv_data = f"{header}\n{row}\n".encode("utf-8")
+        csv_data = f"{header}\n{row}\n".encode()
         with self.assertRaises(ValueError) as ctx:
             read_tabular(io.BytesIO(csv_data), filename="too_wide.csv")
         self.assertIn("exceeds the maximum supported limit", str(ctx.exception))
@@ -93,15 +93,33 @@ class PathsHardeningTests(unittest.TestCase):
         self.assertLessEqual(len(ctx.exception.raw_text), MAX_TEXT_EXTRACT_CHARS)
 
     def test_excel_zip_bomb_check_catches_suspicious_archive(self):
-        """_check_zip_bomb rejects zip files with excessive uncompressed size."""
+        """_check_zip_bomb rejects zip files with excessive uncompressed size or expansion ratio."""
         import zipfile
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("xl/worksheets/sheet1.xml", b"0" * 2000)
-        buf.seek(0)
-        with self.assertRaises(ValueError) as ctx:
-            _check_zip_bomb(buf, max_uncompressed_bytes=500)
-        self.assertIn("safety limit", str(ctx.exception).lower())
+
+        # 1. Assert uncompressed size limit (e.g. 100 MB ceiling)
+        buf_size = io.BytesIO()
+        with zipfile.ZipFile(buf_size, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("xl/worksheets/sheet1.xml", b"0" * (105 * 1024 * 1024))
+        buf_size.seek(0)
+        with self.assertRaises(ValueError) as ctx_size:
+            _check_zip_bomb(buf_size, max_uncompressed_bytes=100 * 1024 * 1024)
+        self.assertIn("exceeds safety limit of 100 mb", str(ctx_size.exception).lower())
+
+        # 2. Assert expansion ratio limit (>100:1 ratio and >50 MB uncompressed)
+        buf_ratio = io.BytesIO()
+        with zipfile.ZipFile(buf_ratio, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("xl/worksheets/sheet1.xml", b"0" * (55 * 1024 * 1024))
+        buf_ratio.seek(0)
+        with self.assertRaises(ValueError) as ctx_ratio:
+            _check_zip_bomb(buf_ratio, max_uncompressed_bytes=100 * 1024 * 1024, max_ratio=100.0)
+        self.assertIn("expansion ratio", str(ctx_ratio.exception).lower())
+
+        # 3. Control case: small normal archive passes without error
+        buf_control = io.BytesIO()
+        with zipfile.ZipFile(buf_control, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("xl/worksheets/sheet1.xml", b"x" * 1024)
+        buf_control.seek(0)
+        _check_zip_bomb(buf_control, max_uncompressed_bytes=100 * 1024 * 1024, max_ratio=100.0)
 
     def test_atomic_write_success_and_cleanup(self):
         """atomic_write safely writes files and cleans up temp files upon failure."""
@@ -421,7 +439,6 @@ class PDFHardeningTests(unittest.TestCase):
 import unittest
 from types import SimpleNamespace
 
-
 from Utils.AIConvert import parse_ai_csv
 from Utils.Charts import create_bar_count_plot
 from Utils.compare_logic import column_drift_rows, schema_diff
@@ -498,14 +515,14 @@ class IngestionBoundingTests(unittest.TestCase):
 
     def test_xml_row_bounding(self):
         rows = "".join(f"<row><id>{i}</id><val>{i*2}</val></row>" for i in range(50))
-        payload = f"<root>{rows}</root>".encode("utf-8")
+        payload = f"<root>{rows}</root>".encode()
         bounded = read_tabular(payload, filename="data.xml", max_rows=5)
         self.assertEqual(len(bounded), 5)
         self.assertEqual(bounded["id"].tolist(), ["0", "1", "2", "3", "4"])
 
     def test_html_row_bounding(self):
         rows = "".join(f"<tr><td>{i}</td><td>val_{i}</td></tr>" for i in range(50))
-        payload = f"<table><tr><th>ID</th><th>Val</th></tr>{rows}</table>".encode("utf-8")
+        payload = f"<table><tr><th>ID</th><th>Val</th></tr>{rows}</table>".encode()
         bounded = read_tabular(payload, filename="data.html", max_rows=6)
         self.assertEqual(len(bounded), 6)
 
@@ -714,12 +731,13 @@ class EDAOutlierDecouplingTests(unittest.TestCase):
 class FingerprintFreshnessAndCacheInvalidationTests(unittest.TestCase):
     def test_results_match_active_detects_content_replacement(self):
         import os
-        from Utils.paths import DATASETS_DIR
+
         from Utils.dataset_ui import (
             dataset_fingerprint,
-            results_match_active,
             invalidate_dataset_cache,
+            results_match_active,
         )
+        from Utils.paths import DATASETS_DIR
         test_file = DATASETS_DIR / "temp_fresh_probe.csv"
         test_file.write_text("x,y\n1,2", encoding="utf-8")
         try:
@@ -840,6 +858,7 @@ class ConcurrencyAndManifestHardeningTests(unittest.TestCase):
         import concurrent.futures
         import tempfile
         from pathlib import Path
+
         from Utils.paths import get_unique_filename
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -863,6 +882,7 @@ class ConcurrencyAndManifestHardeningTests(unittest.TestCase):
         import json
         import tempfile
         from pathlib import Path
+
         from Utils.paths import record_conversion
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -879,7 +899,7 @@ class ConcurrencyAndManifestHardeningTests(unittest.TestCase):
                 concurrent.futures.wait(futures)
 
             self.assertTrue(manifest_path.exists())
-            with open(manifest_path, "r", encoding="utf-8") as f:
+            with open(manifest_path, encoding="utf-8") as f:
                 data = json.load(f)
             self.assertEqual(len(data), num_threads, f"Expected {num_threads} entries in manifest, got {len(data)}")
 
@@ -889,6 +909,7 @@ class StorageCleanupAndRetentionTests(unittest.TestCase):
         import tempfile
         import time
         from pathlib import Path
+
         from Utils.paths import cleanup_storage
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -917,6 +938,7 @@ class StorageCleanupAndRetentionTests(unittest.TestCase):
     def test_cleanup_storage_cross_platform_symlink_and_resolution(self):
         import tempfile
         from pathlib import Path
+
         from Utils.paths import cleanup_storage
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -967,7 +989,7 @@ class PDFPIIRedactionTests(unittest.TestCase):
 
 class MLInputValidationAndFeatureImportanceTests(unittest.TestCase):
     def test_predict_with_model_validates_numeric_features(self):
-        from Utils.ML import train_and_evaluate_model, predict_with_model
+        from Utils.ML import predict_with_model, train_and_evaluate_model
 
         train_df = pd.DataFrame({
             "age": [25, 30, 35, 40, 45, 50],
@@ -1001,7 +1023,7 @@ class MLInputValidationAndFeatureImportanceTests(unittest.TestCase):
         self.assertIn("country", grouped)
         self.assertIn("age", grouped)
         # Grouped should not have one-hot encoded suffixes like country_US
-        for key in grouped.keys():
+        for key in grouped:
             self.assertIn(key, ["country", "age"])
 
 
@@ -1019,13 +1041,67 @@ class AIConversionHardeningTests(unittest.TestCase):
 
 class DataHygieneReframingTests(unittest.TestCase):
     def test_hygiene_metrics_returns_heuristic_scores(self):
-        from Utils.quality import hygiene_metrics, hygiene_index, quality_metrics
+        from Utils.quality import hygiene_index, hygiene_metrics, quality_metrics
 
         df = pd.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]})
         m = hygiene_metrics(df)
         self.assertEqual(m["index"], 100.0)
         self.assertEqual(hygiene_index(df), 100.0)
         self.assertEqual(m["index"], quality_metrics(df)["index"])
+
+
+class QuickPasteStreamingBoundaryTests(unittest.TestCase):
+    """Regression tests for Feature F3.2: quick paste streaming boundary enforcement and custom delimiter support."""
+
+    def test_read_tabular_custom_delimiter_pipe_and_semicolon(self):
+        pipe_data = b"col_a|col_b|col_c\n1|2|3\n4|5|6\n"
+        df_pipe = read_tabular(io.BytesIO(pipe_data), filename="pasted.csv", sep="|")
+        self.assertEqual(df_pipe.shape, (2, 3))
+        self.assertListEqual(list(df_pipe.columns), ["col_a", "col_b", "col_c"])
+
+        semi_data = b"id;score;label\n10;99.5;Alpha\n20;88.0;Beta\n"
+        df_semi = read_tabular(io.BytesIO(semi_data), filename="pasted.csv", sep=";")
+        self.assertEqual(df_semi.shape, (2, 3))
+        self.assertListEqual(list(df_semi.columns), ["id", "score", "label"])
+
+    def test_read_tabular_accepts_raw_string_and_stringio(self):
+        raw_str = "x,y\n10,20\n30,40\n"
+        df_str = read_tabular(raw_str, filename="test_str.csv", sep=",")
+        self.assertEqual(df_str.shape, (2, 2))
+
+        str_io = io.StringIO(raw_str)
+        df_io = read_tabular(str_io, filename="test_io.csv", sep=",")
+        self.assertEqual(df_io.shape, (2, 2))
+
+    def test_quick_paste_streaming_row_limit_enforced(self):
+        with patch("Utils.parsing.pd.read_csv") as mock_read:
+            mock_chunk = pd.DataFrame({"a": range(1_000_001)})
+            mock_read.return_value = [mock_chunk]
+            with self.assertRaises(ValueError) as ctx:
+                read_tabular(io.BytesIO(b"a\n1"), filename="pasted.csv", sep=",")
+            self.assertIn("exceeds the maximum supported limit", str(ctx.exception).lower())
+
+    def test_quick_paste_column_limit_enforced_on_header(self):
+        wide_header = "|".join(f"c_{i}" for i in range(250)) + "\n"
+        wide_row = "|".join("1" for _ in range(250)) + "\n"
+        payload = (wide_header + wide_row).encode("utf-8")
+        with self.assertRaises(ValueError) as ctx:
+            read_tabular(io.BytesIO(payload), filename="pasted.csv", sep="|")
+        self.assertIn("exceeds the maximum supported limit of 200 columns", str(ctx.exception))
+
+    def test_quick_paste_cell_limit_enforced(self):
+        buf = io.BytesIO(b"a|b|c\n1|2|3\n")
+        with patch("Utils.limits.MAX_INGESTION_CELLS", 2):
+            with self.assertRaises(ValueError) as ctx:
+                read_tabular(buf, filename="pasted.csv", sep="|")
+            self.assertIn("exceeds the maximum supported limit", str(ctx.exception).lower())
+
+    def test_quick_paste_memory_ceiling_enforced(self):
+        buf = io.BytesIO(b"a,b\n1,2\n")
+        with patch("Utils.limits.ResourcePolicy.MAX_DATAFRAME_MEMORY_BYTES", 10):
+            with self.assertRaises(ValueError) as ctx:
+                read_tabular(buf, filename="pasted.csv", sep=",")
+            self.assertIn("exceeds the maximum allowed memory budget", str(ctx.exception).lower())
 
 
 if __name__ == '__main__':

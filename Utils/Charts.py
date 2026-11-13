@@ -1,8 +1,14 @@
+from __future__ import annotations
+
+import importlib
+from html import escape
+
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from html import escape
 
+from Utils.sampling import sample_for_analysis, sample_for_visualization
 from Utils.theme import (
     chart_palette,
     get_semantic_tokens,
@@ -10,8 +16,6 @@ from Utils.theme import (
     plot_template,
     style_plotly_fig,
 )
-from Utils.sampling import sample_for_visualization
-
 
 MAX_HUE_CATEGORIES = 20
 
@@ -176,14 +180,12 @@ def create_scatter_plot(
     plot_df = _cap_hue_column(df_sample, hue_col)
     if add_trendline and can_fit_trendline:
         try:
-            import importlib
             importlib.import_module("statsmodels.api")
             has_statsmodels = True
         except ImportError:
             has_statsmodels = False
 
         if has_statsmodels:
-            import numpy as np
             x_num = pd.to_numeric(plot_df[x_col], errors="coerce")
             y_num = pd.to_numeric(plot_df[y_col], errors="coerce")
             finite_mask = np.isfinite(x_num) & np.isfinite(y_num)
@@ -198,7 +200,6 @@ def create_scatter_plot(
         trendline = None
 
     if size_col:
-        import numpy as np
         size_values = pd.to_numeric(plot_df[size_col], errors="coerce")
         if size_values.empty or not np.isfinite(size_values).any() or (size_values.dropna() < 0).any():
             size_col = None
@@ -296,7 +297,13 @@ def create_bar_count_plot(
     return style_plotly_fig(fig)
 
 
-def downsample_timeseries(df: pd.DataFrame, x_col: str, y_col: str, max_points: int = 25000, hue_col: str = None) -> pd.DataFrame:
+def downsample_timeseries(
+    df: pd.DataFrame,
+    x_col: str,
+    y_col: str,
+    max_points: int = 25000,
+    hue_col: str | None = None,
+) -> pd.DataFrame:
     """Min-max envelope decimation for time series data.
 
     Enforces chronological ordering before decimation (datetime coercion -> chronological sort -> decimation).
@@ -345,7 +352,6 @@ def downsample_timeseries(df: pd.DataFrame, x_col: str, y_col: str, max_points: 
 
             bucket_slice = y_vals[start_idx:end_idx]
             if len(bucket_slice) > 0:
-                import numpy as np
                 min_offset = int(np.argmin(bucket_slice))
                 max_offset = int(np.argmax(bucket_slice))
                 selected_indices.add(start_idx + min_offset)
@@ -480,7 +486,6 @@ def create_pie_treemap_plot(
 
 
 def create_correlation_heatmap(df: pd.DataFrame, colorscale: str = "RdBu_r") -> go.Figure | None:
-    from Utils.sampling import sample_for_analysis
     sample_df, is_sampled, _ = sample_for_analysis(df, max_rows=50_000)
     num_df = sample_df.select_dtypes(include="number")
     if num_df.shape[1] < 2:

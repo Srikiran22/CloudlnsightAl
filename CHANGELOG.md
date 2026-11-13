@@ -5,6 +5,19 @@ All notable changes to CloudInsight AI are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Package Metadata Versioning:** Resolved application version dynamically from distribution metadata (importlib.metadata) with fallback to pyproject.toml, replacing hardcoded UI version strings.
+- **Documentation Verification:** Reconciled documentation claims with codebase implementation, clarifying that chart downsampling uses deterministic uniform pseudo-random sampling (df.sample) rather than LTTB or stratified sampling, and documenting AST code execution limitations.
+- **Security Policy Consolidation:** Merged separate security policies into a single root SECURITY.md with verified threat models, OWASP ASVS v5.0.0 and NIST SP 800-218 standards alignment, and verified test citations.
+
+### Added
+- **Licensing and Packaging:** Added MIT license file (LICENSE) and corresponding pyproject packaging metadata with explicit package discovery.
+
+### Removed
+- **Superseded Documentation:** Removed `docs/SECURITY.md` (superseded by root `SECURITY.md`) and `docs/VERIFICATION_REPORT.md` (working audit artifact).
+
 ## [2.2.0] - 2026-10-18
 
 ### Fixed

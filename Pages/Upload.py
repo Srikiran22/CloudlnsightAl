@@ -1,44 +1,54 @@
+import io
 import sqlite3
+import tempfile
 from pathlib import Path
+
 import pandas as pd
 import streamlit as st
 
-from Utils.dataset_ui import render_sidebar, set_active_dataset, invalidate_dataset_cache, load_dataset_cached
+from Utils.AIConvert import convert_to_dataframe
+from Utils.batch import merge_frames
+from Utils.dataset_ui import (
+    invalidate_dataset_cache,
+    load_dataset_cached,
+    render_sidebar,
+    save_and_activate_dataset,
+    set_active_dataset,
+)
+from Utils.Gemini import DEFAULT_GEMINI_MODEL, GEMINI_MODELS, GeminiError
 from Utils.logsys import get_logger
 from Utils.paths import (
-    AIConversionRequired,
     DATASETS_DIR,
+    MAX_AGGREGATE_UPLOAD_BYTES,
+    MAX_COMBINED_ROWS,
+    MAX_INGESTION_CELLS,
+    MAX_INGESTION_COLUMNS,
+    MAX_UPLOAD_BYTES,
+    MAX_UPLOAD_FILES,
+    SUPPORTED_DATASET_EXTENSIONS,
+    AIConversionRequired,
     atomic_write,
+    compute_upload_signature,
+    delete_dataset,
     get_unique_filename,
-    release_filename_reservation,
     get_valid_conversion,
-    record_conversion,
     list_ready_datasets,
     read_dataset,
     read_tabular,
-    SUPPORTED_DATASET_EXTENSIONS,
-    MAX_UPLOAD_FILES,
-    MAX_UPLOAD_BYTES,
-    MAX_AGGREGATE_UPLOAD_BYTES,
-    MAX_COMBINED_ROWS,
-    MAX_INGESTION_COLUMNS,
-    MAX_INGESTION_CELLS,
-    compute_upload_signature,
-    sanitize_for_csv_export,
+    record_conversion,
+    release_filename_reservation,
     safe_stem,
+    sanitize_for_csv_export,
 )
-from Utils.AIConvert import convert_to_dataframe
-from Utils.batch import merge_frames
-from Utils.secrets import ask, value_of, keep_box, release
-from Utils.Gemini import GEMINI_MODELS, DEFAULT_GEMINI_MODEL, GeminiError
 from Utils.privacy import detect_sensitive_text
-from Utils.theme import page_header, section_card_header, metric_card
+from Utils.secrets import ask, keep_box, release, value_of
+from Utils.theme import metric_card, page_header, section_card_header
 
 logger = get_logger("Upload")
 
 page_header(
     "Data Hub & Ingest",
-    "Ingest tabular data files, connect to SQLite databases, paste raw tabular data, or manage your workspace catalog.",
+    "Multi-format streaming ingestion (CSV, Parquet, Excel, JSON, SQLite) with pre-parse resource bounding, XXE defense, and collision-safe catalog registration.",
     badge="LOCAL PIPELINE"
 )
 render_sidebar()
@@ -108,8 +118,15 @@ with tab_files:
                         try:
                             single_df = read_tabular(uploaded, filename=target_name)
                             DATASETS_DIR.mkdir(parents=True, exist_ok=True)
-                            uploaded.seek(0)
-                            atomic_write(DATASETS_DIR / target_name, uploaded.getbuffer(), mode="wb")
+                            if target_name.lower().endswith(".csv"):
+                                sanitized_csv = sanitize_for_csv_export(single_df).to_csv(index=False)
+                                atomic_write(DATASETS_DIR / target_name, sanitized_csv, mode="w", encoding="utf-8")
+                            elif target_name.lower().endswith(".tsv"):
+                                sanitized_tsv = sanitize_for_csv_export(single_df).to_csv(sep="\t", index=False)
+                                atomic_write(DATASETS_DIR / target_name, sanitized_tsv, mode="w", encoding="utf-8")
+                            else:
+                                uploaded.seek(0)
+                                atomic_write(DATASETS_DIR / target_name, uploaded.getbuffer(), mode="wb")
                             invalidate_dataset_cache(target_name)
                             parsed_datasets.append((target_name, single_df))
                         except AIConversionRequired as needed:
@@ -156,17 +173,15 @@ with tab_files:
                                     st.error(merge_error)
                                     file_name, df = None, None
                                 else:
-                                    csv_text = combined.to_csv(index=False)
-                                    csv_bytes = csv_text.encode("utf-8")
+                                    sanitized_combined = sanitize_for_csv_export(combined)
+                                    csv_bytes = sanitized_combined.to_csv(index=False).encode("utf-8")
                                     if len(csv_bytes) > MAX_UPLOAD_BYTES:
                                         merge_error = f"Combined dataset byte size ({len(csv_bytes)/(1024*1024):.1f} MB) exceeds maximum limit. Merge was aborted."
                                         st.error(merge_error)
                                         file_name, df = None, None
                                     else:
-                                        file_name = get_unique_filename("combined_dataset.csv", directory=DATASETS_DIR)
-                                        DATASETS_DIR.mkdir(parents=True, exist_ok=True)
-                                        atomic_write(DATASETS_DIR / file_name, csv_text, mode="w", encoding="utf-8")
-                                        invalidate_dataset_cache(file_name)
+                                        saved_path = save_and_activate_dataset(combined, "combined_dataset.csv", sanitize=True)
+                                        file_name = saved_path.name
                                         df = combined
                                         fresh_ingest = True
 
@@ -190,8 +205,8 @@ with tab_files:
     if pending:
         names_list = ", ".join(f"`{n}`" for n, _ in pending)
         st.info(
-            f"{len(pending)} file(s) have no native table structure: {names_list}. "
-            "Convert and structure them with Google Gemini."
+            f"{len(pending)} file(s) lack native tabular structure: {names_list}. "
+            "Extract structured tabular schema using Google Gemini multimodal parsing."
         )
         hints = st.text_input("Conversion hints (optional)", key="ai_conv_hints")
         ask("gemini", "Google Gemini API Key:")
@@ -216,7 +231,7 @@ with tab_files:
             if not value_of("gemini"):
                 st.error("Please enter your Google Gemini API key first.")
             else:
-                with st.spinner("Gemini is structuring your files..."):
+                with st.spinner("Reconciling unstructured document text into tabular schema via Gemini API..."):
                     still_pending = []
                     newly_converted = []
                     try:
@@ -243,10 +258,8 @@ with tab_files:
                                 )
                                 ext_tag = Path(fname).suffix.lstrip(".").lower() or "txt"
                                 target_stem = f"{Path(fname).stem}_{ext_tag}_converted.csv"
-                                converted_name = get_unique_filename(target_stem, directory=DATASETS_DIR)
-                                DATASETS_DIR.mkdir(parents=True, exist_ok=True)
-                                atomic_write(DATASETS_DIR / converted_name, converted.to_csv(index=False), mode="w", encoding="utf-8")
-                                invalidate_dataset_cache(converted_name)
+                                saved_path = save_and_activate_dataset(converted, target_stem, sanitize=True)
+                                converted_name = saved_path.name
                                 record_conversion(
                                     converted_name,
                                     fname,
@@ -285,11 +298,8 @@ with tab_files:
                                 file_name, df = None, None
                             else:
                                 combined = merge_frames(parsed_datasets)
-                                csv_text = combined.to_csv(index=False)
-                                file_name = get_unique_filename("combined_dataset.csv", directory=DATASETS_DIR)
-                                DATASETS_DIR.mkdir(parents=True, exist_ok=True)
-                                atomic_write(DATASETS_DIR / file_name, csv_text, mode="w", encoding="utf-8")
-                                invalidate_dataset_cache(file_name)
+                                saved_path = save_and_activate_dataset(combined, "combined_dataset.csv", sanitize=True)
+                                file_name = saved_path.name
                                 df = combined
                                 fresh_ingest = True
 
@@ -338,7 +348,6 @@ with tab_sqlite:
         )
 
         if sqlite_file:
-            import tempfile
             with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp_db:
                 tmp_db.write(sqlite_file.getvalue())
                 tmp_db_path = tmp_db.name
@@ -361,16 +370,14 @@ with tab_sqlite:
                     query_to_run = custom_query.strip() if custom_query.strip() else f"SELECT * FROM `{selected_table}`"
 
                     if st.button("Run SQL & Ingest Table", type="primary", key="btn_run_sql"):
-                        with st.spinner("Executing SQL query..."):
+                        with st.spinner("Executing SQL extraction query..."):
                             sql_df = pd.read_sql_query(query_to_run, conn)
                             if sql_df.empty:
                                 st.warning("Query returned zero rows.")
                             else:
-                                out_name = get_unique_filename(f"{selected_table}.csv", directory=DATASETS_DIR)
-                                atomic_write(DATASETS_DIR / out_name, sql_df.to_csv(index=False), mode="w", encoding="utf-8")
-                                invalidate_dataset_cache(out_name)
-                                set_active_dataset(sql_df, out_name)
-                                st.success(f"Ingested `{out_name}` with {sql_df.shape[0]:,} rows and {sql_df.shape[1]} columns!")
+                                safe_table = safe_stem(selected_table, fallback="table")
+                                saved_path = save_and_activate_dataset(sql_df, f"{safe_table}.csv", sanitize=True)
+                                st.success(f"Ingested `{saved_path.name}` ({sql_df.shape[0]:,} rows × {sql_df.shape[1]} columns).")
                                 st.rerun()
             except Exception as e:
                 st.error(f"SQLite error: {e}")
@@ -405,23 +412,37 @@ with tab_paste:
             pasted_name = st.text_input("Dataset name", value="pasted_data.csv")
 
         if st.button("Parse & Ingest Text", type="primary", key="btn_parse_pasted"):
-            if not paste_text.strip():
+            stripped_text = paste_text.strip()
+            if not stripped_text:
                 st.warning("Please paste some tabular text first.")
             else:
-                import io
+                raw_target = pasted_name.strip() or "pasted_data.csv"
+                target_name = raw_target if raw_target.lower().endswith((".csv", ".tsv")) else f"{raw_target}.csv"
                 try:
-                    pasted_df = pd.read_csv(io.StringIO(paste_text), sep=chosen_sep)
+                    pasted_bytes = stripped_text.encode("utf-8")
+                    pasted_df = read_tabular(
+                        io.BytesIO(pasted_bytes),
+                        filename=target_name,
+                        sep=chosen_sep,
+                    )
                     if pasted_df.empty:
-                        st.warning("Parsed DataFrame is empty.")
+                        st.warning("Parsed dataset contains no records or columns.")
                     else:
-                        clean_fname = get_unique_filename(pasted_name.strip() or "pasted_data.csv", directory=DATASETS_DIR)
-                        atomic_write(DATASETS_DIR / clean_fname, pasted_df.to_csv(index=False), mode="w", encoding="utf-8")
-                        invalidate_dataset_cache(clean_fname)
-                        set_active_dataset(pasted_df, clean_fname)
-                        st.success(f"Parsed `{clean_fname}` ({pasted_df.shape[0]:,} rows × {pasted_df.shape[1]} cols) and set as active!")
+                        saved_path = save_and_activate_dataset(pasted_df, target_name, sanitize=True)
+                        st.success(
+                            f"Parsed `{saved_path.name}` ({pasted_df.shape[0]:,} rows × {pasted_df.shape[1]} cols) "
+                            "and registered as active dataset."
+                        )
                         st.rerun()
-                except Exception as e:
-                    st.error(f"Parsing error: {e}")
+                except ValueError as val_err:
+                    st.error(f"Ingestion boundary violation: {val_err}")
+                except pd.errors.EmptyDataError:
+                    st.warning("Pasted content contains no columns or data.")
+                except pd.errors.ParserError as parse_err:
+                    st.error(f"Malformed tabular data: Could not parse text with delimiter '{chosen_sep}'. Details: {parse_err}")
+                except Exception as exc:
+                    logger.warning("Quick-paste ingestion failed for '%s': %s: %s", target_name, type(exc).__name__, exc)
+                    st.error(f"Ingestion error: {exc}")
 
 
 # -----------------------------------------------------------------------------
@@ -460,9 +481,12 @@ with tab_catalog:
             with c_act2:
                 target_to_del = st.selectbox("Select dataset to delete", ready_files, key="select_cat_del")
                 if st.button(f"Delete `{target_to_del}`", help="Deletes file from disk", key="btn_cat_delete"):
-                    (DATASETS_DIR / target_to_del).unlink(missing_ok=True)
-                    invalidate_dataset_cache(target_to_del)
-                    if st.session_state.get("dataset_name") == target_to_del:
-                        set_active_dataset(None, None)
-                    st.toast(f"Deleted `{target_to_del}`")
+                    try:
+                        delete_dataset(target_to_del, directory=DATASETS_DIR)
+                        invalidate_dataset_cache(target_to_del)
+                        if st.session_state.get("dataset_name") == target_to_del:
+                            set_active_dataset(None, None)
+                        st.toast(f"Deleted `{target_to_del}`")
+                    except Exception as del_err:
+                        st.error(f"Failed to delete `{target_to_del}`: {del_err}")
                     st.rerun()

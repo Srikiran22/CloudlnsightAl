@@ -263,10 +263,6 @@ def _is_definitely_prose_cell(text):
     return bool(s.endswith(":") and len(tokens) >= 2)
 
 
-def _is_prose_cell(text):
-    return _is_definitely_prose_cell(text)
-
-
 def _is_plausible_header_row(header_fields):
     if not header_fields or len(header_fields) == 0:
         return False
@@ -291,10 +287,6 @@ def _is_plausible_header_row(header_fields):
             if s.endswith(":") and len(tokens) >= 2:
                 return False
     return True
-
-
-def _plausible_header(columns):
-    return _is_plausible_header_row(columns)
 
 
 def _is_column_structured(series):
@@ -449,7 +441,7 @@ def _uniform_runs(lines, indexes):
     return runs
 
 
-def _csv_blocks(lines, comma_indexes):
+def _csv_blocks(_lines, comma_indexes):
     blocks = []
     current = []
     for index in comma_indexes:

@@ -1,25 +1,34 @@
-import streamlit as st
+import io
 from pathlib import Path
 
-from Utils.Preprocessing import remove_duplicates, fill_missing_values, drop_missing_values
-from Utils.paths import (
-    AIConversionRequired, DATASETS_DIR, atomic_write, get_unique_filename, list_ready_datasets,
-    read_tabular, sanitize_for_csv_export, SUPPORTED_DATASET_EXTENSIONS,
-)
+import streamlit as st
+
 from Utils.dataset_ui import (
     dataframe_fingerprint,
     dataset_fingerprint,
     invalidate_dataset_cache,
     load_dataset_cached,
     render_sidebar,
+    save_and_activate_dataset,
     set_active_dataset,
 )
-
+from Utils.paths import (
+    DATASETS_DIR,
+    SUPPORTED_DATASET_EXTENSIONS,
+    AIConversionRequired,
+    atomic_write,
+    get_unique_filename,
+    list_ready_datasets,
+    read_tabular,
+    sanitize_for_csv_export,
+)
+from Utils.Preprocessing import drop_missing_values, fill_missing_values, remove_duplicates
 from Utils.theme import page_header, section_card_header
 
 page_header(
-    "Clean Data",
-    "Remove duplicate rows and resolve missing values, then save the result as a new dataset."
+    "Data Cleaning & Imputation",
+    "Deduplication, statistical imputation, and sanitized catalog export with atomic filesystem integrity.",
+    badge="PREPROCESSING"
 )
 
 dataset_folder = DATASETS_DIR
@@ -38,7 +47,7 @@ with st.container(border=True):
 
     if source_option == "Select from datasets folder":
         if not available_files:
-            st.info("No datasets found in `Datasets/`. Ingest one on the Import Files page first.")
+            st.info("No datasets found in `Datasets/`. Ingest one on the Data Hub & Ingest page first.")
         else:
             selected_filename = st.selectbox("Select dataset to clean", available_files)
             try:
@@ -100,13 +109,13 @@ if df is not None:
             missing_strategy = st.selectbox(
                 "Missing value strategy",
                 [
-                    "Fill with average (numbers) & most common (text) — Recommended",
-                    "Fill missing numbers with median & text with most common value",
-                    "Fill missing numbers with zero & text with 'Unknown'",
-                    "Drop Rows with Missing Values",
-                    "Keep Missing Values As-Is",
+                    "Mean imputation (numeric) / Mode imputation (categorical)",
+                    "Median imputation (numeric) / Mode imputation (categorical)",
+                    "Constant imputation (zero for numeric / 'Unknown' for categorical)",
+                    "Complete-case analysis (drop incomplete rows)",
+                    "Preserve missing values (retain nulls without modification)",
                 ],
-                help="Applies per column: numeric columns use the chosen statistic, text columns fall back to the most common value.",
+                help="Applies per column: numeric columns use the chosen statistic, categorical columns fall back to modal or indicator values.",
             )
 
         st.markdown("")
@@ -151,7 +160,7 @@ if df is not None:
             is_already_clean = (dup_count == 0 and missing_count == 0)
 
             if is_already_clean:
-                st.info("Dataset already has 0 duplicate rows and 0 missing values. No rows or values needed modification.")
+                st.info("Dataset exhibits 100% completeness and uniqueness; no deduplication or imputation required.")
 
             base_name = Path(selected_filename or "dataset.csv").stem
             while base_name.lower().startswith("cleaned_"):
@@ -171,7 +180,7 @@ if df is not None:
                 cleaned_name = get_unique_filename(user_stem, directory=dataset_folder)
                 cleaned_path = dataset_folder / cleaned_name
                 dataset_folder.mkdir(parents=True, exist_ok=True)
-                atomic_write(cleaned_path, cleaned_df.to_csv(index=False), mode="w", encoding="utf-8")
+                atomic_write(cleaned_path, sanitize_for_csv_export(cleaned_df).to_csv(index=False), mode="w", encoding="utf-8")
                 invalidate_dataset_cache(cleaned_name)
                 set_active_dataset(cleaned_df, cleaned_name)
                 st.success(f"Cleaned dataset saved as `{cleaned_name}`.")
@@ -227,7 +236,6 @@ if df is not None:
                     use_container_width=True
                 )
             with c_parquet:
-                import io
                 parquet_buf = io.BytesIO()
                 cleaned_df.to_parquet(parquet_buf, index=False)
                 st.download_button(
@@ -239,13 +247,10 @@ if df is not None:
                 )
             with c_save:
                 if st.button("Save to Workspace Catalog", use_container_width=True):
-                    from Utils.paths import resolve_dataset_path
                     try:
-                        save_path = resolve_dataset_path(cleaned_name)
-                        cleaned_df.to_csv(save_path, index=False)
-                        st.success(f"Saved `{cleaned_name}` to Datasets catalog!")
+                        saved_path = save_and_activate_dataset(cleaned_df, cleaned_name, sanitize=True)
+                        st.success(f"Saved `{saved_path.name}` to Datasets catalog.")
                     except Exception as save_err:
                         st.error(f"Save failed: {save_err}")
 
 render_sidebar()
-

@@ -1,9 +1,4 @@
-"""Format-specific readers used by the ingestion dispatcher.
-
-Each reader accepts an in-memory buffer (or decoded text) and returns a
-DataFrame, enforcing the ceilings declared in :mod:`Utils.limits`. The public
-dispatch entry point lives in :func:`Utils.paths.read_tabular`.
-"""
+from __future__ import annotations
 
 import codecs
 import csv
@@ -12,24 +7,34 @@ import json
 import re
 import xml.parsers.expat
 from html.parser import HTMLParser
+from typing import Any
 from xml.etree import ElementTree
 
 import pandas as pd
 
 from Utils import limits
 from Utils.frames import _decode_text_buffer, _sanitize_unhashable_cells
-from Utils.limits import AIConversionRequired, CSV_ENCODINGS, ResourcePolicy
+from Utils.limits import CSV_ENCODINGS, AIConversionRequired, ResourcePolicy
 from Utils.logsys import get_logger
 
 logger = get_logger("Parsing")
 
 
-def _inspect_delimited_header_width(buffer, encoding, sep=","):
+def _inspect_delimited_header_width(
+    buffer: io.BytesIO | io.IOBase | Any, encoding: str, sep: str = ","
+) -> int:
     """Quickly inspect header width before full parsing to reject wide files early and return column count."""
     buffer.seek(0)
     try:
         hdr = pd.read_csv(buffer, sep=sep, encoding=encoding, nrows=0)
-        num_cols = len(hdr.columns)
+        if isinstance(hdr, list) and len(hdr) > 0 and hasattr(hdr[0], "columns"):
+            num_cols = len(hdr[0].columns)
+        elif hasattr(hdr, "columns"):
+            num_cols = len(hdr.columns)
+        elif isinstance(hdr, (list, tuple)):
+            num_cols = len(hdr)
+        else:
+            num_cols = 1
         if num_cols > limits.MAX_INGESTION_COLUMNS:
             raise ValueError(
                 f"Dataset contains {num_cols:,} columns, which exceeds the maximum supported limit "
@@ -42,7 +47,7 @@ def _inspect_delimited_header_width(buffer, encoding, sep=","):
         buffer.seek(0)
 
 
-def _detect_csv_delimiter(sample_text):
+def _detect_csv_delimiter(sample_text: str) -> str:
     """Detect delimiter for CSV files when default comma parsing produces a single column.
     Checks candidate separators: ';', '\t', '|'.
     Returns detected delimiter if consistently observed across sample rows, else ','."""
@@ -61,17 +66,18 @@ def _detect_csv_delimiter(sample_text):
             if not counts:
                 continue
             first_count = counts[0]
-            if first_count >= 2 and all(c == first_count for c in counts):
-                if first_count > best_cols:
-                    best_cols = first_count
-                    best_delim = delim
+            if first_count >= 2 and all(c == first_count for c in counts) and first_count > best_cols:
+                best_cols = first_count
+                best_delim = delim
         except Exception:
             continue
 
     return best_delim
 
 
-def _check_string_cardinality_amplification(buffer, sep=",", encoding="utf-8", max_rows=None):
+def _check_string_cardinality_amplification(
+    buffer: io.BytesIO | io.IOBase | Any, sep: str = ",", encoding: str = "utf-8", max_rows: int | None = None
+) -> None:
     """Early estimation guard to reject massive high-cardinality string datasets before full materialization."""
     try:
         if not (hasattr(buffer, "seek") and hasattr(buffer, "tell")):
@@ -120,7 +126,9 @@ def _check_string_cardinality_amplification(buffer, sep=",", encoding="utf-8", m
         buffer.seek(0)
 
 
-def _read_chunked_delimited_buffer(buffer, sep=",", encoding="utf-8", nrows=None):
+def _read_chunked_delimited_buffer(
+    buffer: io.BytesIO | io.IOBase | Any, sep: str = ",", encoding: str = "utf-8", nrows: int | None = None
+) -> pd.DataFrame:
     """Read delimited buffer in bounded chunks, tracking accumulated deep memory and string cells.
 
     Tracks accumulated per-chunk high-cardinality string cell observations (not global distinct cardinality),
@@ -205,7 +213,36 @@ def _read_chunked_delimited_buffer(buffer, sep=",", encoding="utf-8", nrows=None
     return df
 
 
-def _read_csv_from_buffer(buffer, nrows=None):
+def _read_delimited_buffer(
+    buffer: io.BytesIO | io.IOBase | Any,
+    sep: str = ",",
+    encoding: str | None = None,
+    nrows: int | None = None,
+) -> pd.DataFrame:
+    """Read delimited buffer using chunked streaming with resource boundary enforcement."""
+    encodings_to_try = [encoding] if encoding else CSV_ENCODINGS
+    last_error = None
+    for enc in encodings_to_try:
+        try:
+            _inspect_delimited_header_width(buffer, enc, sep=sep)
+            _check_string_cardinality_amplification(buffer, sep=sep, encoding=enc, max_rows=nrows)
+            buffer.seek(0)
+            return _read_chunked_delimited_buffer(buffer, sep=sep, encoding=enc, nrows=nrows)
+        except UnicodeDecodeError as error:
+            last_error = error
+    if last_error:
+        raise last_error
+    raise ValueError(f"Unable to decode delimited data with delimiter '{sep}'.")
+
+
+def _read_csv_from_buffer(
+    buffer: io.BytesIO | io.IOBase | Any,
+    nrows: int | None = None,
+    sep: str | None = None,
+) -> pd.DataFrame:
+    if sep is not None:
+        return _read_delimited_buffer(buffer, sep=sep, nrows=nrows)
+
     last_error = None
     buffer.seek(0)
     sample_bytes = buffer.read(64 * 1024)
@@ -234,24 +271,15 @@ def _read_csv_from_buffer(buffer, nrows=None):
     raise ValueError("Unable to decode CSV file.")
 
 
-def _read_tsv_from_buffer(buffer, nrows=None):
-    last_error = None
-    for encoding in CSV_ENCODINGS:
-        try:
-            _inspect_delimited_header_width(buffer, encoding, sep="\t")
-            _check_string_cardinality_amplification(buffer, sep="\t", encoding=encoding, max_rows=nrows)
-            buffer.seek(0)
-            return _read_chunked_delimited_buffer(buffer, sep="\t", encoding=encoding, nrows=nrows)
-        except UnicodeDecodeError as error:
-            last_error = error
-    if last_error:
-        raise last_error
-    raise ValueError("Unable to decode TSV file.")
+def _read_tsv_from_buffer(
+    buffer: io.BytesIO | io.IOBase | Any, nrows: int | None = None
+) -> pd.DataFrame:
+    return _read_delimited_buffer(buffer, sep="\t", nrows=nrows)
 
 
 
 
-def _read_delimited_text(text, nrows=None):
+def _read_delimited_text(text: str, nrows: int | None = None) -> pd.DataFrame | None:
     """Native text-table policy.
 
     A .txt/.log/.md/.rst/.sql file parses natively ONLY when csv.Sniffer
@@ -286,7 +314,9 @@ def _read_delimited_text(text, nrows=None):
     return df
 
 
-def _stream_json_from_buffer(buffer, nrows):
+def _stream_json_from_buffer(
+    buffer: io.BytesIO | io.IOBase | Any, nrows: int
+) -> list[dict[str, Any]] | dict[str, list[Any]] | None:
     """Incremental row-bounded stream decoder for JSON structures directly from a file-like buffer.
 
     Reads chunk by chunk (64KB) without materializing the full payload into memory as a string.
@@ -367,7 +397,7 @@ def _stream_json_from_buffer(buffer, nrows):
                             raise ValueError(f"Malformed JSON dataset: {err}") from err
                         return records if records else None
                     if len(buf) > 10 * 1024 * 1024:
-                        raise ValueError("Individual JSON row object exceeds maximum size limit (10MB).")
+                        raise ValueError("Individual JSON row object exceeds maximum size limit (10MB).") from err
         return records
 
     # 2. Outer dict (keyed record array or columnar)
@@ -466,7 +496,9 @@ def _stream_json_from_buffer(buffer, nrows):
     return None
 
 
-def _stream_json_array(text, nrows):
+def _stream_json_array(
+    text: str, nrows: int
+) -> list[dict[str, Any]] | dict[str, list[Any]] | None:
     """Incremental row-bounded decoder for JSON structures:
     - Root arrays: [ {...}, ... ]
     - Keyed record arrays in dicts: {"status": 200, "records": [ {...}, ... ]}
@@ -568,7 +600,9 @@ def _stream_json_array(text, nrows):
     return None
 
 
-def _read_json_from_buffer(buffer, nrows=None):
+def _read_json_from_buffer(
+    buffer: io.BytesIO | io.IOBase | Any, nrows: int | None = None
+) -> pd.DataFrame:
     buffer.seek(0)
     try:
         if nrows is not None and nrows > 0:
@@ -672,11 +706,7 @@ def _read_json_from_buffer(buffer, nrows=None):
                     f"Ambiguous JSON structure: multiple top-level record lists found ({', '.join(sorted(record_list_keys))}). "
                     "Extract the target list before ingestion."
                 )
-            if len(record_list_keys) == 1:
-                data = data[record_list_keys[0]]
-            else:
-                # Single record object: normalize as a 1-row table
-                data = [data]
+            data = data[record_list_keys[0]] if len(record_list_keys) == 1 else [data]
 
         if isinstance(data, list):
             if nrows is not None and len(data) > nrows:
@@ -703,7 +733,7 @@ def _read_json_from_buffer(buffer, nrows=None):
         raise ValueError(f"Failed to parse JSON dataset: {exc}") from exc
 
 
-def _inspect_jsonl_header_width(buffer):
+def _inspect_jsonl_header_width(buffer: io.BytesIO | io.IOBase | Any) -> None:
     try:
         buffer.seek(0)
         first_line = buffer.readline()
@@ -722,7 +752,9 @@ def _inspect_jsonl_header_width(buffer):
         buffer.seek(0)
 
 
-def _read_jsonl_from_buffer(buffer, nrows=None):
+def _read_jsonl_from_buffer(
+    buffer: io.BytesIO | io.IOBase | Any, nrows: int | None = None
+) -> pd.DataFrame:
     _inspect_jsonl_header_width(buffer)
     last_error = None
     for encoding in CSV_ENCODINGS:
@@ -744,7 +776,13 @@ def _read_jsonl_from_buffer(buffer, nrows=None):
 MAX_XML_DEPTH = 50
 
 
-def _flatten_xml_element(element, parent_key="", index=None, depth=1, max_depth=MAX_XML_DEPTH):
+def _flatten_xml_element(
+    element: ElementTree.Element,
+    parent_key: str = "",
+    index: int | None = None,
+    depth: int = 1,
+    max_depth: int = MAX_XML_DEPTH,
+) -> dict[str, Any]:
     if depth > max_depth:
         raise ValueError(f"XML nesting exceeds maximum allowed depth of {max_depth}.")
     record = {}
@@ -802,7 +840,7 @@ _DTD_BYTE_PATTERNS = [
 ]
 
 
-def _detect_xml_encoding(stream):
+def _detect_xml_encoding(stream: io.BytesIO | io.IOBase | Any) -> str:
     pos = stream.tell() if hasattr(stream, "tell") else 0
     head = stream.read(4)
     if hasattr(stream, "seek"):
@@ -843,8 +881,8 @@ class _TranscodingStream:
         return out
 
 
-def _reject_dtd(payload):
-    def _prohibit(*args, **kwargs):
+def _reject_dtd(payload: bytes | bytearray | io.BytesIO | io.IOBase | Any) -> None:
+    def _prohibit(*_args, **_kwargs):
         raise ValueError(
             "XML datasets must not contain DTD/entity declarations "
             "(they enable resource-exhaustion attacks); export plain elements."
@@ -860,7 +898,7 @@ def _reject_dtd(payload):
             p.EntityDeclHandler = _prohibit
             root_started = False
 
-            def _start_element(name, attrs):
+            def _start_element(_name, _attrs):
                 nonlocal root_started
                 root_started = True
 
@@ -898,7 +936,9 @@ def _reject_dtd(payload):
         return
 
 
-def _read_xml_from_buffer(buffer, nrows=None):
+def _read_xml_from_buffer(
+    buffer: io.BytesIO | io.IOBase | Any, nrows: int | None = None
+) -> pd.DataFrame:
     buffer.seek(0)
     enc = _detect_xml_encoding(buffer)
     _reject_dtd(buffer)
@@ -1027,7 +1067,9 @@ class _HTMLTableParser(HTMLParser):
             self._cell.append(data)
 
 
-def _read_html_from_buffer(buffer, nrows=None):
+def _read_html_from_buffer(
+    buffer: io.BytesIO | io.IOBase | Any, nrows: int | None = None
+) -> pd.DataFrame:
     html_text = _decode_text_buffer(buffer)
     parser = _HTMLTableParser(max_rows=nrows)
     parser.feed(html_text)
@@ -1074,7 +1116,9 @@ def _read_html_from_buffer(buffer, nrows=None):
 MAX_TEXT_EXTRACT_CHARS = 50_000
 
 
-def _read_parquet_from_buffer(buffer, nrows=None):
+def _read_parquet_from_buffer(
+    buffer: io.BytesIO | io.IOBase | Any, nrows: int | None = None
+) -> pd.DataFrame:
     buffer.seek(0)
     effective_limit = nrows if (nrows is not None and nrows > 0) else limits.MAX_INGESTION_ROWS
     try:
@@ -1126,7 +1170,9 @@ MAX_PDF_PAGES = 30
 MAX_PDF_EXTRACT_CHARS = 50_000
 
 
-def _read_pdf_from_buffer(buffer, filename=""):
+def _read_pdf_from_buffer(
+    buffer: io.BytesIO | io.IOBase | Any, filename: str = ""
+) -> pd.DataFrame:
     try:
         from pypdf import PdfReader
     except ImportError as error:
@@ -1155,3 +1201,9 @@ def _read_pdf_from_buffer(buffer, filename=""):
         raw_text=full_text,
         filename=filename,
     )
+
+
+# Public Survey Aliases for Backwards Compatibility
+_read_csv_buffer = _read_csv_from_buffer
+_read_json_buffer = _read_json_from_buffer
+_read_parquet_buffer = _read_parquet_from_buffer

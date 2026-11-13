@@ -1,20 +1,42 @@
-import io
-import datetime
+from __future__ import annotations
 
-import pandas as pd
-import numpy as np
-from reportlab.lib.pagesizes import letter
-from reportlab.lib import colors
-from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
-)
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+import datetime
+import io
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 from xml.sax.saxutils import escape
 
-from Utils.logsys import get_logger
-from Utils.quality import quality_metrics
-from Utils.sampling import sample_for_visualization
+import numpy as np
+import pandas as pd
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.platypus import (
+    Image,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
 
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.font_manager as fm
+    import matplotlib.pyplot as plt
+except ImportError:
+    matplotlib = None
+    fm = None
+    plt = None
+
+from Utils.logsys import get_logger
+from Utils.privacy import detect_sensitive_columns
+from Utils.quality import quality_metrics
+from Utils.sampling import sample_for_analysis, sample_for_visualization
 
 logger = get_logger("PDF")
 
@@ -31,7 +53,7 @@ SECTION_COLORS = {
 }
 
 
-def _fmt(value, decimals=2):
+def _fmt(value: Any, decimals: int = 2) -> str:
     if value is None or (isinstance(value, float) and (np.isnan(value) or np.isinf(value))):
         return "-"
     if isinstance(value, (int, np.integer)):
@@ -42,7 +64,7 @@ def _fmt(value, decimals=2):
         return str(value)
 
 
-def validate_report_template(config: dict) -> dict:
+def validate_report_template(config: dict[str, Any]) -> dict[str, Any]:
     """Validate and sanitize report template schema to prevent configuration bugs."""
     if not isinstance(config, dict):
         raise ValueError("Report template must be a valid dictionary/JSON object.")
@@ -88,7 +110,7 @@ _PDF_FONT_REGULAR = "Helvetica"
 _PDF_FONT_BOLD = "Helvetica-Bold"
 
 
-def _resolve_pdf_fonts():
+def _resolve_pdf_fonts() -> tuple[str, str]:
     """Register broad Unicode/TrueType fonts with ReportLab if available.
     Prefers CJK-capable system fonts (SimSun, YaHei, Malgun, Noto CJK, Arial Unicode MS),
     then falls back to matplotlib's bundled DejaVuSans, and finally Helvetica."""
@@ -96,52 +118,48 @@ def _resolve_pdf_fonts():
     if _UNICODE_FONTS_RESOLVED:
         return _PDF_FONT_REGULAR, _PDF_FONT_BOLD
 
-    from pathlib import Path
-    import matplotlib.font_manager as fm
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
-
     # 1. Try to find a font supporting CJK + Latin
-    cjk_families = [
-        "Microsoft YaHei", "SimSun", "SimHei", "Malgun Gothic",
-        "MS Gothic", "Arial Unicode MS", "Noto Sans CJK SC", "Noto Sans CJK",
-    ]
-    for fam in cjk_families:
-        try:
-            fpath = fm.findfont(fam, fallback_to_default=False)
-            if fpath and Path(fpath).exists():
-                pdfmetrics.registerFont(TTFont("AppUnicodeFont", fpath))
-                _PDF_FONT_REGULAR = "AppUnicodeFont"
-                _PDF_FONT_BOLD = "AppUnicodeFont"
-                _UNICODE_FONTS_RESOLVED = True
-                logger.info("Registered CJK Unicode font '%s' (%s) for PDF export", fam, fpath)
-                return _PDF_FONT_REGULAR, _PDF_FONT_BOLD
-        except Exception:
-            continue
+    if fm is not None:
+        cjk_families = [
+            "Microsoft YaHei", "SimSun", "SimHei", "Malgun Gothic",
+            "MS Gothic", "Arial Unicode MS", "Noto Sans CJK SC", "Noto Sans CJK",
+        ]
+        for fam in cjk_families:
+            try:
+                fpath = fm.findfont(fam, fallback_to_default=False)
+                if fpath and Path(fpath).exists():
+                    pdfmetrics.registerFont(TTFont("AppUnicodeFont", fpath))
+                    _PDF_FONT_REGULAR = "AppUnicodeFont"
+                    _PDF_FONT_BOLD = "AppUnicodeFont"
+                    _UNICODE_FONTS_RESOLVED = True
+                    logger.info("Registered CJK Unicode font '%s' (%s) for PDF export", fam, fpath)
+                    return _PDF_FONT_REGULAR, _PDF_FONT_BOLD
+            except Exception:
+                continue
 
     # 2. Try matplotlib's bundled DejaVuSans (guaranteed present across platforms with matplotlib)
-    try:
-        import matplotlib
-        data_dir = Path(matplotlib.get_data_path()) / "fonts" / "ttf"
-        reg_ttf = data_dir / "DejaVuSans.ttf"
-        bold_ttf = data_dir / "DejaVuSans-Bold.ttf"
-        if reg_ttf.exists() and bold_ttf.exists():
-            pdfmetrics.registerFont(TTFont("AppDejaVu", str(reg_ttf)))
-            pdfmetrics.registerFont(TTFont("AppDejaVu-Bold", str(bold_ttf)))
-            _PDF_FONT_REGULAR = "AppDejaVu"
-            _PDF_FONT_BOLD = "AppDejaVu-Bold"
-            _UNICODE_FONTS_RESOLVED = True
-            logger.info("Registered bundled DejaVuSans TrueType fonts for PDF export")
-            return _PDF_FONT_REGULAR, _PDF_FONT_BOLD
-    except Exception as exc:
-        logger.debug("DejaVu font registration failed: %s", exc)
+    if matplotlib is not None:
+        try:
+            data_dir = Path(matplotlib.get_data_path()) / "fonts" / "ttf"
+            reg_ttf = data_dir / "DejaVuSans.ttf"
+            bold_ttf = data_dir / "DejaVuSans-Bold.ttf"
+            if reg_ttf.exists() and bold_ttf.exists():
+                pdfmetrics.registerFont(TTFont("AppDejaVu", str(reg_ttf)))
+                pdfmetrics.registerFont(TTFont("AppDejaVu-Bold", str(bold_ttf)))
+                _PDF_FONT_REGULAR = "AppDejaVu"
+                _PDF_FONT_BOLD = "AppDejaVu-Bold"
+                _UNICODE_FONTS_RESOLVED = True
+                logger.info("Registered bundled DejaVuSans TrueType fonts for PDF export")
+                return _PDF_FONT_REGULAR, _PDF_FONT_BOLD
+        except Exception as exc:
+            logger.debug("DejaVu font registration failed: %s", exc)
 
     # 3. Graceful fallback
     _UNICODE_FONTS_RESOLVED = True
     return _PDF_FONT_REGULAR, _PDF_FONT_BOLD
 
 
-def _style_table(data, header_color, col_widths=None):
+def _style_table(data: list[list[Any]], header_color: str, col_widths: list[float] | None = None) -> Table:
     font_reg, font_bold = _resolve_pdf_fonts()
     table = Table(
         data,
@@ -163,17 +181,11 @@ def _style_table(data, header_color, col_widths=None):
     return table
 
 
-def _matplotlib():
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        return plt
-    except ImportError:
-        return None
+def _matplotlib() -> Any:
+    return plt
 
 
-def _safe_chart(render, *args, default=None, **kwargs):
+def _safe_chart(render: Callable[..., Any], *args: Any, default: Any = None, **kwargs: Any) -> Any:
     """Run one chart renderer; a single chart failure skips that chart only."""
     try:
         return render(*args, **kwargs)
@@ -182,7 +194,7 @@ def _safe_chart(render, *args, default=None, **kwargs):
         return default
 
 
-def _render_histograms(df, max_charts=4):
+def _render_histograms(df: pd.DataFrame, max_charts: int = 4) -> list[tuple[str, io.BytesIO]]:
     plt = _matplotlib()
     if plt is None:
         return []
@@ -206,7 +218,7 @@ def _render_histograms(df, max_charts=4):
     return images
 
 
-def _render_correlation_heatmap(df):
+def _render_correlation_heatmap(df: pd.DataFrame) -> io.BytesIO | None:
     plt = _matplotlib()
     if plt is None:
         return None
@@ -236,7 +248,7 @@ def _render_correlation_heatmap(df):
     return buffer
 
 
-def _render_boxplots(df, max_charts=4):
+def _render_boxplots(df: pd.DataFrame, max_charts: int = 4) -> list[tuple[str, io.BytesIO]]:
     plt = _matplotlib()
     if plt is None:
         return []
@@ -265,7 +277,7 @@ def _render_boxplots(df, max_charts=4):
     return images
 
 
-def _quality_flags_for_column(series):
+def _quality_flags_for_column(series: pd.Series) -> list[str]:
     """Data-quality flags for one column; shared logic, directly unit-testable.
 
     Flags: High missingness (>=40% null), Constant (<=1 distinct), Possible
@@ -280,9 +292,10 @@ def _quality_flags_for_column(series):
     n_unique = series.nunique(dropna=True)
     if n_unique <= 1:
         flags.append("Constant")
-    if pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series):
-        if n_unique / max(len(series.dropna()), 1) > 0.95 and n_unique > 20:
-            flags.append("Possible ID/high-cardinality")
+    if (pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series)) and (
+        n_unique / max(len(series.dropna()), 1) > 0.95 and n_unique > 20
+    ):
+        flags.append("Possible ID/high-cardinality")
     if (
         pd.api.types.is_numeric_dtype(series)
         and not pd.api.types.is_bool_dtype(series)
@@ -298,16 +311,16 @@ def _quality_flags_for_column(series):
 
 
 def generate_pdf_report(
-    df,
-    dataset_name,
-    report_title="Executive Data Analytics Report",
-    author_name="CloudInsight AI",
-    include_ai_insights=None,
-    include_charts=True,
-    source_rows=None,
-    analyzed_rows=None,
-    excluded_columns=None,
-):
+    df: pd.DataFrame,
+    dataset_name: str,
+    report_title: str = "Executive Data Analytics Report",
+    author_name: str = "CloudInsight AI",
+    include_ai_insights: str | None = None,
+    include_charts: bool = True,
+    source_rows: int | None = None,
+    analyzed_rows: int | None = None,
+    excluded_columns: list[str] | None = None,
+) -> bytes:
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
@@ -384,7 +397,6 @@ def generate_pdf_report(
         subtitle_style
     ))
 
-    from Utils.sampling import sample_for_analysis
     total_input_rows = len(df)
     if source_rows is None:
         source_rows = total_input_rows
@@ -399,7 +411,6 @@ def generate_pdf_report(
     rows, cols = df.shape
     num_df = df.select_dtypes(include="number")
     cat_df = df.select_dtypes(exclude="number")
-    from Utils.privacy import detect_sensitive_columns
     sensitive_cols = set(detect_sensitive_columns(df).keys())
     if excluded_columns:
         sensitive_cols.update(c for c in excluded_columns if c in df.columns)
@@ -557,10 +568,7 @@ def generate_pdf_report(
             if s.empty:
                 top_value, top_freq, top_share = "-", 0, 0.0
             else:
-                if col in sensitive_cols:
-                    top_value = "[REDACTED SENSITIVE]"
-                else:
-                    top_value = str(s.mode().iloc[0])[:38]
+                top_value = "[REDACTED SENSITIVE]" if col in sensitive_cols else str(s.mode().iloc[0])[:38]
                 top_freq = int(s.value_counts().iloc[0])
                 top_share = top_freq / len(s) * 100
             cat_data.append([

@@ -1,27 +1,33 @@
 from pathlib import Path
-import streamlit as st
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import streamlit as st
 
-from Utils.theme import plot_template, style_plotly_fig, page_header, section_card_header
-from Utils.paths import resolve_dataset_path
-from Utils.ML import (
-    detect_problem_type, train_and_evaluate_model,
-    save_trained_model, is_likely_id_column,
-)
 from Utils.dataset_ui import (
-    dataframe_fingerprint, dataset_fingerprint, render_sidebar, results_match_active,
+    dataframe_fingerprint,
+    dataset_fingerprint,
+    render_sidebar,
+    results_match_active,
     select_working_dataset,
 )
 from Utils.logsys import get_logger
+from Utils.ML import (
+    detect_problem_type,
+    is_likely_id_column,
+    save_trained_model,
+    train_and_evaluate_model,
+)
+from Utils.paths import resolve_dataset_path
+from Utils.theme import page_header, plot_template, section_card_header, style_plotly_fig
 
 logger = get_logger("ML_Page")
 
 page_header(
     "Model Studio & Training",
-    "Train, evaluate, and benchmark Scikit-Learn classification and regression models with leak-free cross-validation.",
+    "Train, evaluate, and benchmark Scikit-Learn classification and regression models with cross-validation.",
     badge="MACHINE LEARNING"
 )
 
@@ -112,7 +118,7 @@ with st.container(border=True):
     train_clicked = st.button("Train & evaluate", type="primary")
 
 if train_clicked:
-    with st.spinner(f"Training {chosen_algo} ({problem_type})..."):
+    with st.spinner(f"Fitting {chosen_algo} pipeline ({problem_type}) with cross-validation..."):
         try:
             results = train_and_evaluate_model(
                 df=df,
@@ -441,10 +447,10 @@ with st.container(border=True):
             try:
                 st.page_link(
                     "Pages/Predict.py",
-                    label="Open Predict & Score page",
+                    label="Open Batch Scoring & Simulation",
                     icon=":material/batch_prediction:",
                     help="Switch to dedicated batch inference and prediction scoring workspace"
                 )
             except Exception as exc:
-                logger.debug("suppressed error in %s: %s", "_render_fi_chart", exc)
+                logger.debug("suppressed error in %s: %s", "open_batch_scoring_link", exc)
             st.caption("Use saved models to score new datasets with drift checks and CSV export.")

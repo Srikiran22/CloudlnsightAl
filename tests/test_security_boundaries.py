@@ -8,22 +8,15 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
 
-from Utils.paths import (
-    cleanup_storage,
-    get_dataset_row_count,
-    list_dataset_files,
-    list_ready_datasets,
-    list_source_documents,
-    read_tabular,
-    safe_stem,
-    sanitize_for_csv_export,
-    _detect_csv_delimiter,
-)
+from Utils.Charts import create_histogram_plot
+from Utils.compare_logic import benjamini_hochberg_correction, column_drift_rows
+from Utils.dataset_ui import save_and_activate_dataset
+from Utils.Gemini import generate_executive_insights
 from Utils.ML import (
     _datetime_to_epoch,
     _get_or_create_model_signing_key,
@@ -32,14 +25,23 @@ from Utils.ML import (
     save_trained_model,
     sign_model_artifact,
     train_and_evaluate_model,
+    verify_model_artifact_signature,
 )
-from Utils.PDF import validate_report_template, generate_pdf_report
-from Utils.sampling import sample_for_visualization, sample_for_analysis
-from Utils.Charts import create_histogram_plot
-from Utils.Gemini import generate_executive_insights
+from Utils.paths import (
+    _detect_csv_delimiter,
+    cleanup_storage,
+    get_dataset_row_count,
+    list_dataset_files,
+    list_ready_datasets,
+    list_source_documents,
+    read_tabular,
+    safe_stem,
+    sanitize_for_csv_export,
+)
+from Utils.PDF import generate_pdf_report, validate_report_template
 from Utils.Preprocessing import fill_missing_values
-from Utils.compare_logic import column_drift_rows, benjamini_hochberg_correction
-from Utils.theme import get_semantic_tokens, SEMANTIC_TOKENS, CHART_PALETTE
+from Utils.sampling import sample_for_analysis, sample_for_visualization
+from Utils.theme import CHART_PALETTE, SEMANTIC_TOKENS, get_semantic_tokens
 
 
 def _malicious_trigger():
@@ -99,6 +101,108 @@ class SecurityBoundaryPipelineTests(unittest.TestCase):
         with open(model_file, "ab") as f:
             f.write(b"\x00CORRUPT")
 
+        with self.assertRaises(ValueError) as ctx:
+            load_trained_model(model_file, allowed_dir=self.test_path)
+        self.assertIn("tampered with", str(ctx.exception).lower())
+
+    def test_tampered_signature_hash_rejected(self):
+        """Modified signature hash in .joblib.sig fails verification and blocks deserialization."""
+        model_file = self.test_path / "model_tampered_hash.joblib"
+        import joblib
+        joblib.dump({"pipeline": "clean_model", "bundle_version": 1}, model_file)
+        sig_path = sign_model_artifact(model_file)
+        self.assertTrue(sig_path.is_file())
+
+        sig_data = json.loads(sig_path.read_text(encoding="utf-8"))
+        original_sig = sig_data["signature"]
+        corrupted_sig = ("0" if original_sig[0] != "0" else "1") + original_sig[1:]
+        sig_data["signature"] = corrupted_sig
+        sig_path.write_text(json.dumps(sig_data), encoding="utf-8")
+
+        self.assertFalse(
+            verify_model_artifact_signature(model_file),
+            "verify_model_artifact_signature must return False when signature hash is altered",
+        )
+        with self.assertRaises(ValueError) as ctx:
+            load_trained_model(model_file, allowed_dir=self.test_path)
+        self.assertIn("tampered with", str(ctx.exception).lower())
+
+    def test_malformed_json_signature_rejected(self):
+        """Corrupted, empty, or non-object JSON in .joblib.sig fails verification and blocks load."""
+        model_file = self.test_path / "model_bad_json.joblib"
+        import joblib
+        joblib.dump({"pipeline": "clean_model", "bundle_version": 1}, model_file)
+        sig_path = sign_model_artifact(model_file)
+        self.assertTrue(sig_path.is_file())
+
+        # Sub-case A: Syntactically invalid / truncated JSON
+        sig_path.write_text('{"model_file": "model_bad_json.joblib", "algo": "hmac-sha256", "signature":', encoding="utf-8")
+        self.assertFalse(verify_model_artifact_signature(model_file))
+        with self.assertRaises(ValueError) as ctx:
+            load_trained_model(model_file, allowed_dir=self.test_path)
+        self.assertIn("tampered with", str(ctx.exception).lower())
+
+        # Sub-case B: Completely empty signature file
+        sig_path.write_text("", encoding="utf-8")
+        self.assertFalse(verify_model_artifact_signature(model_file))
+        with self.assertRaises(ValueError) as ctx:
+            load_trained_model(model_file, allowed_dir=self.test_path)
+        self.assertIn("tampered with", str(ctx.exception).lower())
+
+        # Sub-case C: Valid JSON but not a dictionary object
+        sig_path.write_text(json.dumps(["not", "a", "dict"]), encoding="utf-8")
+        self.assertFalse(verify_model_artifact_signature(model_file))
+        with self.assertRaises(ValueError) as ctx:
+            load_trained_model(model_file, allowed_dir=self.test_path)
+        self.assertIn("tampered with", str(ctx.exception).lower())
+
+    def test_unsupported_or_altered_algo_signature_rejected(self):
+        """Unsupported, downgraded, or absent algorithm in .joblib.sig fails verification and blocks load."""
+        model_file = self.test_path / "model_bad_algo.joblib"
+        import joblib
+        joblib.dump({"pipeline": "clean_model", "bundle_version": 1}, model_file)
+        sig_path = sign_model_artifact(model_file)
+        self.assertTrue(sig_path.is_file())
+
+        original_sig_data = json.loads(sig_path.read_text(encoding="utf-8"))
+        unsupported_algos = ["none", "md5", "sha1", "hmac-sha512", "HMAC-SHA256", "rsa"]
+        for bad_algo in unsupported_algos:
+            tampered = dict(original_sig_data)
+            tampered["algo"] = bad_algo
+            sig_path.write_text(json.dumps(tampered), encoding="utf-8")
+            self.assertFalse(
+                verify_model_artifact_signature(model_file),
+                f"verify_model_artifact_signature must reject unsupported algo: {bad_algo}",
+            )
+            with self.assertRaises(ValueError) as ctx:
+                load_trained_model(model_file, allowed_dir=self.test_path)
+            self.assertIn("tampered with", str(ctx.exception).lower())
+
+        # Sub-case: Missing 'algo' key entirely
+        tampered_no_algo = dict(original_sig_data)
+        tampered_no_algo.pop("algo", None)
+        sig_path.write_text(json.dumps(tampered_no_algo), encoding="utf-8")
+        self.assertFalse(verify_model_artifact_signature(model_file))
+        with self.assertRaises(ValueError) as ctx:
+            load_trained_model(model_file, allowed_dir=self.test_path)
+        self.assertIn("tampered with", str(ctx.exception).lower())
+
+    def test_mismatched_model_file_target_signature_rejected(self):
+        """Mismatched model_file name binding in .joblib.sig fails verification and blocks load."""
+        model_file = self.test_path / "model_target_a.joblib"
+        import joblib
+        joblib.dump({"pipeline": "clean_model", "bundle_version": 1}, model_file)
+        sig_path = sign_model_artifact(model_file)
+        self.assertTrue(sig_path.is_file())
+
+        sig_data = json.loads(sig_path.read_text(encoding="utf-8"))
+        sig_data["model_file"] = "different_model.joblib"
+        sig_path.write_text(json.dumps(sig_data), encoding="utf-8")
+
+        self.assertFalse(
+            verify_model_artifact_signature(model_file),
+            "verify_model_artifact_signature must reject signature bound to mismatched model_file",
+        )
         with self.assertRaises(ValueError) as ctx:
             load_trained_model(model_file, allowed_dir=self.test_path)
         self.assertIn("tampered with", str(ctx.exception).lower())
@@ -286,7 +390,7 @@ class SecurityBoundaryPipelineTests(unittest.TestCase):
     # -------------------------------------------------------------------------
     def test_ai_context_lru_eviction(self):
         """AI chat context evicts oldest conversation when exceeding MAX_AI_CONTEXTS."""
-        from Utils.Gemini import prune_ai_contexts, MAX_AI_CONTEXTS
+        from Utils.Gemini import MAX_AI_CONTEXTS, prune_ai_contexts
 
         state = {}
         # Add 15 contexts
@@ -439,6 +543,40 @@ class SecurityBoundaryPipelineTests(unittest.TestCase):
         self.assertEqual(exported_df["code"].iloc[3], "'@user")
         self.assertEqual(exported_df["code"].iloc[4], "'-calc()")
         self.assertEqual(exported_df["code"].iloc[5], "regular")
+
+    def test_save_and_activate_dataset_formula_sanitization(self):
+        """save_and_activate_dataset neutralizes formula triggers on disk while preserving in-memory frame."""
+        df_raw = pd.DataFrame({
+            "formula_col": ["=cmd|' /C calc'!A0", "@SUM(A1:B2)", "-calc()", "+999", "safe_val"],
+            "numeric_col": [-42.5, 100, 0, -1, 5],
+        })
+        with patch("Utils.dataset_ui.DATASETS_DIR", self.test_path):
+            saved_path = save_and_activate_dataset(df_raw, "test_sanitize.csv", sanitize=True)
+            self.assertTrue(saved_path.is_file())
+
+            # Inspect persisted disk content directly
+            persisted_text = saved_path.read_text(encoding="utf-8")
+            self.assertIn("'=cmd|' /C calc'!A0", persisted_text)
+            self.assertIn("'@SUM(A1:B2)", persisted_text)
+            self.assertIn("'-calc()", persisted_text)
+            self.assertNotIn("=cmd|", persisted_text.replace("'=cmd|", ""))
+
+            # Verify active session frame retained original unescaped values for analysis
+            import streamlit as st
+            self.assertEqual(st.session_state["current_df"]["formula_col"].iloc[0], "=cmd|' /C calc'!A0")
+
+    def test_save_and_activate_dataset_rejects_none(self):
+        """save_and_activate_dataset raises ValueError if passed None."""
+        with self.assertRaises(ValueError):
+            save_and_activate_dataset(None, "invalid.csv")
+
+    def test_save_and_activate_dataset_windows_reserved_name(self):
+        """save_and_activate_dataset normalizes Windows reserved filenames (e.g., CON.csv -> CON_safe.csv)."""
+        df = pd.DataFrame({"a": [1, 2, 3]})
+        with patch("Utils.dataset_ui.DATASETS_DIR", self.test_path):
+            saved_path = save_and_activate_dataset(df, "CON.csv")
+            self.assertIn("CON_safe", saved_path.name)
+            self.assertTrue(saved_path.is_file())
 
     # -------------------------------------------------------------------------
     # Finding X: Plotly HTML escaping
@@ -610,27 +748,27 @@ class SecurityBoundaryPipelineTests(unittest.TestCase):
 
 import unittest
 
-from Utils.paths import (
-    resolve_dataset_path,
-    delete_dataset,
-    get_valid_conversion,
-    record_conversion,
-    get_unique_filename,
-    release_filename_reservation,
-)
-from Utils.dataset_ui import (
-    BoundedDatasetMemoryCache,
-    dataframe_fingerprint,
-    results_match_active,
-)
 from Utils.AIConvert import parse_ai_csv, reconcile_chunk_frames
-from Utils.Gemini import get_dataset_summary_context
-from Utils.compare_logic import _is_numeric_series
 from Utils.Charts import (
     create_bar_count_plot,
     create_pie_treemap_plot,
     create_scatter_plot,
     downsample_timeseries,
+)
+from Utils.compare_logic import _is_numeric_series
+from Utils.dataset_ui import (
+    BoundedDatasetMemoryCache,
+    dataframe_fingerprint,
+    results_match_active,
+)
+from Utils.Gemini import get_dataset_summary_context
+from Utils.paths import (
+    delete_dataset,
+    get_unique_filename,
+    get_valid_conversion,
+    record_conversion,
+    release_filename_reservation,
+    resolve_dataset_path,
 )
 
 
@@ -820,7 +958,7 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
         )
         grouped = res.get("grouped_feature_importances", {})
         # Both parent features should exist distinctly without cat absorbing category_type
-        for k in grouped.keys():
+        for k in grouped:
             self.assertIn(k, ["cat", "category_type"])
 
     # -------------------------------------------------------------------------
@@ -943,6 +1081,7 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
     def test_fingerprint_freshness_under_identical_size_mtime(self):
         import os
         from unittest.mock import patch
+
         from Utils.dataset_ui import dataset_fingerprint, invalidate_dataset_cache
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1014,7 +1153,8 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
     def test_load_trained_model_in_memory_toctou_defense(self):
         """load_trained_model verifies in-memory bytes directly, preventing TOCTOU file replacement."""
         from sklearn.linear_model import LinearRegression
-        from Utils.ML import save_trained_model, load_trained_model
+
+        from Utils.ML import load_trained_model, save_trained_model
         with tempfile.TemporaryDirectory() as tmp:
             tmp_p = Path(tmp)
             lr = LinearRegression()
@@ -1094,9 +1234,10 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
 
     def test_early_high_cardinality_string_rejection(self):
         """_check_string_cardinality_amplification rejects massive unique string files early."""
-        from Utils.paths import _check_string_cardinality_amplification
         import io
         import uuid
+
+        from Utils.paths import _check_string_cardinality_amplification
         # Create a buffer > 10MB with 40 unique string columns
         header = ",".join([f"col_{i}" for i in range(40)]) + "\n"
         buf = io.BytesIO()
@@ -1117,9 +1258,10 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
 
     def test_deep_dataframe_memory_guard(self):
         """read_tabular rejects DataFrames that exceed MAX_DATAFRAME_MEMORY_BYTES."""
-        from Utils.paths import read_tabular, ResourcePolicy
-        from unittest.mock import patch
         import io
+        from unittest.mock import patch
+
+        from Utils.paths import ResourcePolicy, read_tabular
         df = pd.DataFrame({"a": range(100), "b": range(100)})
         # Patch memory ceiling to 1 KB to test fail-closed behavior
         with patch.object(ResourcePolicy, "MAX_DATAFRAME_MEMORY_BYTES", 1024):
@@ -1129,9 +1271,10 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
 
     def test_adversarial_high_cardinality_tail_intercepted_in_chunks(self):
         """read_tabular intercepts adversarial files with low-cardinality headers and high-cardinality tails."""
-        from Utils.paths import read_tabular
         import io
         import uuid
+
+        from Utils.paths import read_tabular
         buf = io.BytesIO()
         header = ",".join([f"col_{i}" for i in range(40)]) + "\n"
         buf.write(header.encode("utf-8"))
@@ -1151,8 +1294,9 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
 
     def test_cardinality_repeated_across_chunks_deterministic(self):
         """Repeated high-cardinality values across chunks increment observations deterministically."""
-        from Utils.paths import _read_chunked_delimited_buffer
         import io
+
+        from Utils.paths import _read_chunked_delimited_buffer
         # 30,000 rows (2 chunks: 25k and 5k) of 80% unique strings repeating the same set
         unique_pool = [f"token_{i}" for i in range(20000)] + ["fixed"] * 5000
         # Replicate for chunk 1 and chunk 2
@@ -1165,10 +1309,11 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
 
     def test_cardinality_multi_column_dilution_resistant(self):
         """Low-cardinality categorical columns do not dilute high-cardinality string columns."""
-        from Utils.paths import _read_chunked_delimited_buffer, ResourcePolicy
-        from unittest.mock import patch
         import io
         import uuid
+        from unittest.mock import patch
+
+        from Utils.paths import ResourcePolicy, _read_chunked_delimited_buffer
         # 1 high-cardinality column, 9 low-cardinality columns
         rows = 100
         lines = ["high,c1,c2,c3,c4,c5,c6,c7,c8,c9"]
@@ -1183,9 +1328,10 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
 
     def test_chunked_ingestion_streaming_row_cell_limits(self):
         """Chunked ingestion enforces row and cell limits during chunk iteration."""
-        from Utils.paths import _read_chunked_delimited_buffer
-        from unittest.mock import patch
         import io
+        from unittest.mock import patch
+
+        from Utils.paths import _read_chunked_delimited_buffer
         # 60,000 rows across 3 chunks
         lines = ["c1,c2\n"] + ["1,2\n"] * 60000
         buf = io.BytesIO("".join(lines).encode("utf-8"))
@@ -1207,8 +1353,9 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
 
     def test_downsample_timeseries_temporal_invariants(self):
         """downsample_timeseries handles timezone-aware, duplicate, descending, and boundary extrema."""
-        from Utils.Charts import downsample_timeseries
         import numpy as np
+
+        from Utils.Charts import downsample_timeseries
         # 1000 points descending with duplicates, gaps, and extreme spikes
         rng = pd.date_range("2024-01-01", periods=1000, freq="h", tz="UTC")
         # Monotonic descending input
@@ -1230,9 +1377,10 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
 
     def test_dataset_fingerprint_same_size_same_mtime_security_model(self):
         """dataset_fingerprint respects metadata cache for performance but detects changes with force_refresh."""
+        import os
+
         from Utils.dataset_ui import dataset_fingerprint
         from Utils.paths import DATASETS_DIR
-        import os
         test_file = DATASETS_DIR / "fp_security_probe.csv"
         test_file.write_text("a,b\n1,2", encoding="utf-8")
         try:

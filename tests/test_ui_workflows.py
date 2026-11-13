@@ -1,21 +1,19 @@
 """UI workflow tests: Upload deduplication, multi-file merge, PDF generation, and chart downsampling."""
 
-import unittest
-from unittest.mock import patch
 import io
+import unittest
 from pathlib import Path
-import pandas as pd
-import numpy as np
+from unittest.mock import patch
 
-from Utils.AIConvert import (
-    MAX_SAMPLE_CHARS, MAX_CONVERSION_CHARS, _split_into_chunks,
-    convert_to_dataframe
-)
-from Utils.paths import read_tabular
-from Utils.privacy import detect_sensitive_columns
-from Utils.ML import predict_with_model, train_and_evaluate_model
+import numpy as np
+import pandas as pd
+
+from Utils.AIConvert import MAX_CONVERSION_CHARS, MAX_SAMPLE_CHARS, _split_into_chunks, convert_to_dataframe
 from Utils.Charts import create_bar_count_plot
-from Utils.PDF import generate_pdf_report, _resolve_pdf_fonts
+from Utils.ML import predict_with_model, train_and_evaluate_model
+from Utils.paths import read_tabular
+from Utils.PDF import _resolve_pdf_fonts, generate_pdf_report
+from Utils.privacy import detect_sensitive_columns
 
 
 class UIRemediationRegressionTests(unittest.TestCase):
@@ -560,7 +558,7 @@ class MLFeatureImportanceAlignmentTests(unittest.TestCase):
         importances = res["feature_importances"]
         # Transformed features include numeric1, numeric2, and one-hot category columns
         self.assertGreater(len(importances), 3)
-        self.assertTrue(any("category_" in k for k in importances.keys()))
+        self.assertTrue(any("category_" in k for k in importances))
         self.assertIn("numeric1", importances)
         self.assertIn("numeric2", importances)
 

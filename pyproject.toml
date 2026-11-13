@@ -7,6 +7,7 @@ name = "cloudinsight-ai"
 version = "2.2.0"
 description = "Analytics workspace for ingesting, understanding, and modeling tabular data with Gemini-assisted conversion."
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.12"
 authors = [
     { name = "Srikiran" }
@@ -20,18 +21,36 @@ classifiers = [
     "Security :: Security Evaluation",
 ]
 
+[tool.setuptools.packages.find]
+include = ["Utils*", "Pages*"]
+
+[tool.setuptools]
+py-modules = ["App"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py312"
 
 [tool.ruff.lint]
 select = [
-    "E4",
-    "E7",
-    "E9",
-    "F",
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # Pyflakes
+    "I",     # isort (import sorting)
+    "B",     # flake8-bugbear
+    "UP",    # pyupgrade (Python 3.12 idioms)
+    "SIM",   # flake8-simplify
+    "C4",    # flake8-comprehensions
 ]
-ignore = []
+ignore = [
+    "E501",  # Line length handled by formatter / UI string length
+    "B008",  # Do not perform function call in argument defaults (Streamlit idioms)
+    "SIM117", # Streamlit container nesting requires sequential with blocks
+    "B905",  # zip() strict= parameter
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["Utils", "Pages"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E402"]
@@ -43,3 +62,14 @@ omit = ["tests/*", "scratch/*"]
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]
+

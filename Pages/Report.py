@@ -1,18 +1,33 @@
+from __future__ import annotations
+
 import datetime
 import json
 import os
+from typing import Any
+
+import pandas as pd
 import streamlit as st
 
-from Utils.PDF import generate_pdf_report, validate_report_template
-from Utils.paths import (
-    REPORTS_DIR, REPORT_TEMPLATES_DIR, atomic_write, get_dataset_row_count, get_unique_filename,
-    list_ready_datasets, resolve_dataset_path, safe_stem,
-)
-from Utils.privacy import detect_sensitive_columns
 from Utils.dataset_ui import (
-    dataframe_fingerprint, dataset_fingerprint, load_dataset_cached, render_sidebar,
-    results_match_active, select_working_dataset,
+    dataframe_fingerprint,
+    dataset_fingerprint,
+    load_dataset_cached,
+    render_sidebar,
+    results_match_active,
+    select_working_dataset,
 )
+from Utils.paths import (
+    REPORT_TEMPLATES_DIR,
+    REPORTS_DIR,
+    atomic_write,
+    get_dataset_row_count,
+    get_unique_filename,
+    list_ready_datasets,
+    resolve_dataset_path,
+    safe_stem,
+)
+from Utils.PDF import generate_pdf_report, validate_report_template
+from Utils.privacy import detect_sensitive_columns
 from Utils.theme import page_header, section_card_header
 
 page_header(
@@ -24,12 +39,12 @@ page_header(
 df, selected_file = select_working_dataset("Dataset to report")
 render_sidebar()
 
-def _list_templates() -> list:
+def _list_templates() -> list[str]:
     if not REPORT_TEMPLATES_DIR.exists():
         return []
     return sorted(p.stem for p in REPORT_TEMPLATES_DIR.glob("*.json"))
 
-def _parse_bool(val, default=True) -> bool:
+def _parse_bool(val: Any, default: bool = True) -> bool:
     if val is None:
         return default
     if isinstance(val, bool):
@@ -67,57 +82,65 @@ elif st.session_state.get(f"insights_{selected_file}_{curr_fp}"):
 
 col_left, col_right = st.columns([1.1, 0.9])
 
-with col_right:
-    with st.container(border=True):
-        section_card_header("Template Presets", "Load pre-configured report styling and metadata")
-        applied_template = None
-        if saved_templates:
-            chosen_template = st.selectbox(
-                "Load template",
-                ["(none)"] + saved_templates,
-                help="Templates store title, author, and chart/AI settings."
-            )
-            if chosen_template != "(none)":
-                try:
-                    raw_tpl = json.loads((REPORT_TEMPLATES_DIR / f"{chosen_template}.json").read_text(encoding="utf-8"))
-                    applied_template = validate_report_template(raw_tpl)
-                except Exception as e:
-                    st.error(f"Could not read template: {e}")
-        else:
-            st.info("No saved templates yet. Configure and save one below.")
-
-with col_left:
-    with st.container(border=True):
-        section_card_header("Report Configuration", f"Metadata and analytical sections for {selected_file}")
-        default_title = str((applied_template or {}).get("title") or "CloudInsight Data Science Audit Report")
-        default_author = str((applied_template or {}).get("author") or "CloudInsight Data Science Studio")
-        default_charts = _parse_bool((applied_template or {}).get("include_charts"), default=True)
-
-        rep_title = st.text_input("Report title", value=default_title)
-        author = st.text_input("Prepared by", value=default_author)
-
-        template_ai_pref = _parse_bool((applied_template or {}).get("include_ai"), default=True)
-        include_ai = False
-        if ai_saved:
-            include_ai = st.checkbox("Include Gemini AI Executive Insights section in PDF", value=template_ai_pref)
-            if latest_ai and latest_ai.get("model_name"):
-                st.caption(f"AI insights model: `{latest_ai.get('model_name')}`")
-
-        include_charts = st.checkbox(
-            "Include charts: histograms, box plots & correlation heatmap (high-DPI embedded plots)",
-            value=default_charts,
-            help="Renders publication-grade vector and high-DPI visual diagnostics."
+with col_right, st.container(border=True):
+    section_card_header("Template Presets", "Load pre-configured report styling and metadata")
+    applied_template = None
+    if saved_templates:
+        chosen_template = st.selectbox(
+            "Load template",
+            ["(none)"] + saved_templates,
+            help="Templates store title, author, and chart/AI settings."
         )
+        if chosen_template != "(none)":
+            try:
+                raw_tpl = json.loads((REPORT_TEMPLATES_DIR / f"{chosen_template}.json").read_text(encoding="utf-8"))
+                applied_template = validate_report_template(raw_tpl)
+            except Exception as e:
+                st.error(f"Could not read template: {e}")
+    else:
+        st.info("No saved templates yet. Configure and save one below.")
 
-        sensitive_detected = list(detect_sensitive_columns(df).keys())
-        excluded_cols = st.multiselect(
-            "Exclude columns from PDF statistics, correlations & charts (PII/confidential)",
-            options=list(df.columns),
-            default=[c for c in sensitive_detected if c in df.columns],
-            help="Selected columns will be redacted in summaries and omitted from correlations and visualization charts.",
-        )
+with col_left, st.container(border=True):
+    section_card_header("Report Configuration", f"Metadata and analytical sections for {selected_file}")
+    default_title = str((applied_template or {}).get("title") or "CloudInsight Data Science Audit Report")
+    default_author = str((applied_template or {}).get("author") or "CloudInsight Data Science Studio")
+    default_charts = _parse_bool((applied_template or {}).get("include_charts"), default=True)
 
-def _build_report(dataset_name, dataframe, title, prepared_by, with_charts, ai_insights=None, source_rows=None, analyzed_rows=None, excluded_columns=None):
+    rep_title = st.text_input("Report title", value=default_title)
+    author = st.text_input("Prepared by", value=default_author)
+
+    template_ai_pref = _parse_bool((applied_template or {}).get("include_ai"), default=True)
+    include_ai = False
+    if ai_saved:
+        include_ai = st.checkbox("Include Gemini AI Executive Insights section in PDF", value=template_ai_pref)
+        if latest_ai and latest_ai.get("model_name"):
+            st.caption(f"AI insights model: `{latest_ai.get('model_name')}`")
+
+    include_charts = st.checkbox(
+        "Include charts: histograms, box plots & correlation heatmap (high-DPI embedded plots)",
+        value=default_charts,
+        help="Renders publication-grade vector and high-DPI visual diagnostics."
+    )
+
+    sensitive_detected = list(detect_sensitive_columns(df).keys())
+    excluded_cols = st.multiselect(
+        "Exclude columns from PDF statistics, correlations & charts (PII/confidential)",
+        options=list(df.columns),
+        default=[c for c in sensitive_detected if c in df.columns],
+        help="Selected columns will be redacted in summaries and omitted from correlations and visualization charts.",
+    )
+
+def _build_report(
+    dataset_name: str,
+    dataframe: pd.DataFrame,
+    title: str,
+    prepared_by: str,
+    with_charts: bool,
+    ai_insights: str | None = None,
+    source_rows: int | None = None,
+    analyzed_rows: int | None = None,
+    excluded_columns: list[str] | None = None,
+) -> tuple[str, bytes]:
     pdf_bytes = generate_pdf_report(
         df=dataframe,
         dataset_name=dataset_name,
@@ -137,86 +160,85 @@ def _build_report(dataset_name, dataframe, title, prepared_by, with_charts, ai_i
     atomic_write(REPORTS_DIR / pdf_filename, pdf_bytes, mode="wb")
     return pdf_filename, pdf_bytes
 
-with col_right:
-    with st.container(border=True):
-        section_card_header("Compilation & Export", "Compile report into PDF format")
-        if st.button("Generate PDF report", type="primary"):
-            with st.spinner("Compiling PDF tables, statistics, and metadata..."):
-                try:
-                    total_source = None
-                    if is_file_backed:
-                        try:
-                            total_source = get_dataset_row_count(selected_file)
-                        except Exception:
-                            total_source = None
-                    pdf_filename, pdf_bytes = _build_report(
-                        selected_file, df, rep_title, author, include_charts,
-                        ai_insights=(ai_saved if include_ai else None),
-                        source_rows=total_source or df.shape[0],
-                        analyzed_rows=df.shape[0],
-                        excluded_columns=excluded_cols,
-                    )
-                    st.session_state["last_pdf_report"] = {
-                        "dataset": selected_file,
-                        "dataset_name": selected_file,
-                        "source_type": source_type,
-                        "dataset_fingerprint": curr_fp,
-                        "filename": pdf_filename,
-                        "bytes": pdf_bytes,
-                    }
-                    st.success("PDF report generated.")
-                    st.code(f"Reports/{pdf_filename}", language=None)
-                except Exception as e:
-                    st.error(f"PDF generation failed: {str(e)}")
-
-        pdf_result = st.session_state.get("last_pdf_report")
-        if pdf_result and results_match_active(
-            pdf_result,
-            selected_file,
-            df=df,
-        ):
-            st.download_button(
-                label="Download PDF report",
-                data=pdf_result["bytes"],
-                file_name=pdf_result["filename"],
-                mime="application/pdf"
-            )
-
-        st.markdown("---")
-        section_card_header("Save Preset", "Save current form values as a new reusable template")
-        template_name = st.text_input("Template name", value="")
-        overwrite_template = st.checkbox("Overwrite existing template with same name", value=False)
-        save_template_clicked = st.button(
-            "Save template",
-            disabled=not template_name.strip(),
-            help="Enter a name above to enable saving.",
-        )
-        if save_template_clicked:
+with col_right, st.container(border=True):
+    section_card_header("Compilation & Export", "Compile report into PDF format")
+    if st.button("Generate PDF report", type="primary"):
+        with st.spinner("Compiling PDF tables, statistics, and metadata..."):
             try:
-                safe_template = safe_stem(template_name, fallback="")
-                if not safe_template:
-                    raise ValueError(
-                        "Template name must contain letters, numbers, spaces, '-' or '_'."
-                    )
-                template_file = REPORT_TEMPLATES_DIR / f"{safe_template}.json"
-                if template_file.exists() and not overwrite_template:
-                    raise ValueError(
-                        f"Template `{safe_template}` already exists. Check 'Overwrite existing template' to replace it."
-                    )
-                REPORT_TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
-                config = {
-                    "title": str(rep_title).strip() or default_title,
-                    "author": str(author).strip() or default_author,
-                    "include_charts": bool(include_charts),
-                    "include_ai": bool(include_ai),
-                    "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
-                }
-                atomic_write(
-                    template_file, json.dumps(config, indent=2), mode="w", encoding="utf-8"
+                total_source = None
+                if is_file_backed:
+                    try:
+                        total_source = get_dataset_row_count(selected_file)
+                    except Exception:
+                        total_source = None
+                pdf_filename, pdf_bytes = _build_report(
+                    selected_file, df, rep_title, author, include_charts,
+                    ai_insights=(ai_saved if include_ai else None),
+                    source_rows=total_source or df.shape[0],
+                    analyzed_rows=df.shape[0],
+                    excluded_columns=excluded_cols,
                 )
-                st.success(f"Template `{safe_template}` saved.")
+                st.session_state["last_pdf_report"] = {
+                    "dataset": selected_file,
+                    "dataset_name": selected_file,
+                    "source_type": source_type,
+                    "dataset_fingerprint": curr_fp,
+                    "filename": pdf_filename,
+                    "bytes": pdf_bytes,
+                }
+                st.success("PDF report generated.")
+                st.code(f"Reports/{pdf_filename}", language=None)
             except Exception as e:
-                st.error(f"Template save failed: {str(e)}")
+                st.error(f"PDF generation failed: {str(e)}")
+
+    pdf_result = st.session_state.get("last_pdf_report")
+    if pdf_result and results_match_active(
+        pdf_result,
+        selected_file,
+        df=df,
+    ):
+        st.download_button(
+            label="Download PDF report",
+            data=pdf_result["bytes"],
+            file_name=pdf_result["filename"],
+            mime="application/pdf"
+        )
+
+    st.markdown("---")
+    section_card_header("Save Preset", "Save current form values as a new reusable template")
+    template_name = st.text_input("Template name", value="")
+    overwrite_template = st.checkbox("Overwrite existing template with same name", value=False)
+    save_template_clicked = st.button(
+        "Save template",
+        disabled=not template_name.strip(),
+        help="Enter a name above to enable saving.",
+    )
+    if save_template_clicked:
+        try:
+            safe_template = safe_stem(template_name, fallback="")
+            if not safe_template:
+                raise ValueError(
+                    "Template name must contain letters, numbers, spaces, '-' or '_'."
+                )
+            template_file = REPORT_TEMPLATES_DIR / f"{safe_template}.json"
+            if template_file.exists() and not overwrite_template:
+                raise ValueError(
+                    f"Template `{safe_template}` already exists. Check 'Overwrite existing template' to replace it."
+                )
+            REPORT_TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
+            config = {
+                "title": str(rep_title).strip() or default_title,
+                "author": str(author).strip() or default_author,
+                "include_charts": bool(include_charts),
+                "include_ai": bool(include_ai),
+                "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
+            }
+            atomic_write(
+                template_file, json.dumps(config, indent=2), mode="w", encoding="utf-8"
+            )
+            st.success(f"Template `{safe_template}` saved.")
+        except Exception as e:
+            st.error(f"Template save failed: {str(e)}")
 
 st.markdown("---")
 with st.container(border=True):

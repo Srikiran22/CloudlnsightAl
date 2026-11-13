@@ -1,19 +1,23 @@
+from __future__ import annotations
+
+from collections.abc import Sequence
+
 import pandas as pd
 import streamlit as st
 
-from Utils.dataset_ui import render_sidebar, select_working_dataset
-from Utils.theme import page_header, section_card_header
-from Utils.ML import is_likely_id_column
 from Utils.Charts import (
-    create_histogram_plot,
-    create_box_violin_plot,
-    create_scatter_plot,
     create_bar_count_plot,
+    create_box_violin_plot,
+    create_correlation_heatmap,
+    create_histogram_plot,
     create_line_chart,
-    downsample_timeseries,
     create_pie_treemap_plot,
-    create_correlation_heatmap
+    create_scatter_plot,
+    downsample_timeseries,
 )
+from Utils.dataset_ui import render_sidebar, select_working_dataset
+from Utils.ML import is_likely_id_column
+from Utils.theme import page_header, section_card_header
 
 page_header(
     "Interactive Visual Analytics",
@@ -28,12 +32,12 @@ all_cols = df.columns.tolist()
 numeric_cols = df.select_dtypes(include="number").columns.tolist()
 cat_cols = df.select_dtypes(exclude="number").columns.tolist()
 
-def rank_categorical_candidates(data, cols):
+def rank_categorical_candidates(data: pd.DataFrame, cols: list[str] | Sequence[str]) -> list[str]:
     """Sort candidate columns prioritizing low-to-medium cardinality business dimensions (2 <= nunique <= 50)
     and deprioritizing ID-like or high-cardinality features. String and categorical columns are prioritized
     ahead of numeric binary columns.
     """
-    def _score(col):
+    def _score(col: str) -> tuple[int, ...]:
         n = data[col].nunique()
         is_id = is_likely_id_column(data, col)
         if is_id:

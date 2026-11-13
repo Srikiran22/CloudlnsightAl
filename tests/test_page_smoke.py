@@ -3,12 +3,13 @@
 import tempfile
 import unittest
 from pathlib import Path
+
 import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from Utils import paths
-from Utils.paths import ensure_project_directories
 from Utils.ML import detect_problem_type
+from Utils.paths import ensure_project_directories
 
 
 class TestPageSmoke(unittest.TestCase):
