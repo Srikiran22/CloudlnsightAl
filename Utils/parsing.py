@@ -7,10 +7,12 @@ import json
 import re
 import xml.parsers.expat
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
 
 import pandas as pd
+import streamlit as st
 
 from Utils import limits
 from Utils.frames import _decode_text_buffer, _sanitize_unhashable_cells
@@ -1207,3 +1209,31 @@ def _read_pdf_from_buffer(
 _read_csv_buffer = _read_csv_from_buffer
 _read_json_buffer = _read_json_from_buffer
 _read_parquet_buffer = _read_parquet_from_buffer
+
+
+@st.cache_data(ttl=3600, max_entries=50, show_spinner=False)
+def cached_load_dataframe(file_payload: bytes | str, file_name: str) -> pd.DataFrame:
+    """Memory-bounded, TTL-cached DataFrame parser supporting multiple tabular extensions."""
+    buf = io.BytesIO(file_payload) if isinstance(file_payload, (bytes, bytearray)) else io.BytesIO(file_payload.encode("utf-8"))
+    ext = Path(file_name).suffix.lower()
+    if ext == ".tsv":
+        df = _read_tsv_from_buffer(buf)
+    elif ext in (".json", ".jsonl", ".ndjson"):
+        df = _read_json_from_buffer(buf)
+    elif ext == ".parquet":
+        df = _read_parquet_from_buffer(buf)
+    elif ext in (".xml",):
+        df = _read_xml_from_buffer(buf)
+    elif ext in (".html", ".htm"):
+        df = _read_html_from_buffer(buf)
+    else:
+        df = _read_csv_from_buffer(buf)
+
+    if df is not None:
+        mem_usage = df.memory_usage(deep=True).sum()
+        if mem_usage > ResourcePolicy.MAX_DATAFRAME_MEMORY_BYTES:
+            raise ValueError(
+                f"Loaded DataFrame exceeds memory budget ({mem_usage} > {ResourcePolicy.MAX_DATAFRAME_MEMORY_BYTES} bytes)"
+            )
+    return df
+
