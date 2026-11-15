@@ -29,9 +29,9 @@ logger = get_logger("AI")
 MAX_TOTAL_CHAT_CHARS = 100_000
 
 page_header(
-    "AI Summary & Insights",
-    "Executive summaries, natural language diagnostics, and statistical insights over the active dataset.",
-    badge="GOVERNED AI"
+    "Automated Narrative Telemetry",
+    "Automated statistical report synthesis, distribution drift narratives, and executive dataset summaries.",
+    badge="DIAGNOSTIC TELEMETRY"
 )
 
 df, selected_file = select_working_dataset("Active dataset")

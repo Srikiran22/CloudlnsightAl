@@ -129,18 +129,41 @@ def render_home() -> None:
             f"""
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
               <h1 style="margin: 0; font-size: 1.65rem; font-weight: 750; letter-spacing: -0.02em;">
-                CloudInsight <span style="color: var(--ci-accent);">Data Science Studio</span>
+                CloudInsight <span style="color: var(--ci-accent);">Statistical & MLOps Studio</span>
               </h1>
               <span style="font-size: 0.78rem; font-weight: 650; padding: 4px 10px; border-radius: 999px; background: var(--ci-tint); border: 1px solid var(--ci-border); color: var(--ci-accent);">
-                v{app_version}
+                v{app_version} Production
               </span>
             </div>
             <p style="margin: 0.2rem 0 0 0; color: var(--ci-text-2); font-size: 0.95rem; line-height: 1.55;">
-              A local-first analytics and machine learning workbench for data profiling, statistical hypothesis testing, automated feature engineering, scikit-learn model pipelines, and audit reporting.
+              Local-first statistical telemetry and machine learning workbench: strictly encapsulated 5-fold cross-validation, continuous Kolmogorov-Smirnov drift detection, and cryptographic HMAC model signing.
             </p>
             """,
             unsafe_allow_html=True,
         )
+
+    # Architectural Guarantees & Telemetry Status Row
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        with st.container(border=True):
+            st.markdown('<div style="font-size:0.75rem; text-transform:uppercase; color:var(--ci-muted); font-weight:700;">Validation Scheme</div>', unsafe_allow_html=True)
+            st.markdown('<div style="font-size:1.15rem; font-weight:700; color:var(--ci-text); font-family:monospace;">5-Fold Leak-Free</div>', unsafe_allow_html=True)
+            st.caption("Pipeline-encapsulated estimators")
+    with m2:
+        with st.container(border=True):
+            st.markdown('<div style="font-size:0.75rem; text-transform:uppercase; color:var(--ci-muted); font-weight:700;">Drift Control</div>', unsafe_allow_html=True)
+            st.markdown('<div style="font-size:1.15rem; font-weight:700; color:var(--ci-text); font-family:monospace;">KS + BH-FDR</div>', unsafe_allow_html=True)
+            st.caption("Q=0.05 multiple testing control")
+    with m3:
+        with st.container(border=True):
+            st.markdown('<div style="font-size:0.75rem; text-transform:uppercase; color:var(--ci-muted); font-weight:700;">Model Integrity</div>', unsafe_allow_html=True)
+            st.markdown('<div style="font-size:1.15rem; font-weight:700; color:var(--ci-text); font-family:monospace;">HMAC-SHA256</div>', unsafe_allow_html=True)
+            st.caption("Tamper-evident .joblib signing")
+    with m4:
+        with st.container(border=True):
+            st.markdown('<div style="font-size:0.75rem; text-transform:uppercase; color:var(--ci-muted); font-weight:700;">Memory Budget</div>', unsafe_allow_html=True)
+            st.markdown('<div style="font-size:1.15rem; font-weight:700; color:var(--ci-text); font-family:monospace;">400 MB Ceiling</div>', unsafe_allow_html=True)
+            st.caption("Deterministic workstation limit")
 
     # 3 Core Data Science Pillars
     c1, c2, c3 = st.columns(3)
@@ -232,10 +255,10 @@ pg = st.navigation(
             st.Page("Pages/ML.py", title="Model Studio & Training", icon=":material/precision_manufacturing:"),
             st.Page("Pages/Predict.py", title="Batch Scoring & Simulation", icon=":material/batch_prediction:"),
         ],
-        "AI & Gemini Assistant": [
-            st.Page("Pages/AIConverter.py", title="AI File Converter", icon=":material/transform:"),
-            st.Page("Pages/AI.py", title="AI Summary & Insights", icon=":material/psychology:"),
-            st.Page("Pages/AIChat.py", title="Ask AI (Chat)", icon=":material/forum:"),
+        "Synthesis & Extraction": [
+            st.Page("Pages/AIConverter.py", title="Unstructured Schema Ingest", icon=":material/data_object:"),
+            st.Page("Pages/AI.py", title="Automated Narrative Telemetry", icon=":material/insights:"),
+            st.Page("Pages/AIChat.py", title="Natural Language Query Engine", icon=":material/terminal:"),
         ],
         "Audit & Reports": [
             st.Page("Pages/Compare.py", title="Dataset Drift & Compare", icon=":material/compare_arrows:"),

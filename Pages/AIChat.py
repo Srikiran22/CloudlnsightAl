@@ -21,9 +21,9 @@ logger = get_logger("AIChat")
 MAX_TOTAL_CHAT_CHARS = 100_000
 
 page_header(
-    "Ask AI (Chat)",
-    "Statistical natural language dialogue and diagnostic queries over screened dataset context.",
-    badge="GOVERNED CHAT"
+    "Natural Language Query Engine",
+    "Deterministic tabular querying, descriptive analysis, and statistical hypothesis verification over governed dataset context.",
+    badge="QUERY ENGINE"
 )
 
 df, selected_file = select_working_dataset("Active dataset")

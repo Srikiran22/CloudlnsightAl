@@ -24,9 +24,9 @@ from Utils.theme import page_header, section_card_header
 logger = get_logger("AIConverter")
 
 page_header(
-    "AI File Converter",
-    "Extract structured CSV tables from unstructured documents (PDFs, text notes, logs, or pasted text) using Google Gemini.",
-    badge="AI CONVERSION"
+    "Unstructured Document Ingestion",
+    "Extract verified tabular schemas from complex unstructured text, multi-page PDFs, and system logs.",
+    badge="INGESTION ENGINE"
 )
 
 render_sidebar()
