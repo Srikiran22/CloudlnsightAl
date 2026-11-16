@@ -184,6 +184,99 @@ def audit_outliers(
     return pd.DataFrame(rows)
 
 
+def compute_outlier_summary(
+    df: pd.DataFrame,
+    columns: list[str] | None = None,
+    k: float = 1.5,
+) -> pd.DataFrame:
+    """Compute comprehensive outlier and distribution diagnostics across numerical columns.
+
+    Calculates Tukey's IQR fences (Lower/Upper), IQR outlier count & percentage,
+    parametric Z-score (|Z| >= 3) count & percentage, distribution skewness,
+    kurtosis, and shape classification.
+    """
+    col_names = [
+        "Feature",
+        "Q1",
+        "Q3",
+        "IQR",
+        "Lower Fence",
+        "Upper Fence",
+        "IQR Outlier Count",
+        "IQR Outlier %",
+        "Z-Score Count",
+        "Z-Score %",
+        "Skewness",
+        "Kurtosis",
+        "Distribution Shape",
+    ]
+    if df.empty:
+        return pd.DataFrame(columns=col_names)
+
+    target_cols = columns if columns is not None else df.select_dtypes(include="number").columns.tolist()
+    rows: list[dict[str, Any]] = []
+
+    for col in target_cols:
+        if col not in df.columns:
+            continue
+        series = pd.to_numeric(df[col], errors="coerce").dropna()
+        n = len(series)
+        if n < 4:
+            continue
+
+        q1 = float(series.quantile(0.25))
+        q3 = float(series.quantile(0.75))
+        iqr = q3 - q1
+        lb = q1 - (k * iqr)
+        ub = q3 + (k * iqr)
+
+        iqr_mask = (series < lb) | (series > ub)
+        iqr_count = int(iqr_mask.sum())
+        iqr_pct = round((iqr_count / n) * 100.0, 2)
+
+        std_val = float(series.std())
+        if std_val > 1e-9:
+            z_scores = np.abs(stats.zscore(series))
+            z_count = int((z_scores >= 3.0).sum())
+            z_pct = round((z_count / n) * 100.0, 2)
+            skew_val = float(stats.skew(series))
+            kurt_val = float(stats.kurtosis(series))
+        else:
+            z_count = 0
+            z_pct = 0.0
+            skew_val = 0.0
+            kurt_val = 0.0
+
+        if skew_val > 1.0:
+            shape = "Right-skewed (positive tail)"
+        elif skew_val < -1.0:
+            shape = "Left-skewed (negative tail)"
+        elif kurt_val > 2.0:
+            shape = "Heavy-tailed (Leptokurtic)"
+        elif kurt_val < -1.0:
+            shape = "Light-tailed (Platykurtic)"
+        else:
+            shape = "Symmetric / Normal-like"
+
+        rows.append({
+            "Feature": col,
+            "Q1": round(q1, 3),
+            "Q3": round(q3, 3),
+            "IQR": round(iqr, 3),
+            "Lower Fence": round(lb, 3),
+            "Upper Fence": round(ub, 3),
+            "IQR Outlier Count": iqr_count,
+            "IQR Outlier %": f"{iqr_pct:.2f}%",
+            "Z-Score Count": z_count,
+            "Z-Score %": f"{z_pct:.2f}%",
+            "Skewness": round(skew_val, 3),
+            "Kurtosis": round(kurt_val, 3),
+            "Distribution Shape": shape,
+        })
+
+    return pd.DataFrame(rows, columns=col_names) if rows else pd.DataFrame(columns=col_names)
+
+
 def calculate_anova(
     df: pd.DataFrame,
     group_col: str,

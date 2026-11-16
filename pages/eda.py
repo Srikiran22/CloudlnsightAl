@@ -4,7 +4,7 @@ import streamlit as st
 from scipy import stats
 
 from utils.dataset_ui import render_sidebar, select_working_dataset
-from utils.eda_logic import audit_outliers, calculate_anova, calculate_vif
+from utils.eda_logic import audit_outliers, calculate_anova, calculate_vif, compute_outlier_summary
 from utils.logsys import get_logger
 from utils.sampling import sample_for_analysis
 from utils.theme import metric_card, page_header, section_card_header
@@ -177,17 +177,31 @@ with tab_vif, st.container(border=True):
 
 
 # -----------------------------------------------------------------------------
-# TAB 4: OUTLIER DIAGNOSTICS
+# TAB 4: OUTLIER & DISTRIBUTION DIAGNOSTICS
 # -----------------------------------------------------------------------------
 with tab_outliers, st.container(border=True):
     section_card_header(
-        "Tukey's IQR & Z-Score Outlier Audit",
-        "Screen for abnormal observations exceeding 1.5 × IQR bounds or |Z| ≥ 3.0 standard deviations."
+        "Tukey's IQR & Z-Score Outlier Diagnostics",
+        "Screen for abnormal observations exceeding IQR fences or |Z| ≥ 3.0 standard deviations with distribution shape metrics."
     )
     if not num_cols:
         st.info("No numerical features available for outlier detection.")
     else:
-        outlier_df = audit_outliers(analysis_df, num_cols, k=1.5)
+        col_opt1, col_opt2 = st.columns([1.5, 3])
+        with col_opt1:
+            k_mult = st.select_slider(
+                "Tukey Fence Multiplier (k)",
+                options=[1.5, 2.0, 2.5, 3.0],
+                value=1.5,
+                help="1.5 identifies standard mild outliers; 3.0 isolates extreme outliers."
+            )
+        with col_opt2:
+            st.caption(
+                f"Active fence: **Q1 − {k_mult}×IQR** to **Q3 + {k_mult}×IQR**. "
+                "Z-score threshold screens observations beyond ±3.0 standard deviations from the sample mean."
+            )
+
+        outlier_df = compute_outlier_summary(analysis_df, num_cols, k=k_mult)
         st.dataframe(outlier_df, width="stretch", hide_index=True)
 
 
