@@ -198,35 +198,6 @@ with tab_files:
                 preview_text = needed.raw_text[:1500]
                 st.text(preview_text + ("..." if len(needed.raw_text) > 1500 else ""))
 
-                    if newly_converted:
-                        merge_error = None
-                        if len(parsed_datasets) == 1:
-                            file_name, df = parsed_datasets[0]
-                            fresh_ingest = True
-                        else:
-                            total_rows = sum(len(f[1]) for f in parsed_datasets)
-                            if total_rows > MAX_COMBINED_ROWS:
-                                merge_error = (
-                                    f"Combined row count ({total_rows:,}) exceeds the maximum supported limit of "
-                                    f"{MAX_COMBINED_ROWS:,} rows. Merge was aborted."
-                                )
-                                st.error(merge_error)
-                                file_name, df = None, None
-                            else:
-                                combined = merge_frames(parsed_datasets)
-                                saved_path = save_and_activate_dataset(combined, "combined_dataset.csv", sanitize=True)
-                                file_name = saved_path.name
-                                df = combined
-                                fresh_ingest = True
-
-                        if "last_upload_state" in st.session_state:
-                            st.session_state["last_upload_state"]["parsed"] = parsed_datasets
-                            st.session_state["last_upload_state"]["pending"] = pending
-                            st.session_state["last_upload_state"]["failures"] = failures
-                            st.session_state["last_upload_state"]["file_name"] = file_name
-                            st.session_state["last_upload_state"]["df"] = df
-                            st.session_state["last_upload_state"]["merge_error"] = merge_error
-
     if parsed_datasets and not merge_error:
         for unique_fname, df_item in parsed_datasets:
             with st.container(border=True):

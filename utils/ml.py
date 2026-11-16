@@ -218,6 +218,8 @@ def save_trained_model(res: dict[str, Any], model_name: str, directory: Path | s
         "target_column": res.get("target_column") or res.get("target_col"),
         "feature_cols": res.get("feature_cols", []),
         "numeric_features": res.get("numeric_features", []),
+        "decision_threshold": res.get("decision_threshold", 0.50),
+        "positive_class": res.get("positive_class"),
         "categorical_features": res.get("categorical_features", []),
         "feature_dtypes": res.get("feature_dtypes", {}),
         "categories": res.get("categories", {}),
@@ -410,10 +412,58 @@ def _datetime_to_epoch(df: pd.DataFrame) -> None:
             df[column] = epoch
 
 
+def evaluate_threshold_metrics(
+    y_true: np.ndarray | pd.Series | list[Any],
+    y_proba: np.ndarray,
+    classes: list[Any] | np.ndarray,
+    threshold: float = 0.50,
+    positive_class: Any | None = None,
+) -> dict[str, Any]:
+    """Calculate classification metrics at an arbitrary decision threshold for binary targets."""
+    classes_list = list(classes)
+    if len(classes_list) != 2:
+        raise ValueError("Decision threshold tuning is only supported for binary classification.")
+
+    pos_class = positive_class if positive_class in classes_list else classes_list[1]
+    pos_idx = classes_list.index(pos_class)
+    neg_idx = 1 - pos_idx
+
+    pos_prob = y_proba[:, pos_idx] if y_proba.ndim > 1 else y_proba
+    y_pred = np.where(pos_prob >= threshold, classes_list[pos_idx], classes_list[neg_idx])
+
+    y_true_arr = np.asarray(y_true)
+    acc = float(accuracy_score(y_true_arr, y_pred))
+    prec = float(precision_score(y_true_arr, y_pred, average="weighted", zero_division=0))
+    rec = float(recall_score(y_true_arr, y_pred, average="weighted", zero_division=0))
+    f1 = float(f1_score(y_true_arr, y_pred, average="weighted", zero_division=0))
+    f1_macro = float(f1_score(y_true_arr, y_pred, average="macro", zero_division=0))
+    cm = confusion_matrix(y_true_arr, y_pred, labels=classes_list).tolist()
+
+    pos_prec = float(precision_score(y_true_arr == pos_class, y_pred == pos_class, zero_division=0))
+    pos_rec = float(recall_score(y_true_arr == pos_class, y_pred == pos_class, zero_division=0))
+    pos_f1 = float(f1_score(y_true_arr == pos_class, y_pred == pos_class, zero_division=0))
+
+    return {
+        "accuracy": acc,
+        "precision": prec,
+        "recall": rec,
+        "f1_score": f1,
+        "f1_macro": f1_macro,
+        "confusion_matrix": cm,
+        "positive_class": pos_class,
+        "positive_precision": pos_prec,
+        "positive_recall": pos_rec,
+        "positive_f1": pos_f1,
+        "positive_support": int(sum(y_true_arr == pos_class)),
+        "decision_threshold": float(threshold),
+    }
+
+
 def predict_with_model(
     bundle: ModelArtifactBundle | dict[str, Any],
     df: pd.DataFrame,
     feature_cols: list[str] | None = None,
+    threshold_override: float | None = None,
 ) -> pd.DataFrame:
     features = feature_cols or bundle.get("feature_cols") or []
     missing = [col for col in features if col not in df.columns]
@@ -444,7 +494,29 @@ def predict_with_model(
             f"{', '.join(bad_features)}. Clean or clip these columns before prediction."
         )
 
-    predictions = bundle["pipeline"].predict(X)
+    pipeline = bundle["pipeline"]
+    problem_type = bundle.get("problem_type")
+    classes = bundle.get("classes")
+    threshold = threshold_override if threshold_override is not None else bundle.get("decision_threshold", 0.50)
+
+    if (
+        problem_type == "Classification"
+        and classes is not None
+        and len(classes) == 2
+        and hasattr(pipeline, "predict_proba")
+    ):
+        try:
+            proba = pipeline.predict_proba(X)
+            pos_class = bundle.get("positive_class") or classes[1]
+            pos_idx = list(classes).index(pos_class) if pos_class in classes else 1
+            neg_idx = 1 - pos_idx
+            pos_proba = proba[:, pos_idx]
+            predictions = np.where(pos_proba >= threshold, classes[pos_idx], classes[neg_idx])
+        except Exception:
+            predictions = pipeline.predict(X)
+    else:
+        predictions = pipeline.predict(X)
+
     output = df.copy()
 
     # Category drift detection: report unseen categorical levels during inference
@@ -731,6 +803,12 @@ def train_and_evaluate_model(
 
         pipe.fit(X_train, y_train)
         y_pred = pipe.predict(X_test)
+        y_test_proba = None
+        if hasattr(pipe, "predict_proba"):
+            try:
+                y_test_proba = pipe.predict_proba(X_test)
+            except Exception as e:
+                logger.warning("Could not predict probabilities: %s", e)
 
         try:
             classes = sorted(set(y_test).union(set(y_pred)))
@@ -845,6 +923,8 @@ def train_and_evaluate_model(
             "train_rows": len(X_train),
             "stratified_split": stratified_succeeded,
             "stratified_warning": stratified_warning,
+            "decision_threshold": 0.50,
+            "y_test_proba": y_test_proba,
             **pos_metrics,
         }
 

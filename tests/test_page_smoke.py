@@ -16,18 +16,15 @@ class TestPageSmoke(unittest.TestCase):
     """Headless AppTest boot checks verifying that App.py and all Pages boot cleanly without exceptions."""
 
     PAGES = [
-        "App.py",
+        "app.py",
         "pages/upload.py",
         "pages/feature_engineering.py",
-        "pages/aiconverter.py",
         "pages/cleaning.py",
         "pages/compare.py",
         "pages/eda.py",
         "pages/visualization.py",
         "pages/ml.py",
         "pages/predict.py",
-        "pages/ai.py",
-        "pages/aichat.py",
         "pages/report.py",
         "pages/dashboard.py",
     ]
@@ -57,7 +54,7 @@ class TestPageSmoke(unittest.TestCase):
             orig_dir = paths.DATASETS_DIR
             paths.DATASETS_DIR = tmp_path
             try:
-                at = AppTest.from_file(str(root / "App.py"), default_timeout=30)
+                at = AppTest.from_file(str(root / "app.py"), default_timeout=30)
                 at.run()
                 self.assertEqual(len(at.exception), 0)
                 buttons = [b for b in at.button if "Load sample datasets" in getattr(b, "label", "")]
@@ -141,26 +138,6 @@ class TestPageRegression(unittest.TestCase):
                 )
             finally:
                 paths.DATASETS_DIR = orig_dir
-
-    def test_oversized_merge_test_does_not_leak_to_project_datasets_dir(self):
-        """Running the oversized merge test must not write any files into project DATASETS_DIR."""
-        from tests.test_ai_conversion import OversizedMergeRerunAppTest
-
-        before_files = set(paths.DATASETS_DIR.glob("*")) if paths.DATASETS_DIR.exists() else set()
-
-        suite = unittest.TestSuite()
-        suite.addTest(OversizedMergeRerunAppTest("test_oversized_merge_error_survives_reruns"))
-        runner = unittest.TextTestRunner(verbosity=0)
-        result = runner.run(suite)
-        self.assertTrue(result.wasSuccessful())
-
-        after_files = set(paths.DATASETS_DIR.glob("*")) if paths.DATASETS_DIR.exists() else set()
-        new_files = after_files - before_files
-        self.assertEqual(
-            new_files,
-            set(),
-            f"OversizedMergeRerunAppTest leaked files to project DATASETS_DIR: {new_files}",
-        )
 
 
 if __name__ == "__main__":

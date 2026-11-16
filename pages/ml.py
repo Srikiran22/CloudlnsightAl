@@ -16,6 +16,7 @@ from utils.dataset_ui import (
 from utils.logsys import get_logger
 from utils.ml import (
     detect_problem_type,
+    evaluate_threshold_metrics,
     is_likely_id_column,
     save_trained_model,
     train_and_evaluate_model,
@@ -258,6 +259,37 @@ if results_match_active(results, selected_file, df=df):
                     f'</div>',
                     unsafe_allow_html=True
                 )
+
+                if results.get("y_test_proba") is not None and len(results.get("classes", [])) == 2:
+                    st.markdown("##### Decision Cutoff Threshold Tuning")
+                    col_th1, col_th2 = st.columns([2, 3])
+                    current_thresh = float(results.get("decision_threshold", 0.50))
+                    with col_th1:
+                        new_thresh = st.slider(
+                            "Decision Cutoff Threshold",
+                            min_value=0.05,
+                            max_value=0.95,
+                            value=current_thresh,
+                            step=0.05,
+                            key="ml_decision_threshold_slider",
+                            help="Probability threshold required to predict the positive class."
+                        )
+                    with col_th2:
+                        st.caption(
+                            f"Active positive class: **{results['positive_class']}** (cutoff: **{current_thresh:.2f}**). "
+                            "Tune to optimize trade-off between Precision and Recall without refitting model."
+                        )
+                    if abs(new_thresh - current_thresh) > 1e-4:
+                        updated_metrics = evaluate_threshold_metrics(
+                            results["y_test"],
+                            results["y_test_proba"],
+                            results["classes"],
+                            threshold=new_thresh,
+                            positive_class=results["positive_class"],
+                        )
+                        results.update(updated_metrics)
+                        st.session_state["ml_results"] = results
+                        st.rerun()
 
             if results.get("cv_folds"):
                 st.markdown("##### Cross-Validation Performance & Baseline Benchmark")

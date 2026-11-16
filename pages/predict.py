@@ -186,6 +186,20 @@ with st.container(border=True):
                 "Model evaluation metrics are calculated separately in Model Studio & Training."
             )
 
+            threshold_override = None
+            if bundle.get("problem_type") == "Classification" and len(bundle.get("classes", [])) == 2:
+                saved_th = float(bundle.get("decision_threshold", 0.50))
+                pos_cls = bundle.get("positive_class") or bundle.get("classes", ["0", "1"])[1]
+                threshold_override = st.slider(
+                    "Inference Decision Cutoff",
+                    min_value=0.05,
+                    max_value=0.95,
+                    value=saved_th,
+                    step=0.05,
+                    key="predict_threshold_slider",
+                    help=f"Decision threshold for positive class '{pos_cls}'. Saved model default is {saved_th:.2f}."
+                )
+
             if st.button("Generate predictions", type="primary", key="btn_run_predictions"):
                 st.session_state.pop("predict_last_preds", None)
                 st.session_state.pop("predict_last_scoring_id", None)
@@ -193,7 +207,7 @@ with st.container(border=True):
                 st.session_state.pop("predict_last_model", None)
                 try:
                     with st.spinner("Executing batch inference pipeline across records..."):
-                        preds_df = predict_with_model(bundle, score_df)
+                        preds_df = predict_with_model(bundle, score_df, threshold_override=threshold_override)
 
                         if "category_drift" in preds_df.attrs:
                             drift_info = preds_df.attrs["category_drift"]
