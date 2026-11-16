@@ -54,7 +54,7 @@ SUPPORTED_DATASET_EXTENSIONS = TABULAR_EXTENSIONS | TEXT_EXTENSIONS | DOCUMENT_E
 
 
 class AIConversionRequired(ValueError):
-    # a file we can't parse natively; raw_text carries what Gemini would see
+    # a file we can't parse natively; raw_text carries what tabular LLM converters would see
     def __init__(self, message, raw_text="", filename=""):
         super().__init__(message)
         self.raw_text = raw_text

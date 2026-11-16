@@ -1,6 +1,7 @@
 import unittest
 from pathlib import Path
 
+
 class TestOfflineIntegrity(unittest.TestCase):
     def test_no_genai_files_exist(self):
         forbidden = [

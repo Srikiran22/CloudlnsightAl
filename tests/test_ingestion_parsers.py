@@ -400,7 +400,6 @@ class PDFHardeningTests(unittest.TestCase):
 """Comprehensive regression tests for final hardening and forensic re-audit remediation."""
 
 import unittest
-from types import SimpleNamespace
 
 from utils.charts import create_bar_count_plot
 from utils.compare_logic import column_drift_rows, schema_diff

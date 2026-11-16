@@ -167,6 +167,8 @@ def column_drift_rows(
         tvd_val = None
 
         # Statistical distributional drift for numeric columns (two-sample KS test)
+        ks_stat_raw = None
+        ks_pval_raw = None
         if _is_numeric_series(sa) and _is_numeric_series(sb) and mean_a is not None and mean_b is not None:
             num_a = pd.to_numeric(sa, errors="coerce").dropna()
             num_b = pd.to_numeric(sb, errors="coerce").dropna()
@@ -175,12 +177,16 @@ def column_drift_rows(
             if len(num_a) >= 10 and len(num_b) >= 10:
                 try:
                     ks_res = stats.ks_2samp(num_a, num_b)
-                    ks_stat = round(float(ks_res.statistic), 4)
-                    ks_pval = round(float(ks_res.pvalue), 4)
+                    ks_stat_raw = float(ks_res.statistic)
+                    ks_pval_raw = float(ks_res.pvalue)
+                    ks_stat = round(ks_stat_raw, 4)
+                    ks_pval = round(ks_pval_raw, 4)
                 except Exception as exc:
                     logger.debug("suppressed error in %s: %s", "column_drift_rows", exc)
         else:
             # Statistical frequency drift for categorical columns (Total Variation Distance)
+            # TVD measures total distributional distance in [0, 1] as an effect size metric.
+            # A threshold of TVD >= 0.20 (requiring min sample size N >= 10) indicates substantial shift.
             cat_a = sa.dropna().astype(str)
             cat_b = sb.dropna().astype(str)
             if len(cat_a) >= 10 and len(cat_b) >= 10:
@@ -196,8 +202,8 @@ def column_drift_rows(
                     logger.debug("suppressed error in %s: %s", "column_drift_rows", exc)
 
         row_idx = len(rows)
-        if ks_stat is not None and ks_pval is not None:
-            ks_tests.append((row_idx, ks_stat, ks_pval))
+        if ks_stat_raw is not None and ks_pval_raw is not None:
+            ks_tests.append((row_idx, ks_stat_raw, ks_pval_raw))
 
         rows.append({
             "Column": col,
@@ -220,16 +226,15 @@ def column_drift_rows(
     if ks_tests:
         raw_pvals = [item[2] for item in ks_tests]
         adj_pvals = benjamini_hochberg_correction(raw_pvals)
-        for (r_idx, k_stat, k_pval), adj_p in zip(ks_tests, adj_pvals):
+        for (r_idx, k_stat, _), adj_p in zip(ks_tests, adj_pvals):
             rows[r_idx]["KS p-adj (FDR)"] = adj_p
-            is_drift = (adj_p < 0.05) if len(ks_tests) > 1 else (k_pval < 0.01)
+            # Consistent FDR alpha = 0.05 policy across single and multiple tests
+            is_drift = (adj_p < 0.05)
             if is_drift:
                 curr_flags = rows[r_idx]["Flags"]
                 flag_list = [f for f in curr_flags.split("; ") if f != "OK"]
-                if len(ks_tests) > 1:
-                    flag_list.append(f"distribution drift (KS stat={k_stat:.3f}, p_adj={adj_p:.4f})")
-                else:
-                    flag_list.append(f"distribution drift (KS stat={k_stat:.3f}, p={k_pval:.4f})")
+                p_label = f"p_adj={adj_p:.4f}" if len(ks_tests) > 1 else f"p={adj_p:.4f}"
+                flag_list.append(f"distribution drift (KS stat={k_stat:.3f}, {p_label})")
                 rows[r_idx]["Flags"] = "; ".join(flag_list)
 
     return rows

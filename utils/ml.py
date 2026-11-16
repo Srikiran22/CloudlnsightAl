@@ -31,6 +31,7 @@ from sklearn.metrics import (
     classification_report,
     confusion_matrix,
     f1_score,
+    matthews_corrcoef,
     mean_absolute_error,
     mean_squared_error,
     precision_score,
@@ -41,6 +42,7 @@ from sklearn.model_selection import (
     KFold,
     StratifiedKFold,
     TimeSeriesSplit,
+    cross_val_predict,
     cross_validate,
     train_test_split,
 )
@@ -125,7 +127,7 @@ class ModelArtifactBundle(TypedDict, total=False):
       model_id: str
       created_at: str
 
-    Also preserves backwards and runtime compatibility with CloudInsight AI's
+    Also preserves backwards and runtime compatibility with TabuLens's
     existing bundle keys used by pages/predict.py and tests/.
     """
     # Canonical Interface Contract (PROJECT.md § Interface Contracts)
@@ -265,6 +267,8 @@ def save_trained_model(res: dict[str, Any], model_name: str, directory: Path | s
                 if attempt == 9:
                     raise
                 time.sleep(0.005 * (2 ** attempt))
+        sign_dir = path.parent if (path.parent / MODEL_SIGNING_KEY_FILENAME).is_file() else target_dir
+        _get_or_create_model_signing_key(directory=sign_dir)
         sign_model_artifact(path)
     except Exception:
         if tmp_path.exists():
@@ -347,7 +351,7 @@ def load_trained_model(
     # (eliminates TOCTOU race where disk file could be altered between verification and load)
     bundle = joblib.load(io.BytesIO(content))
     if not isinstance(bundle, dict) or "pipeline" not in bundle:
-        raise ValueError("The selected file is not a valid CloudInsight model bundle.")
+        raise ValueError("The selected file is not a valid TabuLens model bundle.")
     bundle_ver = bundle.get("bundle_version", 1)
     if not isinstance(bundle_ver, int) or bundle_ver < 1 or bundle_ver > MODEL_BUNDLE_VERSION:
         raise ValueError(
@@ -442,6 +446,7 @@ def evaluate_threshold_metrics(
     pos_prec = float(precision_score(y_true_arr == pos_class, y_pred == pos_class, zero_division=0))
     pos_rec = float(recall_score(y_true_arr == pos_class, y_pred == pos_class, zero_division=0))
     pos_f1 = float(f1_score(y_true_arr == pos_class, y_pred == pos_class, zero_division=0))
+    mcc = float(matthews_corrcoef(y_true_arr == pos_class, y_pred == pos_class))
 
     return {
         "accuracy": acc,
@@ -449,6 +454,7 @@ def evaluate_threshold_metrics(
         "recall": rec,
         "f1_score": f1,
         "f1_macro": f1_macro,
+        "mcc": mcc,
         "confusion_matrix": cm,
         "positive_class": pos_class,
         "positive_precision": pos_prec,
@@ -567,6 +573,9 @@ def generate_standalone_inference_code(
         '"""',
         '',
         'import argparse',
+        'import hashlib',
+        'import hmac',
+        'import json',
         'import os',
         'import sys',
         'from pathlib import Path',
@@ -580,18 +589,92 @@ def generate_standalone_inference_code(
         f'CLASSES = {repr(list(classes)) if classes is not None else "[]"}',
         f'DECISION_THRESHOLD = {threshold}',
         f'POSITIVE_CLASS = {repr(positive_class)}',
+        'MAX_MODEL_SIZE_BYTES = 100 * 1024 * 1024',
+        'MAX_INPUT_SIZE_BYTES = 200 * 1024 * 1024',
         '',
         '',
-        'def load_bundle(model_path: Path):',
+        'def verify_signature(model_path: Path, key_path: Path | None = None) -> bool:',
+        '    """Verify HMAC-SHA256 signature of the model artifact before deserialization."""',
+        '    sig_path = model_path.with_suffix(".joblib.sig")',
+        '    if not sig_path.is_file():',
+        '        return False',
+        '    if key_path is None:',
+        '        env_key = os.environ.get("TABULENS_SIGNING_KEY_PATH")',
+        '        if env_key and Path(env_key).is_file():',
+        '            key_path = Path(env_key)',
+        '        elif (model_path.parent / ".model_signing_key").is_file():',
+        '            key_path = model_path.parent / ".model_signing_key"',
+        '        elif (Path("models") / ".model_signing_key").is_file():',
+        '            key_path = Path("models") / ".model_signing_key"',
+        '        elif (Path(__file__).resolve().parent / "models" / ".model_signing_key").is_file():',
+        '            key_path = Path(__file__).resolve().parent / "models" / ".model_signing_key"',
+        '    if key_path is None or not key_path.is_file():',
+        '        return False',
+        '    try:',
+        '        sig_data = json.loads(sig_path.read_text(encoding="utf-8"))',
+        '        if sig_data.get("algo") != "hmac-sha256":',
+        '            return False',
+        '        if sig_data.get("model_file") != model_path.name:',
+        '            return False',
+        '        expected_sig = sig_data.get("signature", "")',
+        '        key = key_path.read_bytes()',
+        '        content = model_path.read_bytes()',
+        '        actual_sig = hmac.new(key, content, hashlib.sha256).hexdigest()',
+        '        return hmac.compare_digest(actual_sig, expected_sig)',
+        '    except Exception:',
+        '        return False',
+        '',
+        '',
+        'def load_bundle(model_path: Path, key_path: Path | None = None, allow_unverified: bool = False):',
         '    if not model_path.is_file():',
         '        print(f"Error: Model file not found at {model_path}", file=sys.stderr)',
         '        sys.exit(1)',
+        '    if model_path.stat().st_size > MAX_MODEL_SIZE_BYTES:',
+        '        print(f"Error: Model artifact exceeds size ceiling ({model_path.stat().st_size} bytes)", file=sys.stderr)',
+        '        sys.exit(1)',
+        '    if not verify_signature(model_path, key_path=key_path):',
+        '        if not allow_unverified:',
+        '            print(',
+        '                "Error: Cryptographic HMAC signature verification failed or signature not found.\\n"',
+        '                "To prevent arbitrary code execution during joblib deserialization, loading has been aborted.\\n"',
+        '                "Provide the key with --key-path or TABULENS_SIGNING_KEY_PATH, or use --allow-unverified-model to override.",',
+        '                file=sys.stderr,',
+        '            )',
+        '            sys.exit(1)',
+        '        else:',
+        '            print("WARNING: Loading unverified model artifact via --allow-unverified-model override.", file=sys.stderr)',
         '    bundle = joblib.load(model_path)',
         '    return bundle',
         '',
         '',
-        'def run_inference(input_path: Path, output_path: Path, threshold_override: float | None = None):',
-        '    bundle = load_bundle(MODEL_PATH)',
+        'def sanitize_cells_for_csv(df: pd.DataFrame) -> pd.DataFrame:',
+        '    """Neutralize formula injection triggers (=, +, -, @, \\t, \\r) for CSV export."""',
+        '    sanitized = df.copy()',
+        '    for col in sanitized.select_dtypes(include=["object", "string"]).columns:',
+        '        sanitized[col] = sanitized[col].astype(str).map(',
+        '            lambda v: f"\\\'{v}" if v and v[0] in ("=", "+", "-", "@", "\\t", "\\r") else v',
+        '        )',
+        '    return sanitized',
+        '',
+        '',
+        'def run_inference(',
+        '    input_path: Path,',
+        '    output_path: Path,',
+        '    threshold_override: float | None = None,',
+        '    key_path: Path | None = None,',
+        '    allow_unverified: bool = False,',
+        '):',
+        '    if not input_path.is_file():',
+        '        print(f"Error: Input file not found at {input_path}", file=sys.stderr)',
+        '        sys.exit(1)',
+        '    if input_path.stat().st_size > MAX_INPUT_SIZE_BYTES:',
+        '        print(f"Error: Input CSV exceeds maximum size ceiling ({input_path.stat().st_size} bytes)", file=sys.stderr)',
+        '        sys.exit(1)',
+        '    if threshold_override is not None and not (0.0 < threshold_override < 1.0):',
+        '        print(f"Error: Decision threshold override must be strictly between 0.0 and 1.0 (got {threshold_override})", file=sys.stderr)',
+        '        sys.exit(1)',
+        '',
+        '    bundle = load_bundle(MODEL_PATH, key_path=key_path, allow_unverified=allow_unverified)',
         '    pipeline = bundle.get("pipeline", bundle) if isinstance(bundle, dict) else bundle',
         '    features = bundle.get("feature_cols", FEATURE_COLS) if isinstance(bundle, dict) else FEATURE_COLS',
         '    threshold = threshold_override if threshold_override is not None else (bundle.get("decision_threshold", DECISION_THRESHOLD) if isinstance(bundle, dict) else DECISION_THRESHOLD)',
@@ -632,7 +715,8 @@ def generate_standalone_inference_code(
     lines.extend([
         '    df["prediction"] = preds',
         '    output_path.parent.mkdir(parents=True, exist_ok=True)',
-        '    df.to_csv(output_path, index=False)',
+        '    clean_df = sanitize_cells_for_csv(df)',
+        '    clean_df.to_csv(output_path, index=False)',
         '    print(f"Inference complete. Scored {len(df):,} records saved to {output_path}")',
         '',
         '',
@@ -641,9 +725,17 @@ def generate_standalone_inference_code(
         '    parser.add_argument("--input", "-i", type=Path, required=True, help="Path to input CSV file")',
         '    parser.add_argument("--output", "-o", type=Path, default=Path("predictions.csv"), help="Path to output scored CSV file")',
         f'    parser.add_argument("--threshold", "-t", type=float, default=None, help="Decision cutoff override (default: {threshold})")',
+        '    parser.add_argument("--key-path", "-k", type=Path, default=None, help="Path to HMAC model signing key (.model_signing_key)")',
+        '    parser.add_argument("--allow-unverified-model", action="store_true", help="Bypass HMAC signature verification (security risk)")',
         '    args = parser.parse_args()',
         '',
-        '    run_inference(args.input, args.output, threshold_override=args.threshold)',
+        '    run_inference(',
+        '        args.input,',
+        '        args.output,',
+        '        threshold_override=args.threshold,',
+        '        key_path=args.key_path,',
+        '        allow_unverified=args.allow_unverified_model,',
+        '    )',
         '',
         '',
         'if __name__ == "__main__":',
@@ -935,6 +1027,7 @@ def train_and_evaluate_model(
         cr = classification_report(y_test, y_pred, labels=classes, output_dict=True, zero_division=0)
 
         pos_metrics = {}
+        pos_label = None
         if len(classes) == 2:
             candidates = [c for c in classes if str(c).strip().lower() in ("1", "true", "yes", "churn", "churned", "positive")]
             pos_label = candidates[0] if candidates else classes[1]
@@ -996,8 +1089,18 @@ def train_and_evaluate_model(
                 cv_acc_std = round(float(np.std(cv_acc)), 4)
                 cv_f1_mean = round(float(np.mean(cv_f1)), 4)
                 cv_f1_std = round(float(np.std(cv_f1)), 4)
+
+                oof_proba = None
+                if len(classes) == 2:
+                    try:
+                        oof_proba = cross_val_predict(
+                            pipe, X_train, y_train, cv=cv, method="predict_proba"
+                        )
+                    except Exception as oof_err:
+                        logger.debug("Out-of-fold probability estimation failed: %s", oof_err)
             except Exception as cv_err:
                 logger.warning("Classification cross-validation failed: %s", cv_err)
+                oof_proba = None
 
         res = {
             "problem_type": "Classification",
@@ -1035,6 +1138,15 @@ def train_and_evaluate_model(
             "stratified_split": stratified_succeeded,
             "stratified_warning": stratified_warning,
             "decision_threshold": 0.50,
+            "y_val": y_train.tolist(),
+            "y_val_proba": oof_proba,
+            "val_metrics": (
+                evaluate_threshold_metrics(
+                    y_train, oof_proba, classes, threshold=0.50, positive_class=pos_label
+                )
+                if (oof_proba is not None and pos_label is not None)
+                else None
+            ),
             "y_test_proba": y_test_proba,
             **pos_metrics,
         }

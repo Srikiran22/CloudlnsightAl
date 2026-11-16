@@ -262,7 +262,7 @@ if results_match_active(results, selected_file, df=df):
                 )
 
                 if results.get("y_test_proba") is not None and len(results.get("classes", [])) == 2:
-                    st.markdown("##### Decision Cutoff Threshold Tuning")
+                    st.markdown("##### Decision Cutoff Threshold Tuning (Leak-Free Validation)")
                     col_th1, col_th2 = st.columns([2, 3])
                     current_thresh = float(results.get("decision_threshold", 0.50))
                     with col_th1:
@@ -276,19 +276,33 @@ if results_match_active(results, selected_file, df=df):
                             help="Probability threshold required to predict the positive class."
                         )
                     with col_th2:
+                        val_mcc_str = f" | Val MCC: **{results['val_metrics']['mcc']:.3f}**" if results.get("val_metrics") and "mcc" in results["val_metrics"] else ""
+                        test_mcc_str = f" | Test MCC: **{results.get('mcc', 0.0):.3f}**" if "mcc" in results else ""
                         st.caption(
-                            f"Active positive class: **{results['positive_class']}** (cutoff: **{current_thresh:.2f}**). "
-                            "Tune to optimize trade-off between Precision and Recall without refitting model."
+                            f"Active positive class: **{results['positive_class']}** (cutoff: **{current_thresh:.2f}**{val_mcc_str}{test_mcc_str}). "
+                            "Tuned against training out-of-fold validation predictions to preserve holdout test isolation."
                         )
                     if abs(new_thresh - current_thresh) > 1e-4:
-                        updated_metrics = evaluate_threshold_metrics(
+                        # Tune on validation out-of-fold predictions
+                        val_source_y = results.get("y_val", results["y_test"])
+                        val_source_proba = results.get("y_val_proba", results["y_test_proba"])
+                        if val_source_proba is not None:
+                            results["val_metrics"] = evaluate_threshold_metrics(
+                                val_source_y,
+                                val_source_proba,
+                                results["classes"],
+                                threshold=new_thresh,
+                                positive_class=results["positive_class"],
+                            )
+                        # Evaluate untouched holdout test set at the selected threshold
+                        updated_test_metrics = evaluate_threshold_metrics(
                             results["y_test"],
                             results["y_test_proba"],
                             results["classes"],
                             threshold=new_thresh,
                             positive_class=results["positive_class"],
                         )
-                        results.update(updated_metrics)
+                        results.update(updated_test_metrics)
                         st.session_state["ml_results"] = results
                         st.rerun()
 

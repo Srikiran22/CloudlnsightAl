@@ -1,4 +1,4 @@
-# CloudInsight AI — native Streamlit theme.
+# TabuLens — native Streamlit theme.
 #
 # This file mirrors the design-system tokens in Utils/theme.py so that
 # canvas-rendered widgets (st.dataframe, st.selectbox, st.code, toasts) match

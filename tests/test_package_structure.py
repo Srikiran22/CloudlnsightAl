@@ -1,6 +1,7 @@
 import unittest
 from pathlib import Path
 
+
 class TestPackageStructure(unittest.TestCase):
     def test_root_and_package_naming(self):
         self.assertTrue(Path("app.py").is_file(), "app.py must be lowercase")
@@ -12,6 +13,6 @@ class TestPackageStructure(unittest.TestCase):
             self.assertEqual(p.name, p.name.lower(), f"{p.name} must be lowercase")
 
     def test_clean_imports(self):
-        from utils import limits, paths, dataset_ui
+        from utils import limits, paths
         self.assertIsNotNone(limits.ResourcePolicy)
         self.assertIsNotNone(paths.DATASETS_DIR)

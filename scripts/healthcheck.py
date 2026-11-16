@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lightweight health probe for CloudInsight AI Streamlit runtime."""
+"""Lightweight health probe for TabuLens Streamlit runtime."""
 
 import sys
 import urllib.error

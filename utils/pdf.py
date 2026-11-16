@@ -69,11 +69,11 @@ def validate_report_template(config: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(config, dict):
         raise ValueError("Report template must be a valid dictionary/JSON object.")
 
-    title = str(config.get("title") or "CloudInsight AI Executive Analytics Report").strip()
+    title = str(config.get("title") or "TabuLens Executive Analytics Report").strip()
     if len(title) > 200:
         title = title[:200]
 
-    author = str(config.get("author") or "CloudInsight AI Platform").strip()
+    author = str(config.get("author") or "TabuLens Platform").strip()
     if len(author) > 200:
         author = author[:200]
 
@@ -97,8 +97,8 @@ def validate_report_template(config: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "template_version": 1,
-        "title": title or "CloudInsight AI Executive Analytics Report",
-        "author": author or "CloudInsight AI Platform",
+        "title": title or "TabuLens Executive Analytics Report",
+        "author": author or "TabuLens Platform",
         "include_charts": include_charts,
         "include_ai": include_ai,
         "saved_at": config.get("saved_at"),
@@ -314,7 +314,7 @@ def generate_pdf_report(
     df: pd.DataFrame,
     dataset_name: str,
     report_title: str = "Executive Data Analytics Report",
-    author_name: str = "CloudInsight AI",
+    author_name: str = "TabuLens",
     include_ai_insights: str | None = None,
     include_charts: bool = True,
     source_rows: int | None = None,

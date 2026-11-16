@@ -25,7 +25,7 @@ tests/
 ├── test_ingestion_parsers.py           # CSV, TSV, JSON, JSONL, Parquet, XML streaming bounds
 ├── test_ml_and_drift.py                # TimeSeriesSplit, 5-fold CV, KS test FDR, TVD drift
 ├── test_ui_workflows.py                # File uploads, multi-file merging, PDF fonts, decimation
-├── test_decision_threshold.py          # O(1) decision threshold metrics and MCC optimization
+├── test_decision_threshold.py          # Decision threshold metrics and MCC optimization
 ├── test_outlier_diagnostics.py         # Tukey IQR fences, Z-scores, skewness & kurtosis
 ├── test_inference_script_generation.py # Standalone Python inference script generation
 ├── test_deployment_config.py           # Dockerfile 2-stage verification & GitHub Actions CI

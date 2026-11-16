@@ -1,20 +1,19 @@
 import unittest
-from utils.theme import (
-    page_header,
-    section_card_header,
-    safe_error_boundary,
-    plot_template,
-    sanitize_error_message,
-    SEMANTIC_TOKENS,
-    CHART_PALETTE,
-    get_semantic_tokens,
-    style_plotly_fig,
-    brand_logo_svg,
-    metric_card,
-    is_dark,
-    current_theme_base,
-)
+
 import plotly.graph_objects as go
+
+from utils.theme import (
+    CHART_PALETTE,
+    SEMANTIC_TOKENS,
+    brand_logo_svg,
+    current_theme_base,
+    get_semantic_tokens,
+    is_dark,
+    safe_error_boundary,
+    sanitize_error_message,
+    style_plotly_fig,
+)
+
 
 class TestThemeAndBoundaries(unittest.TestCase):
     def test_semantic_tokens_and_palette(self):

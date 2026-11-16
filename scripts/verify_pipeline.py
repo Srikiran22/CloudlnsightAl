@@ -8,7 +8,6 @@ and executes the complete unit and integration test suite.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import tempfile
 import unittest
@@ -83,11 +82,12 @@ def check_core_artifacts() -> bool:
 
 def check_cryptographic_signing() -> bool:
     try:
+        import numpy as np
+        import pandas as pd
         from sklearn.linear_model import LogisticRegression
         from sklearn.pipeline import Pipeline
-        import pandas as pd
-        import numpy as np
-        from utils.ml import save_trained_model, load_trained_model
+
+        from utils.ml import load_trained_model, save_trained_model
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)

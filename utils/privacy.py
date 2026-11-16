@@ -1,7 +1,7 @@
-# Pre-Gemini privacy screening: flag likely-sensitive columns so the user
-# can exclude them from AI context with one click. Detection is heuristic by
-# design -- it should produce useful warnings with few false positives, not
-# replace human judgment.
+# TabuLens privacy screening: flag likely-sensitive columns so the user
+# can exclude them from reports or downstream processing. Detection is heuristic by
+# design (inspecting column names and up to SAMPLE_ROWS=100 values per column) --
+# it produces fast warnings with few false positives, not replacing human audit.
 
 import re
 from collections.abc import Iterable
@@ -110,9 +110,9 @@ def detect_sensitive_columns(df: pd.DataFrame) -> dict[str, str]:
     """Map {column: reason} for columns that look like they hold sensitive data.
 
     A column is flagged when its NAME suggests secrets/identifiers, or when a
-    sample of its string values matches email / token / IBAN / credit-card
-    (Luhn-checked) / phone patterns. Numeric-only measurement columns are
-    never flagged from values alone.
+    heuristic sample of up to SAMPLE_ROWS (100) string values matches email /
+    token / IBAN / credit-card (Luhn-checked) / phone patterns. Numeric-only
+    measurement columns are never flagged from values alone.
     """
     flags = {}
     for column in df.columns:

@@ -2,15 +2,15 @@
 # console Streamlit was launched from. Nothing sensitive is ever logged --
 # no API keys, no dataset contents, no raw model responses.
 #
-# Where logs go: stderr of the `streamlit run App.py` terminal.
-# Level is configurable via the CLOUDINSIGHT_LOG_LEVEL env var
+# Where logs go: stderr of the `streamlit run app.py` terminal.
+# Level is configurable via TABULENS_LOG_LEVEL (or legacy CLOUDINSIGHT_LOG_LEVEL)
 # (DEBUG / INFO / WARNING / ERROR; default WARNING).
 
 import logging
 import os
 import sys
 
-_LOGGER_NAME = "cloudinsight"
+_LOGGER_NAME = "tabulens"
 _configured = False
 
 
@@ -18,7 +18,9 @@ def _configure():
     global _configured
     if _configured:
         return
-    level_name = os.environ.get("CLOUDINSIGHT_LOG_LEVEL", "WARNING").upper()
+    level_name = os.environ.get(
+        "TABULENS_LOG_LEVEL", os.environ.get("CLOUDINSIGHT_LOG_LEVEL", "WARNING")
+    ).upper()
     level = getattr(logging, level_name, logging.WARNING)
     if not isinstance(level, int):
         level = logging.WARNING

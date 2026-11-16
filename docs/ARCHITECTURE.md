@@ -87,7 +87,7 @@ Uses modern Streamlit `st.navigation` with a logical 4th-year studio workflow:
   - Numeric features: `SimpleImputer(strategy="median")` + `StandardScaler()`
   - Categorical features: `SimpleImputer(strategy="most_frequent")` + `OneHotEncoder(handle_unknown="ignore")`
 - **Validation Engine:** 5-fold cross-validation (`StratifiedKFold` for classification, `KFold` for regression, or `TimeSeriesSplit` for chronological sequences). Compares against naive `DummyClassifier` or `DummyRegressor` baselines.
-- **Decision Threshold Optimization:** For binary classifiers, evaluates precision, recall, F1, and Matthews Correlation Coefficient (MCC) across candidate cutoffs from 0.05 to 0.95 ($O(1)$ lookup from pre-computed probabilities).
+- **Decision Threshold Optimization:** For binary classifiers, evaluates precision, recall, F1, and Matthews Correlation Coefficient (MCC) across candidate cutoffs from 0.05 to 0.95 (no-refit vectorized evaluation from pre-computed out-of-fold validation probabilities).
 - **Standalone Inference Generation:** Exports a self-contained Python script (`predict_standalone.py`) that loads the model bundle, validates input schema, verifies HMAC signatures, and runs batch predictions without Streamlit.
 - **Model Signing & Tamper Evidence:** HMAC-SHA256 signature calculated over serialized model bytes and stored in `.joblib.sig`. Load operations verify HMAC before calling `joblib.load()`.
 

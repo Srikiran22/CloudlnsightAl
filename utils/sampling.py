@@ -1,4 +1,4 @@
-"""Shared visualization and analytical sampling policy for CloudInsight AI.
+"""Shared visualization and analytical sampling policy for TabuLens.
 
 Provides deterministic, reproducible, and bounded representative sampling
 across all application surfaces (Dashboard, Visualize, Compare, EDA, and PDF reports).

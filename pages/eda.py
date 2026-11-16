@@ -4,7 +4,7 @@ import streamlit as st
 from scipy import stats
 
 from utils.dataset_ui import render_sidebar, select_working_dataset
-from utils.eda_logic import audit_outliers, calculate_anova, calculate_vif, compute_outlier_summary
+from utils.eda_logic import calculate_anova, calculate_vif, compute_outlier_summary
 from utils.logsys import get_logger
 from utils.sampling import sample_for_analysis
 from utils.theme import metric_card, page_header, section_card_header

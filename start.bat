@@ -3,7 +3,7 @@ setlocal
 cd /d "%~dp0"
 
 echo ========================================================
-echo Starting CloudInsightAI Streamlit Application...
+echo Starting TabuLens Streamlit Application...
 echo ========================================================
 
 :: Check for virtual environment in venv or .venv
@@ -17,6 +17,6 @@ if exist "venv\Scripts\activate.bat" (
 )
 
 :: Run streamlit app
-python -m streamlit run App.py
+python -m streamlit run app.py
 
 pause

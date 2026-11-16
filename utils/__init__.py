@@ -1,1 +1,1 @@
-"""Utility modules for CloudInsight AI."""
+"""Utility modules for TabuLens."""

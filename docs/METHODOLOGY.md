@@ -32,7 +32,17 @@ TabuLens implements the **Benjamini-Hochberg (BH)** procedure to control the Fal
    $$P_{(1)} \le P_{(2)} \le \dots \le P_{(m)}$$
 2. Find the largest integer $k$ such that:
    $$P_{(k)} \le \frac{k}{m} Q$$
-3. Reject $H_0$ for all features $i = 1, \dots, k$, marking them as exhibiting statistically significant distribution drift.
+3. Reject $H_0$ for all features $i = 1, \dots, k$, marking them as exhibiting statistically significant distribution drift ($p_{\text{adj}} < 0.05$).
+
+TabuLens enforces a unified significance policy: distribution drift is flagged whenever $p_{\text{adj}} < 0.05$. For single-feature tests ($m = 1$), the adjustment yields $p_{\text{adj}} = p_{\text{raw}}$, ensuring consistent 5% false-discovery criteria across both single and multi-column comparisons without arbitrary threshold switching.
+
+### 1.3 Total Variation Distance (TVD) for Categorical Features
+
+For discrete categorical columns, TabuLens computes the Total Variation Distance between empirical distributions $P$ and $Q$ over categorical domain $\Omega$:
+
+$$\text{TVD}(P, Q) = \frac{1}{2} \sum_{x \in \Omega} |P(x) - Q(x)|$$
+
+TVD provides a bounded effect size metric in $[0, 1]$. To prevent false alarms on small samples, TabuLens enforces a minimum sample size constraint ($n \ge 10$ non-null observations in both datasets) and flags categorical drift when $\text{TVD} \ge 0.20$, representing a substantial shift in category proportion.
 
 ---
 
@@ -90,7 +100,7 @@ TabuLens enforces strict leak-free partitioning using Scikit-Learn `Pipeline` an
 
 ---
 
-## 5. Decision Threshold Optimization
+## 5. Decision Threshold Optimization & Holdout Isolation
 
 Default classification in Scikit-Learn assigns positive class membership using a rigid cutoff of $\theta = 0.50$:
 
@@ -98,11 +108,19 @@ $$\hat{y} = \begin{cases} 1 & \text{if } P(y = 1 \mid \mathbf{x}) \ge 0.50 \\ 0 
 
 In real-world applications (fraud detection, churn prevention, medical diagnosis), false negatives often carry significantly higher costs than false positives.
 
-TabuLens stores predicted probabilities $P(y = \text{positive\_class} \mid \mathbf{x})$ and provides $O(1)$ decision threshold optimization over arbitrary cutoffs $\theta \in [0.05, 0.95]$:
+### 5.1 Out-of-Fold Tuning (Zero Holdout Leakage)
+To prevent test-set data leakage, threshold calibration must never evaluate candidate cutoffs against the untouched holdout test set. TabuLens computes out-of-fold probability predictions on the training population $(X_{\text{train}}, y_{\text{train}})$ via internal cross-validation (`cross_val_predict`). The user explores candidate cutoffs $\theta \in [0.05, 0.95]$ against out-of-fold validation metrics:
 
 $$\hat{y}_\theta = \begin{cases} \text{positive\_class} & \text{if } P(y = \text{positive\_class} \mid \mathbf{x}) \ge \theta \\ \text{negative\_class} & \text{otherwise} \end{cases}$$
 
-Tuning $\theta$ dynamically recomputes precision, recall, F1, and the confusion matrix without refitting the underlying model, and saves the calibrated threshold $\theta^*$ directly inside the HMAC-signed bundle for deployment inference.
+Once calibrated, the chosen threshold $\theta^*$ is frozen and evaluated once on the final untouched test set.
+
+### 5.2 No-Refit Vectorized Metric Recalculation
+Threshold tuning does not refit the underlying model pipeline. Instead, TabuLens performs vectorized array operations over the pre-computed validation probabilities, recalculating Precision, Recall, F1 score, Matthews Correlation Coefficient (MCC), and the confusion matrix:
+
+$$\text{MCC} = \frac{\text{TP} \times \text{TN} - \text{FP} \times \text{FN}}{\sqrt{(\text{TP} + \text{FP})(\text{TP} + \text{FN})(\text{TN} + \text{FP})(\text{TN} + \text{FN})}}$$
+
+The calibrated threshold $\theta^*$ is persisted inside the HMAC-signed model bundle and automatically applied during batch prediction and standalone inference code generation.
 
 ---
 

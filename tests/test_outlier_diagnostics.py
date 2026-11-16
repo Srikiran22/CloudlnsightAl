@@ -1,7 +1,10 @@
 import unittest
+
 import numpy as np
 import pandas as pd
-from utils.eda_logic import compute_outlier_summary, detect_tukey_outliers
+
+from utils.eda_logic import compute_outlier_summary
+
 
 class TestOutlierDiagnostics(unittest.TestCase):
     def setUp(self):

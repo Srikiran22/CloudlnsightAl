@@ -1,9 +1,12 @@
 import unittest
+
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
-from utils.ml import predict_with_model, evaluate_threshold_metrics
+
+from utils.ml import evaluate_threshold_metrics, predict_with_model
+
 
 class TestDecisionThreshold(unittest.TestCase):
     def setUp(self):
@@ -41,4 +44,15 @@ class TestDecisionThreshold(unittest.TestCase):
         self.assertIn("precision", metrics)
         self.assertIn("recall", metrics)
         self.assertIn("confusion_matrix", metrics)
+        self.assertIn("mcc", metrics)
         self.assertAlmostEqual(metrics["accuracy"], 1.0)
+        self.assertAlmostEqual(metrics["mcc"], 1.0)
+
+    def test_threshold_metrics_imbalanced_mcc(self):
+        y_true = np.array([0, 0, 0, 0, 1])
+        y_proba = np.array([0.1, 0.2, 0.3, 0.7, 0.9])
+        metrics_high = evaluate_threshold_metrics(y_true, y_proba, classes=[0, 1], threshold=0.8, positive_class=1)
+        metrics_low = evaluate_threshold_metrics(y_true, y_proba, classes=[0, 1], threshold=0.2, positive_class=1)
+        self.assertIn("mcc", metrics_high)
+        self.assertIn("mcc", metrics_low)
+        self.assertIsInstance(metrics_high["mcc"], float)

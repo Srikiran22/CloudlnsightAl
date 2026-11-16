@@ -30,13 +30,11 @@ from utils.paths import (
     delete_dataset,
     get_unique_filename,
     list_ready_datasets,
-    read_dataset,
     read_tabular,
     release_filename_reservation,
     safe_stem,
     sanitize_for_csv_export,
 )
-from utils.privacy import detect_sensitive_text
 from utils.theme import metric_card, page_header, sanitize_error_message, section_card_header
 
 logger = get_logger("Upload")

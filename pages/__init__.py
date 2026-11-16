@@ -1,1 +1,1 @@
-"""Streamlit pages for CloudInsight AI."""
+"""Streamlit pages for TabuLens."""
