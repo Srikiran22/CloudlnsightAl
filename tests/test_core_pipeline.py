@@ -407,7 +407,7 @@ class SecretLifecycleTests(unittest.TestCase):
             session_state={"gemini_secret": "previous-value"},
             text_input=lambda *args, **kwargs: "",
         )
-        with patch("Utils.secrets.st", fake_streamlit):
+        with patch("utils.secrets.st", fake_streamlit):
             self.assertEqual(ask("gemini", "Google Gemini API Key:"), "")
             self.assertEqual(value_of("gemini"), "")
 
@@ -573,7 +573,7 @@ class AIConvertSafetyTests(unittest.TestCase):
         self.assertGreaterEqual(len(df), 6)
 
     def _convert_with_mock_response(self, response_text):
-        with patch("Utils.AIConvert._generate_content", return_value=response_text):
+        with patch("utils.AIConvert._generate_content", return_value=response_text):
             return convert_to_dataframe(
                 api_key="fake-key",
                 raw_text="name: alice; score: 9\nname: bob; score: 7",
@@ -591,7 +591,7 @@ class AIConvertSafetyTests(unittest.TestCase):
 
     def test_convert_to_dataframe_propagates_gemini_errors(self):
         with patch(
-            "Utils.AIConvert._generate_content",
+            "utils.AIConvert._generate_content",
             side_effect=GeminiError("Check your Google Gemini API key.", "auth"),
         ), self.assertRaisesRegex(GeminiError, "API key"):
             convert_to_dataframe(api_key="bad", raw_text="content", filename="f.txt")
@@ -603,7 +603,7 @@ class AIConvertSafetyTests(unittest.TestCase):
             return "ok"
         df = pd.DataFrame({"value": [1]})
         messages = [{"role": "user", "content": "x" * (MAX_MESSAGE_CHARS * 3)}]
-        with patch("Utils.Gemini._generate_content", side_effect=fake_generate):
+        with patch("utils.Gemini._generate_content", side_effect=fake_generate):
             chat_with_gemini_dataset("key", df, "demo.csv", messages)
         self.assertIn("...", captured["prompt"])
         self.assertLess(len(captured["prompt"]), len("x" * MAX_MESSAGE_CHARS) + 3000)
@@ -652,7 +652,7 @@ class GeminiErrorClassificationTests(unittest.TestCase):
         def leaky(api_key, model_name, prompt):
             raise LeakySDKError(f"request failed for {fake_key}: {leak_marker}")
 
-        with patch("Utils.Gemini._generate_once", side_effect=leaky):
+        with patch("utils.Gemini._generate_once", side_effect=leaky):
             with self.assertLogs("cloudinsight.Gemini", level="WARNING") as captured:
                 with self.assertRaises(GeminiError) as raised:
                     from utils.gemini import _generate_content
@@ -730,7 +730,7 @@ class GeminiTimeoutWiringTests(unittest.TestCase):
                 raise requests.exceptions.ReadTimeout("read timed out")
             return types.SimpleNamespace(text="recovered")
 
-        with patch("Utils.Gemini._generate_once", side_effect=flaky):
+        with patch("utils.Gemini._generate_once", side_effect=flaky):
             out = _generate_content("k", "m", "p")
         self.assertEqual(out, "recovered")
         self.assertEqual(attempts["n"], 2)
@@ -749,7 +749,7 @@ class GeminiTimeoutWiringTests(unittest.TestCase):
             attempts["n"] += 1
             raise Unauthenticated("API key not valid.")
 
-        with patch("Utils.Gemini._generate_once", side_effect=always_auth):
+        with patch("utils.Gemini._generate_once", side_effect=always_auth):
             with self.assertRaises(GeminiError) as raised:
                 _generate_content("k", "m", "p")
         self.assertFalse(raised.exception.retryable)
@@ -779,7 +779,7 @@ class GeminiTimeoutWiringTests(unittest.TestCase):
                 )
             def close(self):
                 closed.append(True)
-        with patch("Utils.Gemini._new_sdk_client", return_value=MockClient()):
+        with patch("utils.Gemini._new_sdk_client", return_value=MockClient()):
             res = _generate_once("key", "gemini-3.8-flash", "prompt")
         self.assertEqual(res.text, "res")
         self.assertEqual(len(closed), 1)
@@ -1036,9 +1036,9 @@ class PDFEdgeCaseTests(unittest.TestCase):
         self.assertTrue(pdf_bytes.startswith(b"%PDF"))
 
     def test_chart_failure_does_not_destroy_the_report(self):
-        with patch("Utils.PDF._render_histograms", side_effect=RuntimeError("boom")), \
-             patch("Utils.PDF._render_boxplots", side_effect=RuntimeError("boom")), \
-             patch("Utils.PDF._render_correlation_heatmap", side_effect=RuntimeError("boom")):
+        with patch("utils.pdf._render_histograms", side_effect=RuntimeError("boom")), \
+             patch("utils.pdf._render_boxplots", side_effect=RuntimeError("boom")), \
+             patch("utils.pdf._render_correlation_heatmap", side_effect=RuntimeError("boom")):
             pdf_bytes = generate_pdf_report(
                 pd.DataFrame({"value": [1, 2, 3, 4]}), "chartfail.csv", include_charts=True
             )
@@ -1053,7 +1053,7 @@ class PDFEdgeCaseTests(unittest.TestCase):
 class SessionStateContractTests(unittest.TestCase):
     def test_init_session_state_provides_safe_defaults(self):
         fake_st = SimpleNamespace(session_state={})
-        with patch("Utils.dataset_ui.st", fake_st):
+        with patch("utils.dataset_ui.st", fake_st):
             from utils.dataset_ui import init_session_state, set_active_dataset
             init_session_state()
             self.assertIsNone(fake_st.session_state["current_df"])
@@ -1187,14 +1187,14 @@ class PrivacyFailClosedTests(unittest.TestCase):
 class SecretCleanupTests(unittest.TestCase):
     def test_temporary_secret_cleans_up_on_success(self):
         fake_state = {"my_key_secret": "secret123", "my_key_keep": False}
-        with patch("Utils.secrets.st", SimpleNamespace(session_state=fake_state)):
+        with patch("utils.secrets.st", SimpleNamespace(session_state=fake_state)):
             with temporary_secret("my_key", keep_key="my_key_keep"):
                 self.assertEqual(fake_state["my_key_secret"], "secret123")
             self.assertNotIn("my_key_secret", fake_state)
 
     def test_temporary_secret_cleans_up_on_exception(self):
         fake_state = {"api_token_secret": "tokenABC", "api_token_keep": False}
-        with patch("Utils.secrets.st", SimpleNamespace(session_state=fake_state)):
+        with patch("utils.secrets.st", SimpleNamespace(session_state=fake_state)):
             try:
                 with temporary_secret("api_token", keep_key="api_token_keep"):
                     raise RuntimeError("simulated API explosion")
@@ -1204,7 +1204,7 @@ class SecretCleanupTests(unittest.TestCase):
 
     def test_temporary_secret_preserves_when_keep_flag_set(self):
         fake_state = {"api_token_secret": "tokenABC", "api_token_keep": True}
-        with patch("Utils.secrets.st", SimpleNamespace(session_state=fake_state)):
+        with patch("utils.secrets.st", SimpleNamespace(session_state=fake_state)):
             with temporary_secret("api_token", keep_key="api_token_keep"):
                 pass
             self.assertEqual(fake_state.get("api_token_secret"), "tokenABC")
@@ -1345,9 +1345,9 @@ class PreserveUnsavedWorkingDataTests(unittest.TestCase):
             stop=lambda: None,
         )
 
-        with patch("Utils.dataset_ui.st", fake_st), \
-             patch("Utils.dataset_ui.list_dataset_files", return_value=["stored.csv"]), \
-             patch("Utils.dataset_ui.load_dataset_cached", return_value=stored_df):
+        with patch("utils.dataset_ui.st", fake_st), \
+             patch("utils.dataset_ui.list_dataset_files", return_value=["stored.csv"]), \
+             patch("utils.dataset_ui.load_dataset_cached", return_value=stored_df):
             loaded_df, chosen_name = select_working_dataset("Choose:")
 
             # The page receives the stored dataset to view
@@ -1368,7 +1368,7 @@ class BoundedBatchReportTests(unittest.TestCase):
             lines = ["id,val\n"] + [f"{i},{i*2}\n" for i in range(500)]
             csv_path.write_text("".join(lines), encoding="utf-8")
 
-            with patch("Utils.paths.DATASETS_DIR", tmp_path):
+            with patch("utils.paths.DATASETS_DIR", tmp_path):
                 total_rows = get_dataset_row_count("large.csv")
                 self.assertEqual(total_rows, 500)
 
@@ -1417,7 +1417,7 @@ class RowCountEdgeCaseTests(unittest.TestCase):
             tmp_path = Path(tmp)
             csv_path = tmp_path / "single_row.csv"
             csv_path.write_text("col_a,col_b\nval1,val2", encoding="utf-8")
-            with patch("Utils.paths.DATASETS_DIR", tmp_path):
+            with patch("utils.paths.DATASETS_DIR", tmp_path):
                 self.assertEqual(get_dataset_row_count("single_row.csv"), 1)
 
     def test_csv_header_only_without_newline_returns_zero(self):
@@ -1425,7 +1425,7 @@ class RowCountEdgeCaseTests(unittest.TestCase):
             tmp_path = Path(tmp)
             csv_path = tmp_path / "header_only.csv"
             csv_path.write_text("col_a,col_b", encoding="utf-8")
-            with patch("Utils.paths.DATASETS_DIR", tmp_path):
+            with patch("utils.paths.DATASETS_DIR", tmp_path):
                 self.assertEqual(get_dataset_row_count("header_only.csv"), 0)
 
     def test_csv_with_multiline_quoted_fields_counts_logical_records(self):
@@ -1434,7 +1434,7 @@ class RowCountEdgeCaseTests(unittest.TestCase):
             csv_path = tmp_path / "multiline.csv"
             content = 'id,comment\n1,"first line\nsecond line\nthird line"\n2,"single line"'
             csv_path.write_text(content, encoding="utf-8")
-            with patch("Utils.paths.DATASETS_DIR", tmp_path):
+            with patch("utils.paths.DATASETS_DIR", tmp_path):
                 self.assertEqual(get_dataset_row_count("multiline.csv"), 2)
 
     def test_jsonl_without_trailing_newline_returns_correct_count(self):
@@ -1443,7 +1443,7 @@ class RowCountEdgeCaseTests(unittest.TestCase):
             jsonl_path = tmp_path / "data.jsonl"
             content = '{"id": 1, "name": "a"}\n{"id": 2, "name": "b"}'
             jsonl_path.write_text(content, encoding="utf-8")
-            with patch("Utils.paths.DATASETS_DIR", tmp_path):
+            with patch("utils.paths.DATASETS_DIR", tmp_path):
                 self.assertEqual(get_dataset_row_count("data.jsonl"), 2)
 
 
@@ -1455,7 +1455,7 @@ class FingerprintCacheRealLookupTests(unittest.TestCase):
             fpath = tmp_path / "probe.csv"
             fpath.write_text("a,b\n1,2", encoding="utf-8")
 
-            with patch("Utils.paths.DATASETS_DIR", tmp_path):
+            with patch("utils.paths.DATASETS_DIR", tmp_path):
                 invalidate_dataset_cache("probe.csv")
                 fp1 = dataset_fingerprint("probe.csv")
 
@@ -1473,7 +1473,7 @@ class FingerprintCacheRealLookupTests(unittest.TestCase):
             fpath = tmp_path / "probe_mod.csv"
             fpath.write_text("a,b\n1,2", encoding="utf-8")
 
-            with patch("Utils.paths.DATASETS_DIR", tmp_path):
+            with patch("utils.paths.DATASETS_DIR", tmp_path):
                 invalidate_dataset_cache("probe_mod.csv")
                 fp1 = dataset_fingerprint("probe_mod.csv")
 
@@ -1489,7 +1489,7 @@ class FingerprintCacheRealLookupTests(unittest.TestCase):
             fpath.write_text("a,b\n1,2", encoding="utf-8")
             orig_stat = fpath.stat()
 
-            with patch("Utils.paths.DATASETS_DIR", tmp_path):
+            with patch("utils.paths.DATASETS_DIR", tmp_path):
                 invalidate_dataset_cache("probe_same.csv")
                 fp1 = dataset_fingerprint("probe_same.csv")
                 self.assertEqual(len(fp1), 64)
@@ -1524,7 +1524,7 @@ class CleaningUploadDiskCollisionTests(unittest.TestCase):
 
             uploaded_df = pd.DataFrame({"a": [99, 100], "b": [200, 300]})
 
-            with patch("Utils.paths.DATASETS_DIR", tmp_path):
+            with patch("utils.paths.DATASETS_DIR", tmp_path):
                 disk_fp = dataset_fingerprint("data.csv")
                 upload_fp = dataframe_fingerprint(uploaded_df)
                 self.assertNotEqual(disk_fp, upload_fp)
@@ -1557,7 +1557,7 @@ class GeminiClientLifecycleTests(unittest.TestCase):
             def close(self):
                 closed.append(True)
 
-        with patch("Utils.Gemini._new_sdk_client", return_value=MockClient()):
+        with patch("utils.Gemini._new_sdk_client", return_value=MockClient()):
             res = _generate_once("fake_key", "gemini-3.8-flash", "test prompt")
             self.assertEqual(res, "response")
             self.assertEqual(len(closed), 1)
@@ -1573,7 +1573,7 @@ class GeminiClientLifecycleTests(unittest.TestCase):
             def close(self):
                 closed.append(True)
 
-        with patch("Utils.Gemini._new_sdk_client", return_value=MockClient()):
+        with patch("utils.Gemini._new_sdk_client", return_value=MockClient()):
             with self.assertRaises(RuntimeError):
                 _generate_once("fake_key", "gemini-3.8-flash", "test prompt")
             self.assertEqual(len(closed), 1)

@@ -72,7 +72,7 @@ class PathsHardeningTests(unittest.TestCase):
     def test_max_ingestion_rows_enforced_in_read_tabular(self):
         """read_tabular must reject datasets exceeding MAX_INGESTION_ROWS."""
         # Mock underlying parser returning MAX_INGESTION_ROWS + 1
-        with patch("Utils.paths._read_csv_from_buffer") as mock_csv:
+        with patch("utils.paths._read_csv_from_buffer") as mock_csv:
             mock_csv.return_value = pd.DataFrame({"a": range(MAX_INGESTION_ROWS + 1)})
             with self.assertRaises(ValueError) as ctx:
                 read_tabular(b"a\n1", filename="oversized.csv")
@@ -647,7 +647,7 @@ class AnalyticalAndVisualizationHardeningTests(unittest.TestCase):
 class SecretStateResetTests(unittest.TestCase):
     def test_release_rotates_widget_version(self):
         state = {"gemini_secret": "my-secret-key", "gemini_ver": 0, "gemini_keep": False}
-        with patch("Utils.secrets.st", SimpleNamespace(session_state=state)):
+        with patch("utils.secrets.st", SimpleNamespace(session_state=state)):
             cleared = release("gemini")
             self.assertIn("gemini", cleared)
             self.assertNotIn("gemini_secret", state)
@@ -656,7 +656,7 @@ class SecretStateResetTests(unittest.TestCase):
 
     def test_drop_rotates_widget_version(self):
         state = {"gemini_secret": "my-secret-key", "gemini_ver": 2}
-        with patch("Utils.secrets.st", SimpleNamespace(session_state=state)):
+        with patch("utils.secrets.st", SimpleNamespace(session_state=state)):
             drop("gemini")
             self.assertNotIn("gemini_secret", state)
             self.assertEqual(state.get("gemini_ver"), 3)
@@ -1074,7 +1074,7 @@ class QuickPasteStreamingBoundaryTests(unittest.TestCase):
         self.assertEqual(df_io.shape, (2, 2))
 
     def test_quick_paste_streaming_row_limit_enforced(self):
-        with patch("Utils.parsing.pd.read_csv") as mock_read:
+        with patch("utils.parsing.pd.read_csv") as mock_read:
             mock_chunk = pd.DataFrame({"a": range(1_000_001)})
             mock_read.return_value = [mock_chunk]
             with self.assertRaises(ValueError) as ctx:
@@ -1091,14 +1091,14 @@ class QuickPasteStreamingBoundaryTests(unittest.TestCase):
 
     def test_quick_paste_cell_limit_enforced(self):
         buf = io.BytesIO(b"a|b|c\n1|2|3\n")
-        with patch("Utils.limits.MAX_INGESTION_CELLS", 2):
+        with patch("utils.limits.MAX_INGESTION_CELLS", 2):
             with self.assertRaises(ValueError) as ctx:
                 read_tabular(buf, filename="pasted.csv", sep="|")
             self.assertIn("exceeds the maximum supported limit", str(ctx.exception).lower())
 
     def test_quick_paste_memory_ceiling_enforced(self):
         buf = io.BytesIO(b"a,b\n1,2\n")
-        with patch("Utils.limits.ResourcePolicy.MAX_DATAFRAME_MEMORY_BYTES", 10):
+        with patch("utils.limits.ResourcePolicy.MAX_DATAFRAME_MEMORY_BYTES", 10):
             with self.assertRaises(ValueError) as ctx:
                 read_tabular(buf, filename="pasted.csv", sep=",")
             self.assertIn("exceeds the maximum allowed memory budget", str(ctx.exception).lower())

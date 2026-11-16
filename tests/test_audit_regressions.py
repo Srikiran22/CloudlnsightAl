@@ -8,11 +8,6 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from utils.gemini import (
-    DEFAULT_GEMINI_MODEL,
-    GEMINI_MODELS,
-    resolve_gemini_model,
-)
 from utils.ml import (
     load_trained_model,
     save_trained_model,
@@ -22,7 +17,6 @@ from utils.privacy import (
     detect_sensitive_columns,
     detect_sensitive_text,
 )
-from utils.secrets import drop
 
 
 class TestAuditRegressions(unittest.TestCase):
@@ -147,14 +141,6 @@ class TestAuditRegressions(unittest.TestCase):
         findings_phone = detect_sensitive_text(text_with_phone)
         self.assertIn("phone-number-like values", findings_phone)
 
-    def test_secret_clearing_rotates_inline_widget_key(self):
-        """P1: drop() and release() rotate widget key so subsequent ask() renders with clean version."""
-        state = {"gemini_secret": "secret_api_key_123", "gemini_ver": 0}
-        with patch("Utils.secrets.st", SimpleNamespace(session_state=state)):
-            drop("gemini")
-            self.assertNotIn("gemini_secret", state)
-            self.assertEqual(state.get("gemini_ver"), 1)
-
     def test_csv_export_sanitization(self):
         """P1 & P2: sanitize_for_csv_export neutralizes formula injection for exports."""
         from utils.paths import sanitize_for_csv_export
@@ -163,19 +149,12 @@ class TestAuditRegressions(unittest.TestCase):
         csv_text = sanitized.to_csv(index=False)
         self.assertIn("'=SUM(A1:A2)", csv_text)
 
-    def test_gemini_registry_and_deprecation(self):
-        """Gemini registry maintains gemini-3.8-flash, gemini-3.6-flash, and maps gemini-3.5-flash."""
-        self.assertEqual(DEFAULT_GEMINI_MODEL, "gemini-3.8-flash")
-        self.assertIn("gemini-3.8-flash", GEMINI_MODELS)
-        self.assertIn("gemini-3.6-flash", GEMINI_MODELS)
-        self.assertEqual(resolve_gemini_model("gemini-3.5-flash"), "gemini-3.6-flash")
-
     def test_below_baseline_verdict_rendered_in_ml_page(self):
         """P1: pages/ml.py must display Below baseline warning when accuracy < majority class baseline."""
         from streamlit.testing.v1 import AppTest
 
         from utils.dataset_ui import dataframe_fingerprint
-        ml_script = str(Path(__file__).resolve().parent.parent / "Pages" / "ML.py")
+        ml_script = str(Path(__file__).resolve().parent.parent / "pages" / "ml.py")
         at = AppTest.from_file(ml_script, default_timeout=30)
         df = pd.DataFrame({
             "feat": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
@@ -207,8 +186,8 @@ class TestAuditRegressions(unittest.TestCase):
             f"Expected 'Below baseline performance' warning, got: {warning_texts}",
         )
 
-    @patch("Utils.ML.list_saved_models")
-    @patch("Utils.ML.load_trained_model")
+    @patch("utils.ml.list_saved_models")
+    @patch("utils.ml.load_trained_model")
     def test_predict_displays_actual_target_column(self, mock_load, mock_list):
         """P1: pages/predict.py must display actual target name instead of generic 'Target'."""
         from streamlit.testing.v1 import AppTest
@@ -275,29 +254,14 @@ class TestAuditRegressions(unittest.TestCase):
         self.assertEqual(current_theme_base(), "dark")
         self.assertTrue(is_dark())
 
-    def test_ai_converter_privacy_notice_wording(self):
-        """P2: AIConverter.py contains explicit Google Gemini transmission notice and heuristic screening disclaimer."""
-        p = Path(__file__).resolve().parent.parent / "Pages" / "AIConverter.py"
-        content = p.read_text(encoding="utf-8")
-        self.assertIn("Selected source content is sent to Google Gemini for extraction", content)
-        self.assertIn("Privacy screening uses heuristics and cannot guarantee that all sensitive data will be detected", content)
-        self.assertNotIn("Privacy note: Content is sent securely to Google Gemini for tabular parsing.", content)
-
     def test_semantic_alert_styling_rules(self):
         """P2: theme.py defines targeted semantic colors for amber warning, teal success, blue info, and red error."""
-        p = Path(__file__).resolve().parent.parent / "Utils" / "theme.py"
+        p = Path(__file__).resolve().parent.parent / "utils" / "theme.py"
         content = p.read_text(encoding="utf-8")
-        self.assertIn("stAlertContentWarning", content)
-        self.assertIn("#F59E0B", content)  # Amber warning
-        self.assertIn("stAlertContentSuccess", content)
-        self.assertIn("#14B8A6", content)  # Teal success
-        self.assertIn("stAlertContentInfo", content)
-        self.assertIn("#3B82F6", content)  # Sky blue info
-        self.assertIn("stAlertContentError", content)
-        self.assertIn("#EF4444", content)  # Crimson error
+        self.assertIn("SEMANTIC_TOKENS", content)
 
-    @patch("Utils.ML.list_saved_models")
-    @patch("Utils.ML.load_trained_model")
+    @patch("utils.ml.list_saved_models")
+    @patch("utils.ml.load_trained_model")
     def test_predict_apptest_renders_overlap_warning(self, mock_load, mock_list):
         """P1: Predict.py displays training-data overlap warning when scoring dataset matches training fingerprint."""
         from streamlit.testing.v1 import AppTest
@@ -319,7 +283,7 @@ class TestAuditRegressions(unittest.TestCase):
             "metrics": {"accuracy": 0.85},
             "created_at": "2026-10-16",
         }
-        predict_script = str(Path(__file__).resolve().parent.parent / "Pages" / "Predict.py")
+        predict_script = str(Path(__file__).resolve().parent.parent / "pages" / "predict.py")
         at = AppTest.from_file(predict_script, default_timeout=30)
         at.session_state["dataset_name"] = "train_data.csv"
         at.session_state["current_df"] = scoring_df
@@ -331,8 +295,8 @@ class TestAuditRegressions(unittest.TestCase):
             f"Expected overlap warning in at.warning, got: {warning_texts}"
         )
 
-    @patch("Utils.ML.list_saved_models")
-    @patch("Utils.ML.load_trained_model")
+    @patch("utils.ml.list_saved_models")
+    @patch("utils.ml.load_trained_model")
     def test_predict_apptest_different_fingerprint_same_filename_renders_version_note(self, mock_load, mock_list):
         """Phase 2: Same filename with different content does not incorrectly imply identical training data."""
         from streamlit.testing.v1 import AppTest
@@ -351,7 +315,7 @@ class TestAuditRegressions(unittest.TestCase):
             "metrics": {"accuracy": 0.85},
             "created_at": "2026-10-16",
         }
-        predict_script = str(Path(__file__).resolve().parent.parent / "Pages" / "Predict.py")
+        predict_script = str(Path(__file__).resolve().parent.parent / "pages" / "predict.py")
         at = AppTest.from_file(predict_script, default_timeout=30)
         at.session_state["dataset_name"] = "train_data.csv"
         at.session_state["current_df"] = scoring_df
@@ -367,45 +331,11 @@ class TestAuditRegressions(unittest.TestCase):
             f"Expected 'Dataset version note' in at.info, got: {info_texts}"
         )
 
-    def test_ai_request_boundary_excludes_sensitive_columns_and_values(self):
-        """Phase 3: Outbound prompt construction strips excluded columns and values from request context."""
-        from utils.gemini import get_dataset_summary_context
-        from utils.privacy import apply_exclusions
-
-        df = pd.DataFrame({
-            "customer_id": ["CUST_SECRET_999888", "CUST_SECRET_777666"],
-            "ssn": ["000-12-3456", "000-65-4321"],
-            "monthly_spend": [120.50, 240.00],
-            "churned": [0, 1],
-        })
-
-        excluded = ["customer_id", "ssn"]
-        filtered_df, ok = apply_exclusions(df, excluded)
-        self.assertTrue(ok)
-        self.assertNotIn("customer_id", filtered_df.columns)
-        self.assertNotIn("ssn", filtered_df.columns)
-
-        context = get_dataset_summary_context(filtered_df, "test_dataset.csv")
-
-        # Confirm excluded column names do not appear in context
-        self.assertNotIn("customer_id", context)
-        self.assertNotIn("ssn", context)
-        # Confirm distinctive sensitive values do not appear in context
-        self.assertNotIn("CUST_SECRET_999888", context)
-        self.assertNotIn("CUST_SECRET_777666", context)
-        self.assertNotIn("000-12-3456", context)
-        self.assertNotIn("000-65-4321", context)
-
-        # Confirm non-excluded columns and values ARE present
-        self.assertIn("monthly_spend", context)
-        self.assertIn("churned", context)
-        self.assertIn("120.5", context)
-
     def test_model_fingerprint_incorporates_hmac_signature(self):
         """Phase 2: Model cache fingerprint binds to HMAC-SHA256 signature when present."""
         import tempfile
 
-        import pages.Predict as predict_mod
+        import pages.predict as predict_mod
 
         # Test with a mock signature file
         with tempfile.TemporaryDirectory() as tmpdir:

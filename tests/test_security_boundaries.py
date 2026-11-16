@@ -316,7 +316,7 @@ class SecurityBoundaryPipelineTests(unittest.TestCase):
         """read_tabular rejects files exceeding MAX_INGESTION_CELLS."""
         # 1 row × 3 columns = 3 cells > 2 cells
         buf = io.BytesIO(b"a,b,c\n1,2,3\n")
-        with patch("Utils.limits.MAX_INGESTION_CELLS", 2):
+        with patch("utils.limits.MAX_INGESTION_CELLS", 2):
             with self.assertRaises(ValueError) as ctx:
                 read_tabular(buf, filename="test.csv")
             self.assertIn("exceeds the maximum supported limit", str(ctx.exception).lower())
@@ -354,7 +354,7 @@ class SecurityBoundaryPipelineTests(unittest.TestCase):
     # -------------------------------------------------------------------------
     def test_get_dataset_row_count_cheap(self):
         """get_dataset_row_count returns cheap line count for CSV, None if not cheap."""
-        with patch("Utils.paths.DATASETS_DIR", self.test_path):
+        with patch("utils.paths.DATASETS_DIR", self.test_path):
             csv_path = self.test_path / "test.csv"
             csv_path.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
             self.assertEqual(get_dataset_row_count("test.csv"), 2)
@@ -370,7 +370,7 @@ class SecurityBoundaryPipelineTests(unittest.TestCase):
         (datasets_dir / "document.pdf").write_bytes(b"%PDF-1.4")
         (datasets_dir / "notes.txt").write_text("notes", encoding="utf-8")
 
-        with patch("Utils.paths.DATASETS_DIR", datasets_dir):
+        with patch("utils.paths.DATASETS_DIR", datasets_dir):
             ready = list_ready_datasets()
             sources = list_source_documents()
             tabular_files = list_dataset_files(tabular_only=True)
@@ -550,7 +550,7 @@ class SecurityBoundaryPipelineTests(unittest.TestCase):
             "formula_col": ["=cmd|' /C calc'!A0", "@SUM(A1:B2)", "-calc()", "+999", "safe_val"],
             "numeric_col": [-42.5, 100, 0, -1, 5],
         })
-        with patch("Utils.dataset_ui.DATASETS_DIR", self.test_path):
+        with patch("utils.dataset_ui.DATASETS_DIR", self.test_path):
             saved_path = save_and_activate_dataset(df_raw, "test_sanitize.csv", sanitize=True)
             self.assertTrue(saved_path.is_file())
 
@@ -573,7 +573,7 @@ class SecurityBoundaryPipelineTests(unittest.TestCase):
     def test_save_and_activate_dataset_windows_reserved_name(self):
         """save_and_activate_dataset normalizes Windows reserved filenames (e.g., CON.csv -> CON_safe.csv)."""
         df = pd.DataFrame({"a": [1, 2, 3]})
-        with patch("Utils.dataset_ui.DATASETS_DIR", self.test_path):
+        with patch("utils.dataset_ui.DATASETS_DIR", self.test_path):
             saved_path = save_and_activate_dataset(df, "CON.csv")
             self.assertIn("CON_safe", saved_path.name)
             self.assertTrue(saved_path.is_file())
@@ -609,7 +609,7 @@ class SecurityBoundaryPipelineTests(unittest.TestCase):
         self.assertFalse(is_small_sampled)
         self.assertEqual(len(small_sampled), 100)
 
-    @patch("Utils.Gemini._generate_content")
+    @patch("utils.Gemini._generate_content")
     def test_prompt_professionalism(self, mock_gen):
         """AI prompt generation excludes persona fluff and follows evidence-based structure."""
         df = pd.DataFrame({"metric": [1, 2, 3], "target": [10, 20, 30]})
@@ -731,7 +731,7 @@ class SecurityBoundaryPipelineTests(unittest.TestCase):
     # Finding 3.11: Centralized semantic design tokens
     # -------------------------------------------------------------------------
     def test_semantic_design_tokens(self):
-        """Utils.theme exposes structured semantic color tokens and chart palettes."""
+        """utils.theme exposes structured semantic color tokens and chart palettes."""
         tokens_light = get_semantic_tokens(dark=False)
         tokens_dark = get_semantic_tokens(dark=True)
         self.assertIn("accent", tokens_light)
@@ -1088,7 +1088,7 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
             tmp_p = Path(tmp)
             f = tmp_p / "swap.csv"
             f.write_text("A" * 500, encoding="utf-8")
-            with patch("Utils.paths.DATASETS_DIR", tmp_p):
+            with patch("utils.paths.DATASETS_DIR", tmp_p):
                 invalidate_dataset_cache("swap.csv")
                 fp1 = dataset_fingerprint("swap.csv")
                 st1 = f.stat()
@@ -1335,7 +1335,7 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
         # 60,000 rows across 3 chunks
         lines = ["c1,c2\n"] + ["1,2\n"] * 60000
         buf = io.BytesIO("".join(lines).encode("utf-8"))
-        with patch("Utils.limits.MAX_INGESTION_ROWS", 50000):
+        with patch("utils.limits.MAX_INGESTION_ROWS", 50000):
             with self.assertRaises(ValueError) as ctx:
                 _read_chunked_delimited_buffer(buf)
             self.assertIn("exceeds the maximum supported limit of 50,000 rows", str(ctx.exception))

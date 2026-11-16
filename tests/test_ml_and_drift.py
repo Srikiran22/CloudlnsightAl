@@ -327,7 +327,7 @@ class GeminiHardeningTests(unittest.TestCase):
     def test_chat_prompt_includes_context_honesty_constraints(self):
         df = pd.DataFrame({"x": [1, 2], "y": ["a", "b"]})
         messages = [{"role": "user", "content": "How many total rows?"}]
-        with patch("Utils.Gemini._generate_content") as mock_gen:
+        with patch("utils.Gemini._generate_content") as mock_gen:
             mock_gen.return_value = "response"
             chat_with_gemini_dataset("fake_key", df, "data.csv", messages)
             call_args = mock_gen.call_args[0]
@@ -388,7 +388,7 @@ class MLPipelineHardeningTests(unittest.TestCase):
             "target": [0, 1] * (n_rows // 2),
             "high_card": [f"cat_{i}" for i in range(n_rows)],
         })
-        with patch("Utils.ML.ML_MAX_TRAIN_CELLS", 10_000):
+        with patch("utils.ml.ML_MAX_TRAIN_CELLS", 10_000):
             with self.assertRaises(ValueError) as ctx:
                 train_and_evaluate_model(
                     df, "target", ["high_card"], "Logistic Regression", "Classification"
@@ -918,7 +918,7 @@ class TestCredentialSessionStateSecurity(unittest.TestCase):
 
         from utils.secrets import release
         state = {"gemini_secret": "secret_abc", "gemini_ver": 0}
-        with patch("Utils.secrets.st", SimpleNamespace(session_state=state)):
+        with patch("utils.secrets.st", SimpleNamespace(session_state=state)):
             cleared = release("gemini")
             self.assertEqual(cleared, ["gemini"])
             self.assertNotIn("gemini_secret", state)

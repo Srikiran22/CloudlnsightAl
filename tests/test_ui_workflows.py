@@ -47,7 +47,7 @@ class UIRemediationRegressionTests(unittest.TestCase):
             else:
                 return "```csv\nname,score\nrow_3,6\nrow_4,8\n```"
 
-        with patch("Utils.AIConvert._generate_content", side_effect=fake_generate):
+        with patch("utils.AIConvert._generate_content", side_effect=fake_generate):
             df = convert_to_dataframe("fake-key", raw_text, "long_notes.txt")
         self.assertGreater(call_count, 1)
         self.assertEqual(len(df), 4)
@@ -269,7 +269,7 @@ class StreamlitUploadWorkflowTests(unittest.TestCase):
 
     def test_upload_aggregate_byte_limit(self):
         """H-5: Exceeding MAX_AGGREGATE_UPLOAD_BYTES triggers error."""
-        with patch("Utils.paths.MAX_AGGREGATE_UPLOAD_BYTES", 5):
+        with patch("utils.paths.MAX_AGGREGATE_UPLOAD_BYTES", 5):
             upload_script = str(Path(__file__).resolve().parent.parent / "Pages" / "Upload.py")
             at = AppTest.from_file(upload_script, default_timeout=15)
             at.run()

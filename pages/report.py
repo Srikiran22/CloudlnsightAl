@@ -102,19 +102,14 @@ with col_right, st.container(border=True):
 
 with col_left, st.container(border=True):
     section_card_header("Report Configuration", f"Metadata and analytical sections for {selected_file}")
-    default_title = str((applied_template or {}).get("title") or "CloudInsight Data Science Audit Report")
-    default_author = str((applied_template or {}).get("author") or "CloudInsight Data Science Studio")
+    default_title = str((applied_template or {}).get("title") or "TabuLens Data Science Audit Report")
+    default_author = str((applied_template or {}).get("author") or "TabuLens Studio")
     default_charts = _parse_bool((applied_template or {}).get("include_charts"), default=True)
 
     rep_title = st.text_input("Report title", value=default_title)
     author = st.text_input("Prepared by", value=default_author)
 
-    template_ai_pref = _parse_bool((applied_template or {}).get("include_ai"), default=True)
     include_ai = False
-    if ai_saved:
-        include_ai = st.checkbox("Include Gemini AI Executive Insights section in PDF", value=template_ai_pref)
-        if latest_ai and latest_ai.get("model_name"):
-            st.caption(f"AI insights model: `{latest_ai.get('model_name')}`")
 
     include_charts = st.checkbox(
         "Include charts: histograms, box plots & correlation heatmap (high-DPI embedded plots)",

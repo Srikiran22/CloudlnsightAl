@@ -6,7 +6,6 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from utils.ai_convert import convert_to_dataframe
 from utils.batch import merge_frames
 from utils.dataset_ui import (
     invalidate_dataset_cache,
@@ -15,7 +14,6 @@ from utils.dataset_ui import (
     save_and_activate_dataset,
     set_active_dataset,
 )
-from utils.gemini import DEFAULT_GEMINI_MODEL, GEMINI_MODELS, GeminiError
 from utils.logsys import get_logger
 from utils.paths import (
     DATASETS_DIR,
@@ -31,17 +29,14 @@ from utils.paths import (
     compute_upload_signature,
     delete_dataset,
     get_unique_filename,
-    get_valid_conversion,
     list_ready_datasets,
     read_dataset,
     read_tabular,
-    record_conversion,
     release_filename_reservation,
     safe_stem,
     sanitize_for_csv_export,
 )
 from utils.privacy import detect_sensitive_text
-from utils.secrets import ask, keep_box, release, value_of
 from utils.theme import metric_card, page_header, sanitize_error_message, section_card_header
 
 logger = get_logger("Upload")
@@ -131,17 +126,7 @@ with tab_files:
                             parsed_datasets.append((target_name, single_df))
                         except AIConversionRequired as needed:
                             needed.__traceback__ = None
-                            active_model = st.session_state.get("ai_convert_model")
-                            valid_conv = (
-                                get_valid_conversion(raw_name, needed.raw_text, model_name=active_model, extra_instructions="")
-                                if active_model
-                                else None
-                            )
-                            if valid_conv:
-                                st.info(f"Reusing verified conversion `{valid_conv}` for `{target_name}`.")
-                                parsed_datasets.append((valid_conv, read_dataset(valid_conv)))
-                            else:
-                                pending.append((target_name, needed))
+                            pending.append((target_name, needed))
                         except Exception as read_error:
                             logger.warning("ingest failed for %s: %s: %s", target_name, type(read_error).__name__, read_error)
                             failures.append((target_name, sanitize_error_message(read_error)))
@@ -204,83 +189,14 @@ with tab_files:
 
     if pending:
         names_list = ", ".join(f"`{n}`" for n, _ in pending)
-        st.info(
-            f"{len(pending)} file(s) lack native tabular structure: {names_list}. "
-            "Extract structured tabular schema using Google Gemini multimodal parsing."
+        st.warning(
+            f"{len(pending)} file(s) lack structured tabular data: {names_list}. "
+            "Please upload valid tabular files (CSV, TSV, Parquet, Excel, SQLite, or JSON tables)."
         )
-        hints = st.text_input("Conversion hints (optional)", key="ai_conv_hints")
-        ask("gemini", "Google Gemini API Key:")
-        keep_box("gemini_keep")
-
-        chosen_model = st.selectbox(
-            "Gemini Model:",
-            GEMINI_MODELS,
-            index=GEMINI_MODELS.index(DEFAULT_GEMINI_MODEL),
-            key="ai_convert_model"
-        )
-
         for fname, needed in pending:
-            findings = detect_sensitive_text(needed.raw_text)
-            if findings:
-                st.warning(f"Possible sensitive content detected in `{fname}`: {', '.join(findings)}.")
-            with st.expander(f"Preview extracted content — {fname}"):
+            with st.expander(f"Preview extracted raw text — {fname}"):
                 preview_text = needed.raw_text[:1500]
                 st.text(preview_text + ("..." if len(needed.raw_text) > 1500 else ""))
-
-        if st.button("Convert with Gemini", type="primary"):
-            if not value_of("gemini"):
-                st.error("Please enter your Google Gemini API key first.")
-            else:
-                with st.spinner("Reconciling unstructured document text into tabular schema via Gemini API..."):
-                    still_pending = []
-                    newly_converted = []
-                    try:
-                        for fname, needed in pending:
-                            try:
-                                valid_conv = get_valid_conversion(
-                                    fname,
-                                    needed.raw_text,
-                                    model_name=chosen_model,
-                                    extra_instructions=(hints or "").strip() or None,
-                                )
-                                if valid_conv:
-                                    st.info(f"Reusing verified conversion `{valid_conv}` for `{fname}`.")
-                                    conv_df = read_dataset(valid_conv)
-                                    parsed_datasets.append((valid_conv, conv_df))
-                                    newly_converted.append((valid_conv, conv_df))
-                                    continue
-                                converted = convert_to_dataframe(
-                                    api_key=value_of("gemini"),
-                                    raw_text=needed.raw_text,
-                                    filename=fname,
-                                    model_name=chosen_model,
-                                    extra_instructions=(hints or "").strip() or None,
-                                )
-                                ext_tag = Path(fname).suffix.lstrip(".").lower() or "txt"
-                                target_stem = f"{Path(fname).stem}_{ext_tag}_converted.csv"
-                                saved_path = save_and_activate_dataset(converted, target_stem, sanitize=True)
-                                converted_name = saved_path.name
-                                record_conversion(
-                                    converted_name,
-                                    fname,
-                                    needed.raw_text,
-                                    model_name=chosen_model,
-                                    extra_instructions=(hints or "").strip() or None,
-                                )
-                                parsed_datasets.append((converted_name, converted))
-                                newly_converted.append((converted_name, converted))
-                                st.success(f"Converted `{fname}` to {converted.shape[0]:,} rows × {converted.shape[1]} cols, saved as `{converted_name}`.")
-                            except GeminiError as conv_error:
-                                still_pending.append((fname, needed))
-                                st.error(f"`{fname}` conversion failed — {conv_error}")
-                            except Exception as conv_error:
-                                still_pending.append((fname, needed))
-                                logger.warning("conversion failed for %s: %s: %s", fname, type(conv_error).__name__, conv_error)
-                                st.error(f"`{fname}` conversion failed: {conv_error}")
-                    finally:
-                        if release("gemini", keep_key="gemini_keep"):
-                            st.toast("Gemini key released from session state.")
-                    pending = still_pending
 
                     if newly_converted:
                         merge_error = None

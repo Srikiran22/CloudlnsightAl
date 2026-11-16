@@ -34,7 +34,7 @@ def _get_version() -> str:
 app_version = _get_version()
 
 st.set_page_config(
-    page_title="CloudInsight | Data Science Studio",
+    page_title="TabuLens | Tabular Data Studio",
     page_icon=":material/analytics:",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -129,14 +129,14 @@ def render_home() -> None:
             f"""
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
               <h1 style="margin: 0; font-size: 1.65rem; font-weight: 750; letter-spacing: -0.02em;">
-                CloudInsight <span style="color: var(--ci-accent);">Statistical & MLOps Studio</span>
+                TabuLens <span style="color: var(--ci-accent);">Tabular Data Studio</span>
               </h1>
               <span style="font-size: 0.78rem; font-weight: 650; padding: 4px 10px; border-radius: 999px; background: var(--ci-tint); border: 1px solid var(--ci-border); color: var(--ci-accent);">
-                v{app_version} Production
+                v{app_version}
               </span>
             </div>
             <p style="margin: 0.2rem 0 0 0; color: var(--ci-text-2); font-size: 0.95rem; line-height: 1.55;">
-              Local-first statistical telemetry and machine learning workbench: strictly encapsulated 5-fold cross-validation, continuous Kolmogorov-Smirnov drift detection, and cryptographic HMAC model signing.
+              Local-first tabular machine learning studio: leak-free scikit-learn cross-validation, Kolmogorov-Smirnov distribution drift detection, and decision threshold optimization.
             </p>
             """,
             unsafe_allow_html=True,
@@ -157,8 +157,8 @@ def render_home() -> None:
     with m3:
         with st.container(border=True):
             st.markdown('<div style="font-size:0.75rem; text-transform:uppercase; color:var(--ci-muted); font-weight:700;">Model Integrity</div>', unsafe_allow_html=True)
-            st.markdown('<div style="font-size:1.15rem; font-weight:700; color:var(--ci-text); font-family:monospace;">HMAC-SHA256</div>', unsafe_allow_html=True)
-            st.caption("Tamper-evident .joblib signing")
+            st.markdown('<div style="font-size:1.15rem; font-weight:700; color:var(--ci-text); font-family:monospace;">SHA-256 Digest</div>', unsafe_allow_html=True)
+            st.caption("Manifest checksum verification")
     with m4:
         with st.container(border=True):
             st.markdown('<div style="font-size:0.75rem; text-transform:uppercase; color:var(--ci-muted); font-weight:700;">Memory Budget</div>', unsafe_allow_html=True)
@@ -250,18 +250,13 @@ pg = st.navigation(
         "Exploratory Analysis": [
             st.Page("pages/eda.py", title="Statistical Diagnostics", icon=":material/analytics:"),
             st.Page("pages/visualization.py", title="Interactive Visual Analytics", icon=":material/bar_chart:"),
+            st.Page("pages/compare.py", title="Dataset Drift & Compare", icon=":material/compare_arrows:"),
         ],
         "Machine Learning": [
             st.Page("pages/ml.py", title="Model Studio & Training", icon=":material/precision_manufacturing:"),
             st.Page("pages/predict.py", title="Batch Scoring & Simulation", icon=":material/batch_prediction:"),
         ],
-        "Synthesis & Extraction": [
-            st.Page("pages/aiconverter.py", title="Unstructured Schema Ingest", icon=":material/data_object:"),
-            st.Page("pages/ai.py", title="Automated Narrative Telemetry", icon=":material/insights:"),
-            st.Page("pages/aichat.py", title="Natural Language Query Engine", icon=":material/terminal:"),
-        ],
         "Audit & Reports": [
-            st.Page("pages/compare.py", title="Dataset Drift & Compare", icon=":material/compare_arrows:"),
             st.Page("pages/report.py", title="Data Science Audit Report", icon=":material/description:"),
         ],
     },
