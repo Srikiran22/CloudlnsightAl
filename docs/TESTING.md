@@ -1,6 +1,6 @@
-# CloudInsight AI — Testing & Quality Assurance Strategy
+# TabuLens — Testing & Quality Assurance Strategy
 
-This document details the testing architecture, regression verification strategy, mock boundaries, and quality assurance gates implemented in CloudInsight AI.
+This document details the testing architecture, regression verification strategy, mock boundaries, and quality assurance gates implemented in TabuLens.
 
 ---
 
@@ -8,25 +8,29 @@ This document details the testing architecture, regression verification strategy
 
 1. **User-Visible Behavior Over Implementation Details:** Headless UI tests use Streamlit's official `AppTest` framework to simulate page lifecycles, clicks, selectbox mutations, and exception handling without running a physical browser.
 2. **Deterministic & Isolated:** Tests use `tempfile.TemporaryDirectory` and monkeypatched storage roots (`paths.DATASETS_DIR`, `paths.MODELS_DIR`) to prevent side effects on working user datasets.
-3. **No External Network Dependencies:** AI interactions (`google-genai`), cloud storage, and network requests are mocked using `unittest.mock`. Routine unit tests never touch third-party external services.
+3. **Zero External Network Dependencies:** All tests run completely offline with no network calls or remote third-party services.
 4. **Adversarial Security Verification:** Explicit test suites target path traversal, zip bombs, XML entity expansions (XXE), CSV formula injection, and unsigned model pickle deserialization.
 
 ---
 
 ## 2. Test Suite Organization
 
-The test suite is located in `tests/` and comprises 8 dedicated test modules:
+The test harness is located in `tests/` and comprises 12 dedicated test modules (384 passing tests):
 
 ```text
 tests/
-├── test_page_smoke.py           # Headless AppTest boot checks across all 13 pages
-├── test_security_boundaries.py  # XXE, DTD, zip bombs, formula injection, model signatures
-├── test_core_pipeline.py        # Cryptographic fingerprints, cache LRU, pipeline preprocessing
-├── test_ingestion_parsers.py    # CSV, TSV, JSON, JSONL, Parquet, XML streaming bounds
-├── test_ml_and_drift.py         # TimeSeriesSplit, 5-fold CV, KS test FDR, TVD drift
-├── test_ui_workflows.py         # File uploads, multi-file merging, PDF fonts, decimation
-├── test_audit_regressions.py    # Regression coverage for confirmed audit findings
-└── test_ai_conversion.py        # Chunked AI extraction, boundary reconciliation, schema alignment
+├── test_page_smoke.py                  # Headless AppTest boot checks across studio pages
+├── test_security_boundaries.py         # XXE, DTD, zip bombs, formula injection, model signatures
+├── test_core_pipeline.py               # Cryptographic fingerprints, cache LRU, pipeline preprocessing
+├── test_ingestion_parsers.py           # CSV, TSV, JSON, JSONL, Parquet, XML streaming bounds
+├── test_ml_and_drift.py                # TimeSeriesSplit, 5-fold CV, KS test FDR, TVD drift
+├── test_ui_workflows.py                # File uploads, multi-file merging, PDF fonts, decimation
+├── test_decision_threshold.py          # O(1) decision threshold metrics and MCC optimization
+├── test_outlier_diagnostics.py         # Tukey IQR fences, Z-scores, skewness & kurtosis
+├── test_inference_script_generation.py # Standalone Python inference script generation
+├── test_deployment_config.py           # Dockerfile 2-stage verification & GitHub Actions CI
+├── test_portfolio_documentation.py     # Methodology & architecture documentation checks
+└── test_verify_pipeline_cli.py         # Static verification runner and CLI exit code checks
 ```
 
 ---
@@ -35,21 +39,8 @@ tests/
 
 ### 3.1 `test_page_smoke.py` (Headless Boot Checks)
 - **Tooling:** `streamlit.testing.v1.AppTest`
-- **Scope:** Bootstraps each of the 13 application pages headless:
-  - `App.py`
-  - `Pages/Upload.py`
-  - `Pages/FeatureEngineering.py`
-  - `Pages/AIConverter.py`
-  - `Pages/Cleaning.py`
-  - `Pages/Compare.py`
-  - `Pages/EDA.py`
-  - `Pages/Visualization.py`
-  - `Pages/ML.py`
-  - `Pages/Predict.py`
-  - `Pages/AI.py`
-  - `Pages/AIChat.py`
-  - `Pages/Report.py`
-  - `Pages/Dashboard.py`
+- **Scope:** Bootstraps core studio workflows headless:
+  - `app.py`, `pages/upload.py`, `pages/eda.py`, `pages/compare.py`, `pages/ml.py`, `pages/predict.py`.
 - **Verification:** Asserts `len(at.exception) == 0` for all pages with both empty and populated session state contexts.
 
 ### 3.2 `test_security_boundaries.py` (Adversarial Security)
@@ -63,78 +54,44 @@ tests/
 - **TimeSeriesSplit Validation:** Ensures forward-chaining chronological splits without lookahead data leakage.
 - **Baseline Benchmarking:** Verifies that classification and regression tasks report naive dummy baselines alongside cross-validation metrics.
 
-### 3.4 `test_audit_regressions.py` (Audit Defect Regressions)
-- Covers confirmed audit findings:
-  - Confusion matrix non-zero counts for integer and string target variables.
-  - Positive-class metric calculations (precision, recall, F1, support) for imbalanced binary classification.
-  - Outbound AI context stripping of PII/identifier columns.
-  - Model provenance cache invalidation upon single-cell dataset modifications.
+### 3.4 `test_decision_threshold.py` (Threshold Optimization)
+- Validates candidate threshold evaluation ($0.05 \le \tau \le 0.95$).
+- Tests Matthews Correlation Coefficient (MCC), precision, recall, and F1 calculations from precomputed probabilities.
+
+### 3.5 `test_outlier_diagnostics.py` (Distribution Diagnostics)
+- Validates Tukey's IQR fences ($Q_1 - k \times \text{IQR}, Q_3 + k \times \text{IQR}$) across multipliers ($k=1.5, k=3.0$).
+- Tests skewness, kurtosis, and distribution classification heuristics.
+
+### 3.6 `test_inference_script_generation.py` (Standalone Code Export)
+- Verifies that generated Python inference scripts are syntactically valid and executable independently.
+- Confirms signature verification, model unpickling, and schema validation logic in the exported script.
 
 ---
 
 ## 4. Test Execution & CLI Commands
 
-### 4.1 Pytest Execution (Recommended Primary Runner)
+### 4.1 Pipeline Verification Runner (Recommended)
 
-CloudInsight AI's test harness is fully compatible with `pytest`. All tests execute **completely offline** with zero live network calls:
+Run the full end-to-end verification and test harness:
 
 ```bash
-# Execute full test suite with verbose reporting
-pytest tests/ -v
+# Run full verification (environment checks + full test suite)
+python scripts/verify_pipeline.py
 
-# Execute full test suite with code coverage
-pytest tests/ --cov=Utils --cov=Pages --cov=App --cov-report=term-missing
-
-# Execute individual test modules
-pytest tests/test_page_smoke.py -v           # Headless AppTest UI verification
-pytest tests/test_security_boundaries.py -v   # Adversarial security checks
-pytest tests/test_ml_and_drift.py -v          # Statistical tests, KS/FDR/TVD, AutoML
-pytest tests/test_ingestion_parsers.py -v     # Streaming chunk parsers & limits
-pytest tests/test_core_pipeline.py -v         # Caching, fingerprints, pipelines
-pytest tests/test_audit_regressions.py -v     # Historical defect regressions
-pytest tests/test_ai_conversion.py -v         # Chunked table extraction mocks
-pytest tests/test_ui_workflows.py -v          # File uploads, PDF rendering
+# Run static environment and cryptographic checks only
+python scripts/verify_pipeline.py --check-only
 ```
 
-### 4.2 Standard Library Unittest Execution (Zero Dependency Fallback)
+### 4.2 Standard Library Unittest Execution
+
+Execute tests using Python's standard `unittest`:
 
 ```bash
-# Run entire suite via standard library unittest
+# Run entire discovery suite
 python -m unittest discover -s tests -v
 
 # Run individual test files
-python -m unittest tests/test_page_smoke.py -v
 python -m unittest tests/test_security_boundaries.py -v
-```
-
----
-
-## 5. Offline Isolation & Mock Boundaries
-
-To guarantee deterministic local execution without internet access:
-- **External AI Mock Boundary:** In `tests/test_ai_conversion.py` and `tests/test_audit_regressions.py`, calls to `google.genai.Client` are patched using `unittest.mock.patch`. Mock instances intercept `client.models.generate_content` and return structured responses, verifying error handling, chunk boundary reconciliation, and token budgeting without contacting Google servers.
-- **Filesystem Isolation:** All test fixtures write to `tempfile.TemporaryDirectory()`, dynamically redirecting `Utils.paths.DATASETS_DIR`, `Utils.paths.MODELS_DIR`, and `Utils.paths.REPORTS_DIR` to prevent disk contamination.
-
----
-
-## 6. Coverage Configuration (`pyproject.toml`)
-
-Code coverage is configured via `[tool.coverage]`:
-
-```toml
-[tool.coverage.run]
-source = ["Utils", "Pages", "App.py"]
-omit = ["tests/*", "scratch/*"]
-
-[tool.coverage.report]
-show_missing = true
-skip_covered = true
-```
-
-Run test suite with coverage report:
-```bash
-pytest tests/ --cov=Utils --cov=Pages --cov=App --cov-report=term-missing
-# Or using standard coverage tool:
-coverage run -m unittest discover -s tests
-coverage report
+python -m unittest tests/test_ml_and_drift.py -v
+python -m unittest tests/test_decision_threshold.py -v
 ```

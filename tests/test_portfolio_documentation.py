@@ -7,21 +7,21 @@ class TestPortfolioDocumentation(unittest.TestCase):
         self.assertTrue(os.path.exists("README.md"), "README.md should exist")
         with open("README.md", encoding="utf-8") as f:
             content = f.read()
-        self.assertIn("Business Impact", content)
+        self.assertIn("TabuLens", content)
         self.assertIn("System Architecture", content)
-        self.assertIn("Baseline Benchmark", content)
         self.assertIn("Docker Quickstart", content)
-        self.assertIn("CAPSTONE_THESIS_DEFENSE.md", content)
+        self.assertIn("METHODOLOGY.md", content)
 
-    def test_capstone_thesis_defense_doc_exists_and_detailed(self):
-        self.assertTrue(os.path.exists("docs/CAPSTONE_THESIS_DEFENSE.md"), "docs/CAPSTONE_THESIS_DEFENSE.md should exist")
-        with open("docs/CAPSTONE_THESIS_DEFENSE.md", encoding="utf-8") as f:
+    def test_methodology_doc_exists_and_detailed(self):
+        self.assertTrue(os.path.exists("docs/METHODOLOGY.md"), "docs/METHODOLOGY.md should exist")
+        with open("docs/METHODOLOGY.md", encoding="utf-8") as f:
             content = f.read()
-        self.assertIn("Capstone Defense Specification", content)
-        self.assertIn("Mathematical Foundations", content)
+        self.assertIn("Statistical & Machine Learning Methodology", content)
         self.assertIn("Kolmogorov-Smirnov", content)
         self.assertIn("Benjamini-Hochberg", content)
-        self.assertIn("Viva Defense Cheat Sheet", content)
+        self.assertIn("Variance Inflation Factor", content)
+        self.assertIn("Decision Threshold Optimization", content)
+
 
 if __name__ == "__main__":
     unittest.main()

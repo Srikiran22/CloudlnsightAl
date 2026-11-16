@@ -1,173 +1,183 @@
-# CloudInsight AI
+# TabuLens
 
-[![Tests](https://img.shields.io/badge/tests-513%2F513%20passing-brightgreen)](#)
-[![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)](#)
-[![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](#)
-[![Maturity](https://img.shields.io/badge/maturity-Stage%204%20Production-success)](#)
-[![Capstone](https://img.shields.io/badge/capstone-4th%20Year%20DS%2FML%20Defense-purple)](#)
+**Tabular Data Exploration, Drift Auditing & Leak-Free Modeling**
 
-> **A local-first, privacy-governed analytical studio for bounded tabular ingestion, statistical hypothesis auditing, leak-free scikit-learn pipeline modeling, and cryptographic artifact verification.**
+TabuLens is a local-first tabular data science studio built with Python, Streamlit, and Scikit-Learn. It provides an end-to-end workflow for dataset ingestion, statistical exploratory data analysis, dataset drift auditing, leak-free machine learning training with decision threshold tuning, and standalone Python inference export.
+
+Designed and developed as a 4th-year Computer Science / Data Science capstone project.
 
 ---
 
-## 1. Business Impact & Problem Statement
+## Key Features
 
-Enterprise machine learning models frequently collapse in production due to three pervasive defects:
-1. **Silent Data Leakage:** Preprocessing logic (scaling, imputation, encoding) fitted across whole datasets contaminates validation splits, producing phantom accuracy that collapses on real traffic.
-2. **Unguarded Covariate Drift:** Production feature distributions shift away from training distributions without automated statistical alarms.
-3. **Data Residency & Insecure Deserialization:** Multi-tenant cloud uploads compromise enterprise IP and breach privacy mandates (GDPR/HIPAA), while raw Python `pickle` deserialization allows remote code execution (RCE).
+1. **Local-First Ingestion & Governance**
+   - Ingests CSV, TSV, Parquet, Excel (`.xlsx`, `.xls`), SQLite databases, and structured JSON.
+   - Resource-bounded safety checks: protects workstation memory with 200 MB file limits, 20M cell limits, and automatic row sampling for large interactive charts.
+   - PII and identifier screening: automatically detects camelCase identifiers, SSNs, and phone number columns to prevent feature leakage.
 
-**CloudInsight AI** delivers an enterprise-ready, on-device data science workbench with strict algorithmic proofs:
-- **Zero Data Leakage:** Scikit-learn preprocessing is strictly encapsulated inside `Pipeline` and `ColumnTransformer` estimators fitted solely on cross-validation training folds.
-- **Continuous Distribution Drift Engine:** Two-sample Kolmogorov-Smirnov hypothesis testing with Benjamini-Hochberg False Discovery Rate (FDR) control and Total Variation Distance (TVD).
-- **Cryptographic Model Signing:** HMAC-SHA256 signature verification over serialized `.joblib` pipelines stops deserialization attacks cold.
-- **Workstation Budget Ceilings:** Enforces hard resource ceilings (200 MB uploads, 20M cells, 400 MB DataFrame RAM) to eliminate host freezes.
+2. **Exploratory Data Analysis & Statistical Diagnostics**
+   - Univariate summaries, distribution skewness, kurtosis, and D'Agostino-Pearson normality tests.
+   - Tukey's IQR fences ($Q_1 \pm k \times \text{IQR}$) and parametric Z-score outlier detection.
+   - Variance Inflation Factor (VIF) matrix to diagnose severe multicollinearity ($\text{VIF} \ge 10$).
+   - One-Way ANOVA hypothesis testing across categorical groups.
 
-> **Academic Evaluation & Thesis Defense:** For the complete mathematical proofs, cross-validation derivations, and the 15-question Viva Defense Cheat Sheet, see [docs/CAPSTONE_THESIS_DEFENSE.md](docs/CAPSTONE_THESIS_DEFENSE.md).
+3. **Dataset Drift Auditing**
+   - Two-sample Kolmogorov-Smirnov test ($D = \sup_x |F_1(x) - F_2(x)|$) for continuous numerical features.
+   - Total Variation Distance (TVD) and Chi-square contingency testing for categorical distributions.
+   - **Benjamini-Hochberg (BH)** procedure controlling the False Discovery Rate (FDR at $Q = 0.05$) across multiple feature comparisons.
+
+4. **Leak-Free Scikit-Learn Modeling**
+   - Encapsulates imputation, one-hot encoding, and standard scaling strictly inside `Pipeline` and `ColumnTransformer` estimators.
+   - Preprocessing is fitted solely on training folds, preventing data leakage into holdout test sets.
+   - Every model is benchmarked against a naive majority-class `DummyClassifier` or mean `DummyRegressor` to prove genuine feature learning.
+
+5. **Decision Threshold Optimization**
+   - Interactive probability cutoff slider ($\theta \in [0.05, 0.95]$) for binary classification.
+   - Recomputes precision, recall, F1, and confusion matrix in $O(1)$ without refitting the model.
+   - Persists calibrated thresholds into saved model bundles.
+
+6. **Standalone Python Inference Export**
+   - Generates a self-contained, lightweight Python script (`predict_standalone.py`) to run batch predictions on CSV files without requiring Streamlit or a browser UI.
+   - Includes CLI arguments (`--input`, `--output`, `--threshold`).
+
+7. **Cryptographic Model Artifact Signing**
+   - Serialized `.joblib` bundles are signed with host-bound HMAC-SHA256 digests (`.joblib.sig`).
+   - Verifies integrity in memory prior to deserialization to guard against untrusted pickle execution.
 
 ---
 
-## 2. System Architecture
+## System Architecture
 
 ```mermaid
-flowchart LR
-    subgraph Ingestion ["1. Bounded Ingestion Layer"]
-        Local["Local Files\n(CSV, Parquet, XLSX, JSON, XML)"]
-        DB["Local Databases\n(SQLite .db, .sqlite)"]
-        RawDoc["Unstructured Docs\n(PDF, TXT, Logs)"]
+flowchart TD
+    subgraph Ingestion ["1. Data Ingestion & Sanitization"]
+        Files["Local Files\n(CSV, Parquet, Excel, SQLite, JSON)"] --> Parser["Streaming Parser & Resource Guards"]
+        Parser --> MemoryCache["Bounded Session Cache\n(SHA-256 Fingerprinted)"]
     end
 
-    subgraph Guards ["2. Security & Governance"]
-        Parser["Streaming Parser\n(200 MB / 20M Cell Ceiling)"]
-        AIConv["Gemini Table Extractor\n(Chunked + Schema Reconciled)"]
-        Cache["Bounded LRU Cache\n(SHA-256 Fingerprinted)"]
-        Privacy["PII & Identifier Shield\n(Heuristic Detection & Exclusion)"]
+    subgraph Diagnostics ["2. Exploratory Analysis & Drift Engine"]
+        MemoryCache --> EDA["Statistical Diagnostics\n(Tukey IQR, VIF, ANOVA)"]
+        MemoryCache --> Drift["Drift Auditing\n(Two-Sample KS + Benjamini-Hochberg FDR)"]
     end
 
-    subgraph Analytics ["3. Analytics, Modeling & Audit"]
-        EDA["Statistical Diagnostics &\nPeak-Preserving Charts"]
-        Drift["Drift Engine\n(KS + BH-FDR & TVD)"]
-        ML["Scikit-Learn AutoML Pipelines\n(HMAC-SHA256 Signed .joblib)"]
-        PDF["ReportLab PDF Generator\n(PDF Reports)"]
-        GenAI["Gemini Insights & Chat\n(PII-Screened Context)"]
+    subgraph Modeling ["3. Modeling & Inference"]
+        MemoryCache --> ML["Leak-Free Pipeline\n(Stratified / Temporal CV)"]
+        ML --> Threshold["Decision Threshold Tuning\n(Precision vs Recall)"]
+        Threshold --> Export["Standalone Python Script\n(predict_standalone.py)"]
+        Threshold --> Signer["HMAC-SHA256 Signing\n(.joblib + .joblib.sig)"]
     end
 
-    Local --> Parser
-    DB --> Parser
-    RawDoc --> AIConv --> Parser
-    Parser --> Cache
-    Cache --> Privacy
-    Privacy --> GenAI
-    Cache --> EDA & Drift & ML & PDF
+    subgraph BatchScore ["4. Scoring Workspace"]
+        Signer --> Predict["Batch Scoring & Simulation\n(Drift Detection & CSV Export)"]
+    end
 ```
-
-*For complete architectural specifications, container diagrams, and design trade-offs, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).*
 
 ---
 
-## 3. Baseline Benchmark vs Naive Baseline
+## Mathematical & Statistical Foundations
 
-CloudInsight AI benchmarks all trained models against naive probabilistic baselines to verify genuine signal extraction:
+For comprehensive mathematical formulations, proofs, and derivations of the algorithms implemented in TabuLens (including Kolmogorov-Smirnov test statistics, Benjamini-Hochberg correction, VIF equations, and pipeline fold isolation), refer to:
 
-### Classification: SaaS Churn Benchmark Dataset (10,000 Rows, 20.4% Imbalance)
-| Model Architecture | 5-Fold CV Accuracy | F1-Score (Macro) | ROC-AUC | vs. Naive Baseline (Majority Class) |
-|---|---|---|---|---|
-| **Naive Baseline (Majority Class)** | 79.6% ± 0.0% | 0.443 ± 0.00 | 0.500 | *Benchmark Zero* |
-| **Logistic Regression (L2)** | 81.2% ± 0.4% | 0.691 ± 0.02 | 0.772 | **+24.8% F1 lift** |
-| **Random Forest (100 Trees)** | 86.4% ± 0.3% | 0.789 ± 0.01 | 0.854 | **+34.6% F1 lift** |
-| **HistGradientBoosting** | **87.1% ± 0.2%** | **0.802 ± 0.01** | **0.871** | **+35.9% F1 lift** |
-
-### Regression: Housing Price Valuation Benchmark
-| Model Architecture | RMSE | MAE | $R^2$ Score | vs. Naive Baseline (Mean Target) |
-|---|---|---|---|---|
-| **Naive Baseline (Mean Prediction)** | 84,210 | 66,410 | 0.000 | *Benchmark Zero* |
-| **Ridge Regression ($\alpha=1.0$)** | 48,120 | 34,250 | 0.674 | **+67.4% variance explained** |
-| **Random Forest Regressor** | 33,450 | 22,110 | 0.842 | **+84.2% variance explained** |
-| **HistGradientBoostingRegressor** | **31,210** | **20,450** | **0.863** | **+86.3% variance explained** |
+- [docs/METHODOLOGY.md](docs/METHODOLOGY.md)
 
 ---
 
-## 4. Docker Quickstart & Local Setup
+## Quickstart
 
-### 4.1 Docker Quickstart (Recommended for Live Defense & Testing)
-Launch the studio with zero host installation via multi-stage Docker container:
+### Prerequisites
+- Python 3.11 or 3.12
+- Git
 
-```bash
-# 1. Build and run containerized studio
-docker compose up --build -d
-
-# 2. Check health status
-docker compose ps
-# Open http://localhost:8501 in your browser
-```
-
-### 4.2 Local Python Setup (Workstation Execution)
+### 1. Local Setup
 
 ```bash
-# 1. Create and activate virtual environment (Python 3.12+)
+# Clone the repository
+git clone https://github.com/your-username/TabuLens.git
+cd TabuLens
+
+# Create and activate a virtual environment
 python -m venv .venv
-# Windows: .venv\Scripts\Activate.ps1 | Linux/macOS: source .venv/bin/activate
 
-# 2. Install pinned dependencies
-pip install -r requirements-lock.txt
+# On Linux/macOS:
+source .venv/bin/activate
+# On Windows PowerShell:
+.venv\Scripts\Activate.ps1
 
-# 3. Launch studio
-streamlit run App.py
+# Install dependencies
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# Run the TabuLens application
+streamlit run app.py
 ```
 
----
-
-## 5. System Resource Boundaries & Security Guarantees
-
-CloudInsight AI enforces centralized resource boundaries in `Utils/limits.py` to guarantee predictable workstation performance:
-
-| Boundary Parameter | Ceiling | Enforcement Point | Technical Rationale & Failure Mode Defended |
-|---|---|---|---|
-| `MAX_UPLOAD_BYTES` | **200 MB** (209,715,200 B) | `Utils/parsing.py` | Matches Streamlit buffer ceiling; prevents socket buffer memory exhaustion. |
-| `MAX_AGGREGATE_UPLOAD_BYTES` | **250 MB** (262,144,000 B) | `Utils/parsing.py` | Batch upload ceiling for multi-file merges; bounds staging I/O buffers. |
-| `MAX_UPLOAD_FILES` | **20 files** | `Pages/Upload.py` | Caps batch file descriptor allocation and merge overhead. |
-| `MAX_INGESTION_ROWS` | **1,000,000 rows** | `Utils/parsing.py` | Streaming chunk validation rejects oversized tables before DataFrame materialization. |
-| `MAX_INGESTION_COLUMNS` | **200 columns** | `Utils/parsing.py` | Header parser guard; protects against horizontal dimension explosion and $O(N^2)$ correlation matrices. |
-| `MAX_INGESTION_CELLS` | **20,000,000 cells** | `Utils/parsing.py` | Global cell matrix ceiling ($rows \times columns$); bounds memory footprint regardless of aspect ratio. |
-| `MAX_DATAFRAME_MEMORY_BYTES` | **400 MB** (419,430,400 B) | `Utils/limits.py` | Deep memory inspection ceiling (`df.memory_usage(deep=True).sum()`); fails closed if object overhead exceeds RAM budget. |
-| `MAX_HIGH_CARDINALITY_STRING_CELLS` | **5,000,000 cells** | `Utils/parsing.py` | Pre-allocation guard against high-cardinality string columns which incur massive pointer indirection overhead in CPython. |
-| `MAX_MODEL_FILE_SIZE` | **100 MB** (104,857,600 B) | `Utils/ML.py` | Model deserialization guard; rejects bloated binary archives before HMAC verification. |
-| `MAX_VISUALIZATION_ROWS` | **25,000 rows** | `Utils/sampling.py` | Interactive Plotly rendering limit; selects a deterministic uniform pseudo-random sample to maintain UI responsiveness. |
+The application will be accessible at `http://localhost:8501`.
 
 ---
 
-## 6. Testing, Quality Assurance & Offline Verification
+### 2. Docker Quickstart (2-Stage Build)
 
-CloudInsight AI maintains a comprehensive offline test suite with **513 passing unit tests**:
+TabuLens includes a minimal two-stage Dockerfile running as an unprivileged system user (`appuser`):
 
 ```bash
-# Run full test suite with standard library unittest
-python -m unittest discover -s tests -v
+# Build and run using Docker Compose
+docker compose up --build
+```
 
-# Run deployment and container validation tests
-python -m unittest tests/test_deployment_config.py -v
+Access the studio at `http://localhost:8501`.
 
-# Run UI hardening and client security checks
-python -m unittest tests/test_ui_hardening.py -v
+---
 
-# Run caching and memory performance checks
-python -m unittest tests/test_caching_and_performance.py -v
+### 3. Pipeline & Verification Runner
 
-# Run security boundary checks (XXE, zip bomb, formula injection, HMAC tampering)
-python -m unittest tests/test_security_boundaries.py -v
+To verify environmental compatibility, cryptographic invariants, and execute the full test suite:
+
+```bash
+# Run full verification and unit tests
+python scripts/verify_pipeline.py
+
+# Or run configuration and cryptographic checks only
+python scripts/verify_pipeline.py --check-only
 ```
 
 ---
 
-## 7. Project Documentation Index
+## Repository Structure
 
-- [docs/CAPSTONE_THESIS_DEFENSE.md](docs/CAPSTONE_THESIS_DEFENSE.md): 4th-Year Capstone Thesis Defense Dossier and 15-question Viva Q&A cheat sheet.
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): System architecture, C4 diagrams, and component breakdown.
-- [docs/SETUP.md](docs/SETUP.md): Local installation, virtual environment setup, and troubleshooting.
-- [docs/TESTING.md](docs/TESTING.md): Test suite organization, headless smoke checks, and coverage.
-- [SECURITY.md](SECURITY.md): Threat modeling, cryptographic model signing, and injection defenses.
-- [docs/API.md](docs/API.md): Internal API reference and module contracts.
-- [AUDIT_REPORT.md](AUDIT_REPORT.md): Senior engineering audit report with P0–P3 classifications.
-- [PROJECT_WALKTHROUGH.md](PROJECT_WALKTHROUGH.md): Recruiter and engineering interview walkthrough brief.
-- [CHANGELOG.md](CHANGELOG.md): Verified version history and change logs.
-- [CONTRIBUTING.md](CONTRIBUTING.md): Contribution standards and development guidelines.
+```text
+TabuLens/
+├── app.py                     # Streamlit application entrypoint & navigation
+├── pages/                     # Dedicated studio workflows
+│   ├── upload.py              # Ingestion, schema validation & dataset catalog
+│   ├── eda.py                 # Statistical diagnostics, Tukey IQR & VIF
+│   ├── compare.py             # KS-drift engine with Benjamini-Hochberg FDR
+│   ├── visualization.py       # Peak-preserving interactive charts
+│   ├── cleaning.py            # Deduplication, outlier clipping & imputation
+│   ├── feature_engineering.py # Polynomial, log transforms & binning
+│   ├── ml.py                  # Model training, baseline benchmarks & threshold tuning
+│   ├── predict.py             # Batch inference scoring & simulation
+│   ├── dashboard.py           # Multi-metric workspace overview
+│   └── report.py              # Tabular audit summary and PDF export
+├── utils/                     # Decoupled computational & security utilities
+│   ├── compare_logic.py       # KS-test & Benjamini-Hochberg algorithms
+│   ├── eda_logic.py           # Tukey IQR, Z-score, VIF & ANOVA calculations
+│   ├── ml.py                  # Scikit-learn pipelines, thresholding & HMAC signing
+│   ├── paths.py               # Path containment & tabular ingestion parsers
+│   ├── preprocessing.py       # Missing value imputation & feature encoders
+│   └── theme.py               # Lightweight CSS design tokens & Plotly themes
+├── docs/                      # Documentation
+│   └── METHODOLOGY.md         # Detailed mathematical foundations
+├── scripts/                   # Automation & operational tools
+│   ├── verify_pipeline.py     # End-to-end pipeline verification runner
+│   └── healthcheck.py         # Container healthcheck probe
+├── tests/                     # Unit, integration, and headless regression test suite
+├── Dockerfile                 # 2-stage unprivileged container specification
+├── docker-compose.yml         # Container composition manifest
+└── requirements.txt           # Clean production dependencies
+```
+
+---
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
