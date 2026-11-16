@@ -11,3 +11,11 @@ build/
 dist/
 *.egg-info
 .streamlit/secrets.toml
+datasets/
+Datasets/
+models/
+Models/
+reports/
+Reports/
+tests/
+docs/

@@ -1,41 +1,50 @@
-# Multi-stage production container for CloudInsight AI
-FROM python:3.12-slim AS base
+# Stage 1: Build dependencies
+FROM python:3.11-slim AS builder
 
-# Prevent Python from writing .pyc files and enable unbuffered logging
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /install
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir --prefix=/install/deps -r requirements.txt
+
+# Stage 2: Production runtime
+FROM python:3.11-slim AS runner
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    DEBIAN_FRONTEND=noninteractive
+    PYTHONPATH="/app:/app/deps/lib/python3.11/site-packages" \
+    PATH="/app/deps/bin:$PATH"
 
 WORKDIR /app
 
-# Install minimal build tools and curl for health checking
+# Install runtime curl for healthchecks
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root system user
-RUN useradd -m -u 1000 appuser && \
-    mkdir -p /app/Datasets /app/Models /app/Reports /app/ReportTemplates && \
-    chown -R appuser:appuser /app
+# Copy installed dependencies from builder
+COPY --from=builder /install/deps /app/deps
 
-# Install Python dependencies
-COPY requirements-lock.txt ./
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements-lock.txt
+# Create non-root unprivileged application user
+RUN useradd -m -u 1000 appuser && \
+    mkdir -p /app/datasets /app/models /app/reports /app/report_templates /app/Datasets /app/Models /app/Reports && \
+    chown -R appuser:appuser /app
 
 # Copy application source
 COPY --chown=appuser:appuser . /app
 
-# Switch to non-root user
 USER appuser
 
-# Expose Streamlit default port
 EXPOSE 8501
 
-# Container healthcheck probe
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python scripts/healthcheck.py || exit 1
 
-# Launch production server
-ENTRYPOINT ["streamlit", "run", "App.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]
+ENTRYPOINT ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]

@@ -1,12 +1,12 @@
 version: "3.8"
 
 services:
-  cloudinsight-ai:
+  tabulens:
     build:
       context: .
       dockerfile: Dockerfile
-    image: cloudinsight-ai:latest
-    container_name: cloudinsight-studio
+    image: tabulens:latest
+    container_name: tabulens-studio
     restart: unless-stopped
     ports:
       - "8501:8501"
@@ -15,9 +15,9 @@ services:
       - STREAMLIT_SERVER_ENABLE_CORS=false
       - STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=true
     volumes:
-      - ./Datasets:/app/Datasets
-      - ./Models:/app/Models
-      - ./Reports:/app/Reports
+      - ./datasets:/app/datasets
+      - ./models:/app/models
+      - ./reports:/app/reports
     healthcheck:
       test: ["CMD", "python", "scripts/healthcheck.py"]
       interval: 30s
