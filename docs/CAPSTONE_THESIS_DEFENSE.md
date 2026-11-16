@@ -1,4 +1,4 @@
-# CloudInsight AI — Capstone Defense Specification & Viva Defense Dossier
+# CloudInsight AI: Capstone Defense Specification & Viva Defense Dossier
 
 **Degree Program:** B.Tech / B.E. in Computer Science & Engineering (Data Science & Machine Learning)  
 **Project Title:** CloudInsight AI: A Privacy-Preserving, Leak-Free Statistical Analytics & MLOps Studio  
@@ -129,7 +129,7 @@ A hallmark of academic data science defense is proving trained models outperform
 *Answer:* Corporate environments bound by GDPR, HIPAA, or strict IP protections cannot upload proprietary datasets to third-party cloud infrastructure. By operating entirely within workstation RAM and local storage, CloudInsight AI guarantees zero third-party data residency risk.
 
 **Q9: What happens if an uploaded dataset contains missing values?**  
-*Answer:* Missing values are profiled in EDA and handled dynamically in ML pipelines via median imputation for numerical features and constant frequency imputation for categoricals—strictly fitted inside cross-validation folds.
+*Answer:* Missing values are profiled in EDA and handled dynamically in ML pipelines via median imputation for numerical features and constant frequency imputation for categoricals, strictly fitted inside cross-validation folds.
 
 **Q10: What is the purpose of Variance Inflation Factor (VIF) in the EDA module?**  
 *Answer:* VIF screens for multicollinearity among continuous predictors. A $\text{VIF} > 5$ indicates that more than 80% of a feature's variance is explained by other predictors, which inflates standard errors of regression coefficients.

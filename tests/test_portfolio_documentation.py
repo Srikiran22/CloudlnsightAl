@@ -1,10 +1,11 @@
 import os
 import unittest
 
+
 class TestPortfolioDocumentation(unittest.TestCase):
     def test_readme_contains_recruiter_and_viva_essentials(self):
         self.assertTrue(os.path.exists("README.md"), "README.md should exist")
-        with open("README.md", "r", encoding="utf-8") as f:
+        with open("README.md", encoding="utf-8") as f:
             content = f.read()
         self.assertIn("Business Impact", content)
         self.assertIn("System Architecture", content)
@@ -14,7 +15,7 @@ class TestPortfolioDocumentation(unittest.TestCase):
 
     def test_capstone_thesis_defense_doc_exists_and_detailed(self):
         self.assertTrue(os.path.exists("docs/CAPSTONE_THESIS_DEFENSE.md"), "docs/CAPSTONE_THESIS_DEFENSE.md should exist")
-        with open("docs/CAPSTONE_THESIS_DEFENSE.md", "r", encoding="utf-8") as f:
+        with open("docs/CAPSTONE_THESIS_DEFENSE.md", encoding="utf-8") as f:
             content = f.read()
         self.assertIn("Capstone Defense Specification", content)
         self.assertIn("Mathematical Foundations", content)

@@ -201,12 +201,12 @@ def render_home() -> None:
             section_card_header("End-to-End Data Science Lifecycle", "Systematic 6-stage analytical pipeline")
             st.markdown(
                 """
-                1. **Data Hub & Ingest** — Ingest tabular files (`CSV`, `Parquet`, `Excel`, `JSON`, `SQLite`) with instant column typing and null profiling.
-                2. **Data Profiling & Hygiene** — Evaluate completeness, uniqueness, duplicate patterns, and composite Data Hygiene Index.
-                3. **Data Cleaning & Imputation** — Statistical imputation (mean/median/constant/complete-case), outlier screening (Tukey IQR, Z-score bounds), and sanitized catalog export.
-                4. **Feature Engineering Studio** — Standard/MinMax/Robust scalers, categorical encodings, log transforms, and Mutual Information feature selection.
-                5. **Exploratory Analysis & Visuals** — Statistical tests, correlation matrices with significance filtering, and Plotly charts.
-                6. **Machine Learning & Inference** — Train, validate, and compare classification or regression algorithms with cross-validation, batch prediction, and PDF reports.
+                1. **Data Hub & Ingest**: Ingest tabular files (`CSV`, `Parquet`, `Excel`, `JSON`, `SQLite`) with instant column typing and null profiling.
+                2. **Data Profiling & Hygiene**: Evaluate completeness, uniqueness, duplicate patterns, and composite Data Hygiene Index.
+                3. **Data Cleaning & Imputation**: Statistical imputation (mean/median/constant/complete-case), outlier screening (Tukey IQR, Z-score bounds), and sanitized catalog export.
+                4. **Feature Engineering Studio**: Standard/MinMax/Robust scalers, categorical encodings, log transforms, and Mutual Information feature selection.
+                5. **Exploratory Analysis & Visuals**: Statistical tests, correlation matrices with significance filtering, and Plotly charts.
+                6. **Machine Learning & Inference**: Train, validate, and compare classification or regression algorithms with cross-validation, batch prediction, and PDF reports.
                 """
             )
     with right:
@@ -229,9 +229,9 @@ def render_home() -> None:
             st.caption("Deterministic synthetic benchmarks calibrated for baseline evaluation, covariate drift, and continuous regression.")
             st.markdown(
                 """
-                - `saas_customers_q1.csv` — 605 customer records with churn labels, missingness and duplicates
-                - `saas_customers_q2_drifted.csv` — Statistically shifted distributions for drift detection
-                - `housing_market_prices.csv` — 500 residential records for continuous target regression modeling
+                - `saas_customers_q1.csv`: 605 customer records with churn labels, missingness and duplicates
+                - `saas_customers_q2_drifted.csv`: Statistically shifted distributions for drift detection
+                - `housing_market_prices.csv`: 500 residential records for continuous target regression modeling
                 """
             )
 

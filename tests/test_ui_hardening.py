@@ -1,15 +1,11 @@
-import sys
+import tomllib
 import unittest
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
 
 try:
     from Utils.theme import safe_error_boundary
 except ImportError:
     safe_error_boundary = None
+
 
 class TestUIHardening(unittest.TestCase):
     def test_client_configuration_security(self):
@@ -24,7 +20,7 @@ class TestUIHardening(unittest.TestCase):
         captured = []
         with safe_error_boundary(title="Dataset Ingestion Error", handler=lambda msg: captured.append(msg)):
             raise FileNotFoundError("C:/Users/Internal/Secret/data.csv not found on system")
-        
+
         self.assertEqual(len(captured), 1)
         self.assertIn("Dataset Ingestion Error", captured[0])
         self.assertNotIn("C:/Users/Internal/Secret", captured[0])

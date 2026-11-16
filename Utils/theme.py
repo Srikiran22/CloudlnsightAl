@@ -25,6 +25,15 @@ from Utils.logsys import get_logger
 logger = get_logger("theme")
 
 
+def sanitize_error_message(raw_msg: object) -> str:
+    """Redact internal file system paths (Windows and Unix-style) from error messages."""
+    sanitized = re.sub(r"[A-Za-z]:[\\/][^:\s]+", "[path redacted]", str(raw_msg))
+    sanitized = re.sub(r"/(?:usr|home|etc|var|tmp|app)[^\s]*", "[path redacted]", sanitized)
+    if not sanitized.strip():
+        sanitized = "An unexpected internal error occurred."
+    return sanitized
+
+
 @contextlib.contextmanager
 def safe_error_boundary(title="An error occurred", handler=None):
     """Context manager to intercept exceptions and prevent leaking internal system paths."""
@@ -32,20 +41,14 @@ def safe_error_boundary(title="An error occurred", handler=None):
         yield
     except Exception as exc:
         raw_msg = str(exc)
-        # Redact file system paths (Windows and Unix-style)
-        sanitized = re.sub(r"[A-Za-z]:[\\/][^:\s]+", "[path redacted]", raw_msg)
-        sanitized = re.sub(r"/(?:usr|home|etc|var|tmp|app)[^\s]*", "[path redacted]", sanitized)
-        if not sanitized.strip():
-            sanitized = "An unexpected internal error occurred."
+        sanitized = sanitize_error_message(raw_msg)
         display_msg = f"**{title}**: {sanitized}"
         logger.error(f"UI error boundary caught: {raw_msg}", exc_info=True)
         if handler is not None:
             handler(display_msg)
         else:
-            try:
+            with contextlib.suppress(Exception):
                 st.error(display_msg)
-            except Exception:
-                pass
 
 
 

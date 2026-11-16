@@ -21,7 +21,13 @@ from Utils.ML import (
     train_and_evaluate_model,
 )
 from Utils.paths import resolve_dataset_path
-from Utils.theme import page_header, plot_template, section_card_header, style_plotly_fig
+from Utils.theme import (
+    page_header,
+    plot_template,
+    sanitize_error_message,
+    section_card_header,
+    style_plotly_fig,
+)
 
 logger = get_logger("ML_Page")
 
@@ -152,7 +158,7 @@ if train_clicked:
             )
         except ValueError as e:
             logger.warning("ML training validation error: %s", e)
-            st.error(f"Training could not proceed: {e}")
+            st.error(f"Training could not proceed: {sanitize_error_message(e)}")
         except Exception as e:
             logger.error("ML training unexpected error: %s", e, exc_info=True)
             st.error(f"Training failed: {type(e).__name__}. Check application logs for technical details.")

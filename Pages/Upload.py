@@ -42,7 +42,7 @@ from Utils.paths import (
 )
 from Utils.privacy import detect_sensitive_text
 from Utils.secrets import ask, keep_box, release, value_of
-from Utils.theme import metric_card, page_header, section_card_header
+from Utils.theme import metric_card, page_header, sanitize_error_message, section_card_header
 
 logger = get_logger("Upload")
 
@@ -144,7 +144,7 @@ with tab_files:
                                 pending.append((target_name, needed))
                         except Exception as read_error:
                             logger.warning("ingest failed for %s: %s: %s", target_name, type(read_error).__name__, read_error)
-                            failures.append((target_name, str(read_error)))
+                            failures.append((target_name, sanitize_error_message(read_error)))
                             release_filename_reservation(target_name, directory=DATASETS_DIR)
 
                     if parsed_datasets:

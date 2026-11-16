@@ -1,6 +1,6 @@
 # CloudInsight AI
 
-[![Tests](https://img.shields.io/badge/tests-501%2F501%20passing-brightgreen)](#)
+[![Tests](https://img.shields.io/badge/tests-513%2F513%20passing-brightgreen)](#)
 [![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)](#)
 [![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](#)
 [![Maturity](https://img.shields.io/badge/maturity-Stage%204%20Production-success)](#)
@@ -23,7 +23,7 @@ Enterprise machine learning models frequently collapse in production due to thre
 - **Cryptographic Model Signing:** HMAC-SHA256 signature verification over serialized `.joblib` pipelines stops deserialization attacks cold.
 - **Workstation Budget Ceilings:** Enforces hard resource ceilings (200 MB uploads, 20M cells, 400 MB DataFrame RAM) to eliminate host freezes.
 
-> 🎓 **Academic Evaluation & Thesis Defense:** For the complete mathematical proofs, cross-validation derivations, and the 15-question Viva Defense Cheat Sheet, see [docs/CAPSTONE_THESIS_DEFENSE.md](docs/CAPSTONE_THESIS_DEFENSE.md).
+> **Academic Evaluation & Thesis Defense:** For the complete mathematical proofs, cross-validation derivations, and the 15-question Viva Defense Cheat Sheet, see [docs/CAPSTONE_THESIS_DEFENSE.md](docs/CAPSTONE_THESIS_DEFENSE.md).
 
 ---
 
@@ -138,7 +138,7 @@ CloudInsight AI enforces centralized resource boundaries in `Utils/limits.py` to
 
 ## 6. Testing, Quality Assurance & Offline Verification
 
-CloudInsight AI maintains a comprehensive offline test suite with **501 passing unit tests**:
+CloudInsight AI maintains a comprehensive offline test suite with **513 passing unit tests**:
 
 ```bash
 # Run full test suite with standard library unittest
@@ -161,13 +161,13 @@ python -m unittest tests/test_security_boundaries.py -v
 
 ## 7. Project Documentation Index
 
-- [docs/CAPSTONE_THESIS_DEFENSE.md](docs/CAPSTONE_THESIS_DEFENSE.md) — 4th-Year Capstone Thesis Defense Dossier & 15-question Viva Q&A cheat sheet.
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — System architecture, C4 diagrams, and component breakdown.
-- [docs/SETUP.md](docs/SETUP.md) — Local installation, virtual environment setup, and troubleshooting.
-- [docs/TESTING.md](docs/TESTING.md) — Test suite organization, headless smoke checks, and coverage.
-- [SECURITY.md](SECURITY.md) — Threat modeling, cryptographic model signing, and injection defenses.
-- [docs/API.md](docs/API.md) — Internal API reference and module contracts.
-- [AUDIT_REPORT.md](AUDIT_REPORT.md) — Senior engineering audit report with P0–P3 classifications.
-- [PROJECT_WALKTHROUGH.md](PROJECT_WALKTHROUGH.md) — Recruiter and engineering interview walkthrough brief.
-- [CHANGELOG.md](CHANGELOG.md) — Verified version history and change logs.
-- [CONTRIBUTING.md](CONTRIBUTING.md) — Contribution standards and development guidelines.
+- [docs/CAPSTONE_THESIS_DEFENSE.md](docs/CAPSTONE_THESIS_DEFENSE.md): 4th-Year Capstone Thesis Defense Dossier and 15-question Viva Q&A cheat sheet.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): System architecture, C4 diagrams, and component breakdown.
+- [docs/SETUP.md](docs/SETUP.md): Local installation, virtual environment setup, and troubleshooting.
+- [docs/TESTING.md](docs/TESTING.md): Test suite organization, headless smoke checks, and coverage.
+- [SECURITY.md](SECURITY.md): Threat modeling, cryptographic model signing, and injection defenses.
+- [docs/API.md](docs/API.md): Internal API reference and module contracts.
+- [AUDIT_REPORT.md](AUDIT_REPORT.md): Senior engineering audit report with P0–P3 classifications.
+- [PROJECT_WALKTHROUGH.md](PROJECT_WALKTHROUGH.md): Recruiter and engineering interview walkthrough brief.
+- [CHANGELOG.md](CHANGELOG.md): Verified version history and change logs.
+- [CONTRIBUTING.md](CONTRIBUTING.md): Contribution standards and development guidelines.

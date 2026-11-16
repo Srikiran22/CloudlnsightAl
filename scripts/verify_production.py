@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CloudInsight AI — Automated Production Smoke & Verification Suite.
+"""CloudInsight AI: Automated Production Smoke and Verification Suite.
 
 Runs environmental, security, deployment, and unit test audits to certify that
 the studio is ready for 4th-year capstone defense and production deployment.
@@ -64,7 +64,7 @@ def check_streamlit_security_config() -> bool:
         print_status("Streamlit Client Hardening", False, "Missing .streamlit/config.toml")
         return False
 
-    with open(cfg_path, "r", encoding="utf-8") as f:
+    with open(cfg_path, encoding="utf-8") as f:
         content = f.read()
 
     has_client = "[client]" in content
@@ -80,7 +80,7 @@ def check_streamlit_security_config() -> bool:
 def check_security_invariants() -> bool:
     try:
         from Utils.limits import ResourcePolicy
-        from Utils.ML import verify_model_artifact_signature, sign_model_artifact
+        from Utils.ML import sign_model_artifact, verify_model_artifact_signature
         from Utils.theme import safe_error_boundary
 
         ok = (
@@ -113,7 +113,7 @@ def main() -> int:
     args = parser.parse_args()
 
     print(f"\n{BLUE}{BOLD}======================================================================{RESET}")
-    print(f"{BLUE}{BOLD}        CloudInsight AI — Production & Capstone Defense Verifier        {RESET}")
+    print(f"{BLUE}{BOLD}        CloudInsight AI: Production and Capstone Defense Verifier       {RESET}")
     print(f"{BLUE}{BOLD}======================================================================{RESET}\n")
 
     checks = [
