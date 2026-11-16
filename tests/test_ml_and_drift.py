@@ -9,30 +9,23 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from Utils.AIConvert import _field_count_quote_aware
-from Utils.Charts import (
+from utils.charts import (
     create_correlation_heatmap,
     create_line_chart,
     create_pie_treemap_plot,
 )
-from Utils.compare_logic import column_drift_rows
-from Utils.dataset_ui import (
+from utils.compare_logic import column_drift_rows
+from utils.dataset_ui import (
     dataframe_fingerprint,
     dataset_fingerprint,
     load_dataset_cached,
 )
-from Utils.Gemini import (
-    DEFAULT_GEMINI_MODEL,
-    GEMINI_MODELS,
-    chat_with_gemini_dataset,
-    resolve_gemini_model,
-)
-from Utils.ML import (
+from utils.ml import (
     load_trained_model,
     save_trained_model,
     train_and_evaluate_model,
 )
-from Utils.paths import (
+from utils.paths import (
     DATASETS_DIR,
     MAX_UPLOAD_BYTES,
     enforce_size_limit,
@@ -42,8 +35,8 @@ from Utils.paths import (
     read_tabular,
     record_conversion,
 )
-from Utils.PDF import generate_pdf_report
-from Utils.quality import quality_index, quality_metrics
+from utils.pdf import generate_pdf_report
+from utils.quality import quality_index, quality_metrics
 
 ensure_project_directories()
 
@@ -190,18 +183,6 @@ class ParsingCorrectnessTests(unittest.TestCase):
         dup_count = df.duplicated().sum()
         self.assertEqual(dup_count, 0)
 
-    def test_quote_aware_csv_counting(self):
-        line = '"hello, world",123,456'
-        count = _field_count_quote_aware(line)
-        self.assertEqual(count, 3)
-
-    def test_parse_ai_csv_fails_clearly_when_exceeding_column_cap(self):
-        from Utils.AIConvert import MAX_CONVERTED_COLUMNS, parse_ai_csv
-        header = ",".join(f"col_{i}" for i in range(MAX_CONVERTED_COLUMNS + 5))
-        row = ",".join(str(i) for i in range(MAX_CONVERTED_COLUMNS + 5))
-        with self.assertRaisesRegex(ValueError, "exceeds the maximum supported limit"):
-            parse_ai_csv(f"{header}\n{row}")
-
 
 class DatasetIdentityAndStateTests(unittest.TestCase):
     def test_dataset_fingerprint_changes_on_content_modification(self):
@@ -272,7 +253,7 @@ class DatasetIdentityAndStateTests(unittest.TestCase):
             self.assertEqual(stat2.st_mtime_ns, stat1.st_mtime_ns)
             self.assertEqual(stat2.st_size, stat1.st_size)
 
-            from Utils.dataset_ui import invalidate_dataset_cache
+            from utils.dataset_ui import invalidate_dataset_cache
             invalidate_dataset_cache("temp_midbyte_probe.csv")
             fp2 = dataset_fingerprint("temp_midbyte_probe.csv")
             df2 = load_dataset_cached("temp_midbyte_probe.csv")
@@ -284,7 +265,7 @@ class DatasetIdentityAndStateTests(unittest.TestCase):
                 test_file.unlink()
 
     def test_invalidate_dataset_cache_clears_entries(self):
-        from Utils.dataset_ui import _CONTENT_HASH_CACHE, invalidate_dataset_cache
+        from utils.dataset_ui import _CONTENT_HASH_CACHE, invalidate_dataset_cache
         test_file = DATASETS_DIR / "temp_inval_probe.csv"
         test_file.write_text("x,y\n10,20", encoding="utf-8")
         try:
@@ -297,88 +278,6 @@ class DatasetIdentityAndStateTests(unittest.TestCase):
                 test_file.unlink()
 
 
-class GeminiHardeningTests(unittest.TestCase):
-    def test_gemini_model_registry_contains_supported_models(self):
-        self.assertEqual(DEFAULT_GEMINI_MODEL, "gemini-3.8-flash")
-        self.assertIn("gemini-3.8-flash", GEMINI_MODELS)
-        self.assertIn("gemini-3.6-flash", GEMINI_MODELS)
-        self.assertIn("gemini-2.5-flash", GEMINI_MODELS)
-        self.assertIn("gemini-2.5-pro", GEMINI_MODELS)
-        self.assertNotIn("gemini-1.5-flash", GEMINI_MODELS)
-        self.assertNotIn("gemini-1.5-pro", GEMINI_MODELS)
-
-    def test_deprecated_model_resolution(self):
-        self.assertEqual(resolve_gemini_model("gemini-3.5-flash"), "gemini-3.6-flash")
-        self.assertEqual(resolve_gemini_model("gemini-2.0-flash"), "gemini-3.8-flash")
-        self.assertEqual(resolve_gemini_model("gemini-2.0-flash-exp"), "gemini-3.8-flash")
-        self.assertEqual(resolve_gemini_model("gemini-1.5-flash"), "gemini-3.8-flash")
-        self.assertEqual(resolve_gemini_model("gemini-1.5-pro"), "gemini-2.5-pro")
-        self.assertEqual(resolve_gemini_model("gemini-1.0-pro"), "gemini-2.5-pro")
-        self.assertEqual(resolve_gemini_model("gemini-pro"), "gemini-2.5-pro")
-        self.assertEqual(resolve_gemini_model("gemini-3.8-flash"), "gemini-3.8-flash")
-
-    def test_ai_convert_uses_default_gemini_model(self):
-        import inspect
-
-        from Utils.AIConvert import convert_to_dataframe
-        sig = inspect.signature(convert_to_dataframe)
-        self.assertEqual(sig.parameters["model_name"].default, DEFAULT_GEMINI_MODEL)
-
-    def test_chat_prompt_includes_context_honesty_constraints(self):
-        df = pd.DataFrame({"x": [1, 2], "y": ["a", "b"]})
-        messages = [{"role": "user", "content": "How many total rows?"}]
-        with patch("Utils.Gemini._generate_content") as mock_gen:
-            mock_gen.return_value = "response"
-            chat_with_gemini_dataset("fake_key", df, "data.csv", messages)
-            call_args = mock_gen.call_args[0]
-            prompt = call_args[2]
-            self.assertIn("Important constraints:", prompt)
-            self.assertIn("You do NOT have full-dataset or row-level query execution access", prompt)
-
-    def test_new_sdk_client_fails_closed_when_timeout_unsupported(self):
-        import sys
-        import types
-
-        from Utils.Gemini import GeminiError, _new_sdk_client
-        fake_genai = types.ModuleType("google.genai")
-        class OldClient:
-            def __init__(self, **kwargs):
-                if "http_options" in kwargs:
-                    raise TypeError("unexpected keyword 'http_options'")
-        fake_genai.Client = OldClient
-        google_mod = sys.modules.get("google")
-        with patch.dict(sys.modules, {"google.genai": fake_genai}):
-            if google_mod and hasattr(google_mod, "genai"):
-                with patch.object(google_mod, "genai", fake_genai):
-                    with self.assertRaises(GeminiError) as ctx:
-                        _new_sdk_client("key")
-            else:
-                with self.assertRaises(GeminiError) as ctx:
-                    _new_sdk_client("key")
-            self.assertEqual(ctx.exception.kind, "sdk")
-            self.assertFalse(ctx.exception.retryable)
-
-    def test_generate_once_fails_closed_when_genai_missing(self):
-        import sys
-
-        from Utils.Gemini import GeminiError, _generate_once
-        with patch.dict(sys.modules, {"google.genai": None}):
-            with self.assertRaises(GeminiError) as ctx:
-                _generate_once("key", "gemini-3.8-flash", "prompt")
-            self.assertEqual(ctx.exception.kind, "sdk")
-            self.assertFalse(ctx.exception.retryable)
-
-    def test_primary_google_genai_sdk_client_initialization(self):
-        import google.genai as genai
-
-        from Utils.Gemini import REQUEST_TIMEOUT_SECONDS, _new_sdk_client
-        client = _new_sdk_client("fake-key-0123456789")
-        self.assertIsInstance(client, genai.Client)
-        http_opts = getattr(client._api_client, "_http_options", None)
-        timeout_ms = http_opts.get("timeout") if isinstance(http_opts, dict) else getattr(http_opts, "timeout", None)
-        self.assertEqual(timeout_ms, REQUEST_TIMEOUT_SECONDS * 1000)
-
-
 class MLPipelineHardeningTests(unittest.TestCase):
     def test_dense_one_hot_encoding_explosion_guard(self):
         # 10,000 rows with 5,000 unique categories would yield 50,000,000 cells
@@ -388,7 +287,7 @@ class MLPipelineHardeningTests(unittest.TestCase):
             "target": [0, 1] * (n_rows // 2),
             "high_card": [f"cat_{i}" for i in range(n_rows)],
         })
-        with patch("Utils.ML.ML_MAX_TRAIN_CELLS", 10_000):
+        with patch("utils.ml.ML_MAX_TRAIN_CELLS", 10_000):
             with self.assertRaises(ValueError) as ctx:
                 train_and_evaluate_model(
                     df, "target", ["high_card"], "Logistic Regression", "Classification"
@@ -503,10 +402,9 @@ class DependencyCompatibilityTests(unittest.TestCase):
 
 import unittest
 
-from Utils.AIConvert import _split_into_chunks, reconcile_chunk_frames
-from Utils.Charts import downsample_timeseries
-from Utils.dataset_ui import BoundedDatasetMemoryCache
-from Utils.paths import _reject_dtd
+from utils.charts import downsample_timeseries
+from utils.dataset_ui import BoundedDatasetMemoryCache
+from utils.paths import _reject_dtd
 
 
 class TestBoundedJSONParsing(unittest.TestCase):
@@ -570,28 +468,6 @@ class TestXMLStreamingDTDDefense(unittest.TestCase):
         df = read_tabular(bio, filename="test.xml", max_rows=10)
         self.assertEqual(len(df), 10)
         self.assertEqual(list(df.columns), ["id", "val"])
-
-
-class TestAIChunkBoundaryDeduplication(unittest.TestCase):
-    """Deterministic semantic chunking and chunk boundary deduplication."""
-
-    def test_split_into_chunks_deterministic(self):
-        text = "First paragraph here.\n\nSecond paragraph is longer and has more information.\n\nThird paragraph."
-        chunks = _split_into_chunks(text, max_chunk_chars=50)
-        self.assertTrue(len(chunks) >= 2)
-        # Verify chunks preserve paragraph/semantic boundaries
-        for chunk in chunks:
-            self.assertTrue(len(chunk) > 0)
-
-    def test_reconcile_chunk_frames_eliminates_boundary_duplicates(self):
-        # Chunk 1 produced rows 1, 2, 3
-        df1 = pd.DataFrame([{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}, {"id": 3, "name": "Charlie"}])
-        # Chunk 2, due to continuation context, re-extracted row 3 and added rows 4, 5
-        df2 = pd.DataFrame([{"id": 3, "name": "Charlie"}, {"id": 4, "name": "Diana"}, {"id": 5, "name": "Evan"}])
-
-        merged = reconcile_chunk_frames([df1, df2])
-        self.assertEqual(len(merged), 5)
-        self.assertEqual(merged["id"].tolist(), [1, 2, 3, 4, 5])
 
 
 class TestBoundedDatasetMemoryCache(unittest.TestCase):
@@ -700,27 +576,6 @@ class TestMLCrossValidationAndBaselines(unittest.TestCase):
         self.assertIsNotNone(results["baseline_r2"])
 
 
-class TestLockfileAndCIMatrix(unittest.TestCase):
-    """F-17 & F-19: Requirements locking and cross-platform CI matrix."""
-
-    def test_lockfile_exists_and_referenced_in_readme(self):
-        root = Path(__file__).resolve().parent.parent
-        lockfile = root / "requirements-lock.txt"
-        readme = root / "README.md"
-
-        self.assertTrue(lockfile.exists(), "requirements-lock.txt must exist")
-        content = readme.read_text(encoding="utf-8")
-        self.assertIn("requirements-lock.txt", content, "README must instruct using lockfile")
-
-    def test_ci_workflow_matrix_includes_windows_and_macos(self):
-        root = Path(__file__).resolve().parent.parent
-        ci_file = root / ".github" / "workflows" / "tests.yml"
-        self.assertTrue(ci_file.exists(), ".github/workflows/tests.yml must exist")
-
-        content = ci_file.read_text(encoding="utf-8")
-        self.assertIn("os: [ubuntu-latest, windows-latest, macos-latest]", content)
-
-
 class TestDatasetDriftDetection(unittest.TestCase):
     """Kolmogorov-Smirnov and Total Variation Distance drift detection."""
 
@@ -817,7 +672,7 @@ class TestAtomicFilenameReservation(unittest.TestCase):
     """Concurrency-safe atomic kernel filesystem reservations."""
 
     def test_concurrent_reservations_do_not_collide(self):
-        from Utils.paths import atomic_write, get_unique_filename, release_filename_reservation
+        from utils.paths import atomic_write, get_unique_filename, release_filename_reservation
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
             f1 = get_unique_filename("data.csv", directory=tmp_path)
@@ -837,7 +692,7 @@ class TestPDFPrivacyAndExcludedColumns(unittest.TestCase):
     """PII redaction and sensitive column exclusion from correlations and charts."""
 
     def test_pdf_report_excludes_sensitive_columns(self):
-        from Utils.PDF import generate_pdf_report
+        from utils.pdf import generate_pdf_report
         df = pd.DataFrame({
             "social_security_number": [111223333, 222334444, 333445555, 444556666, 555667777],
             "feature_x": [10.0, 20.0, 30.0, 40.0, 50.0],
@@ -858,7 +713,7 @@ class TestChartHueAndCategoryCapping(unittest.TestCase):
     """High-cardinality hue and category capping preventing UI hang."""
 
     def test_histogram_and_box_plots_cap_high_cardinality(self):
-        from Utils.Charts import create_box_violin_plot, create_histogram_plot
+        from utils.charts import create_box_violin_plot, create_histogram_plot
         np.random.seed(42)
         df = pd.DataFrame({
             "val": np.random.randn(500),
@@ -875,7 +730,7 @@ class TestMLFeatureContractAndSemantics(unittest.TestCase):
     """F-13 & F-15: ML schema contract, strict coercion, and explicit metric attribution."""
 
     def test_ml_contract_and_unparseable_string_rejection(self):
-        from Utils.ML import predict_with_model
+        from utils.ml import predict_with_model
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
             df = pd.DataFrame({
@@ -907,22 +762,6 @@ class TestMLFeatureContractAndSemantics(unittest.TestCase):
             bad_test_df = pd.DataFrame({"num_feat": [7.0, "NOT_A_NUMBER"], "cat_feat": ["A", "B"]})
             with self.assertRaisesRegex(ValueError, r"(?i)non-numeric text values"):
                 predict_with_model(bundle, bad_test_df)
-
-
-class TestCredentialSessionStateSecurity(unittest.TestCase):
-    """Honest session state security terminology."""
-
-    def test_secrets_terminology_and_clearing(self):
-        from types import SimpleNamespace
-        from unittest.mock import patch
-
-        from Utils.secrets import release
-        state = {"gemini_secret": "secret_abc", "gemini_ver": 0}
-        with patch("Utils.secrets.st", SimpleNamespace(session_state=state)):
-            cleared = release("gemini")
-            self.assertEqual(cleared, ["gemini"])
-            self.assertNotIn("gemini_secret", state)
-            self.assertEqual(state.get("gemini_ver"), 1)
 
 
 if __name__ == '__main__':

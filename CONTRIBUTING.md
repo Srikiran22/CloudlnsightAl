@@ -1,48 +1,28 @@
-# Contributing
+# Contributing to TabuLens
 
-Contributions to CloudInsight AI are welcome. Changes should keep the application lightweight, local-first, and consistent with the existing modular structure.
+Contributions to TabuLens are welcome. Changes should keep the application lightweight, local-first, mathematically sound, and consistent with the modular architecture.
 
-## Development setup
+---
 
-Follow the setup instructions in [README.md](README.md).
+## Development Setup
 
-Run the test suite:
+1. Follow the setup instructions in [README.md](README.md) and [docs/SETUP.md](docs/SETUP.md).
+2. Run the verification pipeline and test suite:
+   ```bash
+   python scripts/verify_pipeline.py
+   ```
+3. Run the unit test discovery suite:
+   ```bash
+   python -m unittest discover -s tests -v
+   ```
 
-```bash
-python -m unittest discover -s tests -v
-```
+---
 
-Run the headless page smoke check:
+## Repository Conventions
 
-```bash
-python -m unittest tests/test_page_smoke.py -v
-```
-
-Run the full lint check used by CI:
-
-```bash
-pip install ruff==0.16.4
-ruff check .
-```
-
-## Repository conventions
-
-- Put shared processing logic in `Utils/` rather than duplicating it in pages.
-- Keep resource ceilings in `Utils/limits.py` and format readers in `Utils/parsing.py`; pages must not hard-code limits.
-- Keep external integrations isolated in their utility modules.
-- Keep the two theme palettes (`Utils/theme.py::_palette` and `.streamlit/config.toml`) in sync when changing colors.
-- Do not persist API keys or credentials to disk.
-- Keep generated datasets, models, reports, and local configuration out of commits.
-- Add regression tests when fixing parsing, security, ML, or report-generation bugs.
-- Keep README claims aligned with the current implementation.
-
-## Pull requests
-
-Describe:
-
-- What changed.
-- Why it changed.
-- What tests/checks were run.
-- Any limitations or environment-specific behavior.
-
-For changes to file parsing, Gemini, S3, model persistence, or credential handling, include relevant failure-case tests where practical.
+- **Modular Seams:** Put computational algorithms and data transformations in `utils/` rather than embedding logic in presentation pages (`pages/`).
+- **Resource Ceilings:** Keep resource limits in `utils/limits.py` and tabular parsers in `utils/paths.py`. Never hardcode raw limits in UI pages.
+- **Leak-Free ML:** Feature transformers must always be encapsulated in Scikit-Learn `Pipeline` and `ColumnTransformer` objects to prevent data leakage.
+- **Model Signatures:** Keep HMAC-SHA256 model signing intact for all model serialization.
+- **Testing:** Include regression tests in `tests/` for any new calculation, parser, or security check.
+- **Conventional Commits:** Keep commits imperative, lowercase, and concise (e.g. `feat: add feature interaction transformer`).

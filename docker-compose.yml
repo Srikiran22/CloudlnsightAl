@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  tabulens:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tabulens:latest
+    container_name: tabulens-studio
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    environment:
+      - STREAMLIT_SERVER_HEADLESS=true
+      - STREAMLIT_SERVER_ENABLE_CORS=false
+      - STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=true
+    volumes:
+      - ./datasets:/app/datasets
+      - ./models:/app/models
+      - ./reports:/app/reports
+    healthcheck:
+      test: ["CMD", "python", "scripts/healthcheck.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

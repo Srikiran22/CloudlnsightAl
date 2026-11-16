@@ -1,8 +1,10 @@
-# CloudInsight AI — Internal API & Modular Interface Reference
+# TabuLens — Modular API & Interface Reference
 
-This document details the primary public and internal API contracts across CloudInsight AI's domain modules in `Utils/`.
+This document details the primary public and internal API contracts across TabuLens's domain modules in `utils/`.
 
-## 0. Centralized Resource Governance & Limits (`Utils/limits.py`)
+---
+
+## 0. Resource Governance & Ceilings (`utils/limits.py`)
 
 The `ResourcePolicy` dataclass and constants enforce deterministic system ceilings:
 - `MAX_UPLOAD_BYTES: int = 200 * 1024 * 1024` (200 MB single file upload ceiling)
@@ -19,7 +21,7 @@ The `ResourcePolicy` dataclass and constants enforce deterministic system ceilin
 
 ---
 
-## 1. Data Ingestion & Storage (`Utils/paths.py`, `Utils/parsing.py`, `Utils/frames.py`)
+## 1. Data Ingestion & Storage (`utils/paths.py`, `utils/parsing.py`, `utils/frames.py`)
 
 ### `read_tabular(source: Any, filename: str | None = None, max_rows: int | None = None) -> pd.DataFrame`
 Reads and normalizes a dataset from a file path, file buffer, or raw bytes.
@@ -48,7 +50,7 @@ Allocates a deterministic, collision-safe filename on disk using atomic filesyst
 
 ---
 
-## 2. Machine Learning Studio (`Utils/ML.py`)
+## 2. Machine Learning Studio (`utils/ml.py`)
 
 ### `detect_problem_type(df: pd.DataFrame | None, target_col: str | None) -> str`
 Infers whether a prediction task is `"Classification"` or `"Regression"`.
@@ -65,7 +67,23 @@ Trains, validates, benchmarks, and generates explainability metrics for a scikit
   - `test_size`: Fraction of holdout test set (e.g. `0.2`).
   - `random_state`: Integer seed for reproducibility.
   - `time_series_cv`: Boolean flag to use `TimeSeriesSplit` instead of shuffled K-Fold.
-- **Returns:** Dictionary containing trained `pipeline`, evaluation metrics (accuracy, precision, recall, F1, R², RMSE, MAE), confusion matrix, feature importances, cross-validation metrics, and baseline scores.
+  - `threshold`: Optional decision threshold float for binary classification (defaults to `0.5`).
+- **Returns:** Dictionary containing trained `pipeline`, evaluation metrics (accuracy, precision, recall, F1, R², RMSE, MAE), confusion matrix, feature importances, cross-validation metrics, baseline scores, and threshold metadata.
+
+### `evaluate_threshold_metrics(y_true: np.ndarray, y_prob: np.ndarray, threshold: float) -> dict[str, float]`
+Evaluates binary classification metrics at a specified decision cutoff.
+- **Parameters:**
+  - `y_true`: 1D array of ground truth binary labels (0 or 1).
+  - `y_prob`: 1D array of predicted probabilities for the positive class.
+  - `threshold`: Float cutoff in $(0, 1)$.
+- **Returns:** Dictionary containing `threshold`, `precision`, `recall`, `f1`, and `mcc` (Matthews Correlation Coefficient).
+
+### `generate_standalone_inference_code(bundle: dict, model_filename: str) -> str`
+Generates a standalone, executable Python script (`predict_standalone.py`) for batch scoring outside of Streamlit.
+- **Parameters:**
+  - `bundle`: Saved model bundle dictionary containing feature schemas, pipeline, problem type, and threshold.
+  - `model_filename`: Filename of the `.joblib` model artifact.
+- **Returns:** Formatted Python source code string.
 
 ### `save_trained_model(results: dict, name: str, directory: Path | str = None) -> Path`
 Serializes a trained pipeline with Joblib and creates a companion HMAC-SHA256 signature file.
@@ -75,25 +93,29 @@ Serializes a trained pipeline with Joblib and creates a companion HMAC-SHA256 si
 Validates cryptographic HMAC-SHA256 authenticity and deserializes the model bundle.
 - **Raises:** `ValueError` if the signature is missing or does not match the content digest.
 
-### `predict_with_model(bundle: dict, df: pd.DataFrame) -> pd.DataFrame`
-Executes batch inference using a loaded model bundle.
-- **Returns:** Copy of `df` with appended `prediction` and optional `probability_*` columns. Proactively flags categorical feature drift in `preds_df.attrs["category_drift"]`.
+### `predict_with_model(bundle: dict, df: pd.DataFrame, threshold: float | None = None) -> pd.DataFrame`
+Executes batch inference using a loaded model bundle, honoring decision thresholds for binary classifiers.
+- **Returns:** Copy of `df` with appended `prediction` and optional `probability_*` columns. Flags categorical feature drift in `preds_df.attrs["category_drift"]`.
 
 ---
 
-## 3. Privacy & Governance (`Utils/privacy.py`)
+## 3. Exploratory Data Analysis & Outlier Diagnostics (`utils/eda_logic.py`)
 
-### `detect_sensitive_columns(df: pd.DataFrame) -> dict[str, str]`
-Scans DataFrame headers and sampled values to identify PII, credentials, and keys.
-- **Returns:** Dictionary mapping flagged column names to reason strings (e.g. `{"customer_id": "identifier token", "email_addr": "email-like values"}`).
+### `compute_outlier_summary(df: pd.DataFrame, numeric_cols: list[str] | None = None, k: float = 1.5) -> pd.DataFrame`
+Computes comprehensive distribution and outlier diagnostics across numerical features.
+- **Parameters:**
+  - `df`: Target `pd.DataFrame`.
+  - `numeric_cols`: Optional list of numerical column names.
+  - `k`: Tukey fence multiplier (typically `1.5` for standard outliers, `3.0` for extreme).
+- **Returns:** DataFrame summarizing `count`, `missing`, `mean`, `std`, `min`, `max`, `skewness`, `kurtosis`, `distribution_shape`, `iqr`, `tukey_lower`, `tukey_upper`, `outlier_count_tukey`, `outlier_pct_tukey`, and `outlier_count_zscore`.
 
-### `apply_exclusions(df: pd.DataFrame, excluded_cols: list[str]) -> tuple[pd.DataFrame, bool]`
-Strips specified columns from a DataFrame before passing it to AI prompts.
-- **Returns:** `(filtered_df, success_bool)`.
+### `calculate_vif(df: pd.DataFrame, numeric_cols: list[str]) -> pd.DataFrame`
+Computes the Variance Inflation Factor matrix for numerical features to diagnose multicollinearity.
+- **Returns:** DataFrame with `Feature` and `VIF` columns, flagged when $\text{VIF} \ge 10.0$.
 
 ---
 
-## 4. Dataset Drift & Statistical Comparison (`Utils/compare_logic.py`)
+## 4. Dataset Drift & Statistical Comparison (`utils/compare_logic.py`)
 
 ### `column_drift_rows(df_a: pd.DataFrame, df_b: pd.DataFrame) -> list[dict[str, Any]]`
 Evaluates statistical drift across shared columns of two datasets.
@@ -118,26 +140,9 @@ Computes structural schema diff between two datasets: common columns, added colu
 
 ---
 
-## 5. ReportLab PDF Generation (`Utils/PDF.py`)
+## 5. ReportLab PDF Generation (`utils/pdf.py`)
 
 ### `generate_pdf_report(df: pd.DataFrame, dataset_name: str, report_title: str, ...) -> bytes`
 Compiles an executive analytical PDF report.
 - **Sections:** Dataset hygiene gauge, descriptive numerical summary, IQR outlier bounds, categorical frequency breakdowns, correlation matrices, and optional high-DPI matplotlib figures.
 - **Returns:** Raw binary bytes of the compiled PDF.
-
----
-
-## 6. Upcoming Computational Interfaces (`Utils/feature_engineering.py` & `Utils/eda_logic.py`)
-
-The platform extracts presentation-decoupled algorithms into pure domain interfaces:
-
-### `Utils.feature_engineering`
-- `scale_features(df: pd.DataFrame, columns: list[str], method: str) -> tuple[pd.DataFrame, list[str]]`
-- `encode_features(df: pd.DataFrame, columns: list[str], method: str, max_categories: int = 15) -> tuple[pd.DataFrame, list[str]]`
-- `transform_power(df: pd.DataFrame, columns: list[str], method: str) -> tuple[pd.DataFrame, list[str]]`
-- `create_interaction_feature(df: pd.DataFrame, col_a: str, col_b: str, operation: str) -> tuple[pd.DataFrame, str]`
-- `compute_mutual_information(df: pd.DataFrame, target_col: str, feature_cols: list[str], problem_type: str) -> pd.DataFrame`
-
-### `Utils.eda_logic`
-- `calculate_vif(df: pd.DataFrame, numeric_cols: list[str]) -> pd.DataFrame`
-- `detect_tukey_outliers(df: pd.DataFrame, column: str, k: float = 1.5) -> dict[str, Any]`
