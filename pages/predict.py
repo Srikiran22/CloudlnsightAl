@@ -11,6 +11,7 @@ from utils.dataset_ui import (
 )
 from utils.logsys import get_logger
 from utils.ml import (
+    generate_standalone_inference_code,
     list_saved_models,
     load_trained_model,
     predict_with_model,
@@ -106,6 +107,18 @@ with st.container(border=True):
         req_features = bundle.get("feature_cols", [])
         if req_features:
             st.caption(f"Required predictor features ({len(req_features)}): {', '.join(f'`{f}`' for f in req_features)}")
+
+        with st.expander("Export Standalone Python Inference Script", expanded=False):
+            st.caption("Generate a self-contained Python script to score datasets offline using this model artifact.")
+            script_code = generate_standalone_inference_code(bundle, model_rel_path=chosen_model_file)
+            st.code(script_code, language="python")
+            st.download_button(
+                "Download Inference Script (.py)",
+                data=script_code,
+                file_name=f"predict_{Path(chosen_model_file).stem}.py",
+                mime="text/x-python",
+                key="btn_download_standalone_script_predict",
+            )
 
 with st.container(border=True):
     section_card_header(

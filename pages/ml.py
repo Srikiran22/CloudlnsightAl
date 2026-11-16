@@ -17,6 +17,7 @@ from utils.logsys import get_logger
 from utils.ml import (
     detect_problem_type,
     evaluate_threshold_metrics,
+    generate_standalone_inference_code,
     is_likely_id_column,
     save_trained_model,
     train_and_evaluate_model,
@@ -492,3 +493,18 @@ with st.container(border=True):
             except Exception as exc:
                 logger.debug("suppressed error in %s: %s", "open_batch_scoring_link", exc)
             st.caption("Use saved models to score new datasets with drift checks and CSV export.")
+
+        with st.expander("Export Standalone Python Inference Script", expanded=False):
+            st.caption("Generate a self-contained Python script to run offline batch predictions without Streamlit.")
+            script_code = generate_standalone_inference_code(
+                current_results,
+                model_rel_path=f"models/{save_name}.joblib"
+            )
+            st.code(script_code, language="python")
+            st.download_button(
+                "Download Standalone Inference Script (.py)",
+                data=script_code,
+                file_name=f"predict_{save_name}.py",
+                mime="text/x-python",
+                key="btn_download_standalone_script_ml",
+            )
