@@ -7,9 +7,9 @@ from pathlib import Path
 import pandas as pd
 from streamlit.testing.v1 import AppTest
 
-from Utils import paths
-from Utils.ML import detect_problem_type
-from Utils.paths import ensure_project_directories
+from utils import paths
+from utils.ml import detect_problem_type
+from utils.paths import ensure_project_directories
 
 
 class TestPageSmoke(unittest.TestCase):
@@ -17,19 +17,19 @@ class TestPageSmoke(unittest.TestCase):
 
     PAGES = [
         "App.py",
-        "Pages/Upload.py",
-        "Pages/FeatureEngineering.py",
-        "Pages/AIConverter.py",
-        "Pages/Cleaning.py",
-        "Pages/Compare.py",
-        "Pages/EDA.py",
-        "Pages/Visualization.py",
-        "Pages/ML.py",
-        "Pages/Predict.py",
-        "Pages/AI.py",
-        "Pages/AIChat.py",
-        "Pages/Report.py",
-        "Pages/Dashboard.py",
+        "pages/upload.py",
+        "pages/feature_engineering.py",
+        "pages/aiconverter.py",
+        "pages/cleaning.py",
+        "pages/compare.py",
+        "pages/eda.py",
+        "pages/visualization.py",
+        "pages/ml.py",
+        "pages/predict.py",
+        "pages/ai.py",
+        "pages/aichat.py",
+        "pages/report.py",
+        "pages/dashboard.py",
     ]
 
     @classmethod
@@ -88,7 +88,7 @@ class TestPageRegression(unittest.TestCase):
         self.assertEqual(detect_problem_type(null_df, "col"), "Regression")
 
     def test_ml_page_handles_empty_dataframe_without_exception(self):
-        """Pages/ML.py must display a warning and stop gracefully on empty DataFrame without KeyError: None."""
+        """pages/ml.py must display a warning and stop gracefully on empty DataFrame without KeyError: None."""
         ml_script = str(Path(__file__).resolve().parent.parent / "Pages" / "ML.py")
         at = AppTest.from_file(ml_script, default_timeout=20)
         at.session_state["current_df"] = pd.DataFrame()
@@ -98,7 +98,7 @@ class TestPageRegression(unittest.TestCase):
         self.assertEqual(
             len(at.exception),
             0,
-            f"Pages/ML.py raised unhandled exceptions on empty df: {[e.message for e in at.exception]}",
+            f"pages/ml.py raised unhandled exceptions on empty df: {[e.message for e in at.exception]}",
         )
         self.assertTrue(
             any("at least 2 columns and at least 2 rows" in w.value for w in at.warning),
@@ -106,7 +106,7 @@ class TestPageRegression(unittest.TestCase):
         )
 
     def test_ml_page_handles_single_column_dataframe_without_exception(self):
-        """Pages/ML.py must handle single-column dataframe safely without crashing."""
+        """pages/ml.py must handle single-column dataframe safely without crashing."""
         ml_script = str(Path(__file__).resolve().parent.parent / "Pages" / "ML.py")
         at = AppTest.from_file(ml_script, default_timeout=20)
         at.session_state["current_df"] = pd.DataFrame({"only_col": [1, 2, 3, 4]})
@@ -116,7 +116,7 @@ class TestPageRegression(unittest.TestCase):
         self.assertEqual(
             len(at.exception),
             0,
-            f"Pages/ML.py raised unhandled exceptions on single-col df: {[e.message for e in at.exception]}",
+            f"pages/ml.py raised unhandled exceptions on single-col df: {[e.message for e in at.exception]}",
         )
         self.assertTrue(
             any("at least 2 columns and at least 2 rows" in w.value for w in at.warning),
@@ -124,7 +124,7 @@ class TestPageRegression(unittest.TestCase):
         )
 
     def test_ml_page_headless_boot_with_non_tabular_disk_file(self):
-        """Pages/ML.py must boot cleanly even if Datasets/ contains an unparseable or 0-column CSV."""
+        """pages/ml.py must boot cleanly even if Datasets/ contains an unparseable or 0-column CSV."""
         ml_script = str(Path(__file__).resolve().parent.parent / "Pages" / "ML.py")
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)

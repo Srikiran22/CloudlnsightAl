@@ -8,21 +8,21 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from Utils.Gemini import (
+from utils.gemini import (
     DEFAULT_GEMINI_MODEL,
     GEMINI_MODELS,
     resolve_gemini_model,
 )
-from Utils.ML import (
+from utils.ml import (
     load_trained_model,
     save_trained_model,
     train_and_evaluate_model,
 )
-from Utils.privacy import (
+from utils.privacy import (
     detect_sensitive_columns,
     detect_sensitive_text,
 )
-from Utils.secrets import drop
+from utils.secrets import drop
 
 
 class TestAuditRegressions(unittest.TestCase):
@@ -157,7 +157,7 @@ class TestAuditRegressions(unittest.TestCase):
 
     def test_csv_export_sanitization(self):
         """P1 & P2: sanitize_for_csv_export neutralizes formula injection for exports."""
-        from Utils.paths import sanitize_for_csv_export
+        from utils.paths import sanitize_for_csv_export
         df = pd.DataFrame({"col": ["=SUM(A1:A2)", "clean_val"]})
         sanitized = sanitize_for_csv_export(df)
         csv_text = sanitized.to_csv(index=False)
@@ -171,10 +171,10 @@ class TestAuditRegressions(unittest.TestCase):
         self.assertEqual(resolve_gemini_model("gemini-3.5-flash"), "gemini-3.6-flash")
 
     def test_below_baseline_verdict_rendered_in_ml_page(self):
-        """P1: Pages/ML.py must display Below baseline warning when accuracy < majority class baseline."""
+        """P1: pages/ml.py must display Below baseline warning when accuracy < majority class baseline."""
         from streamlit.testing.v1 import AppTest
 
-        from Utils.dataset_ui import dataframe_fingerprint
+        from utils.dataset_ui import dataframe_fingerprint
         ml_script = str(Path(__file__).resolve().parent.parent / "Pages" / "ML.py")
         at = AppTest.from_file(ml_script, default_timeout=30)
         df = pd.DataFrame({
@@ -210,7 +210,7 @@ class TestAuditRegressions(unittest.TestCase):
     @patch("Utils.ML.list_saved_models")
     @patch("Utils.ML.load_trained_model")
     def test_predict_displays_actual_target_column(self, mock_load, mock_list):
-        """P1: Pages/Predict.py must display actual target name instead of generic 'Target'."""
+        """P1: pages/predict.py must display actual target name instead of generic 'Target'."""
         from streamlit.testing.v1 import AppTest
         mock_list.return_value = [("test_model.joblib", "Trusted")]
         mock_load.return_value = {
@@ -234,7 +234,7 @@ class TestAuditRegressions(unittest.TestCase):
 
     def test_prediction_invalidation_on_content_change_without_shape_change(self):
         """P1: Altering a single cell value without changing shape or filename must change the prediction fingerprint and invalidate cached predictions."""
-        from Utils.dataset_ui import dataframe_fingerprint
+        from utils.dataset_ui import dataframe_fingerprint
         df_orig = pd.DataFrame({"feat": [1.0, 2.0, 3.0, 4.0], "label": [0, 1, 0, 1]})
         fp_orig = dataframe_fingerprint(df_orig)
 
@@ -262,7 +262,7 @@ class TestAuditRegressions(unittest.TestCase):
         """P1: style_plotly_fig applies dark template and transparent background in dark mode."""
         import plotly.express as px
 
-        from Utils.theme import style_plotly_fig
+        from utils.theme import style_plotly_fig
         fig = px.scatter(x=[1, 2], y=[3, 4])
         styled = style_plotly_fig(fig)
         self.assertEqual(styled.layout.paper_bgcolor, "rgba(0,0,0,0)")
@@ -271,7 +271,7 @@ class TestAuditRegressions(unittest.TestCase):
 
     def test_theme_defaults_to_dark_base(self):
         """P1: Default theme base is dark mode."""
-        from Utils.theme import current_theme_base, is_dark
+        from utils.theme import current_theme_base, is_dark
         self.assertEqual(current_theme_base(), "dark")
         self.assertTrue(is_dark())
 
@@ -302,7 +302,7 @@ class TestAuditRegressions(unittest.TestCase):
         """P1: Predict.py displays training-data overlap warning when scoring dataset matches training fingerprint."""
         from streamlit.testing.v1 import AppTest
 
-        from Utils.dataset_ui import dataframe_fingerprint
+        from utils.dataset_ui import dataframe_fingerprint
 
         mock_list.return_value = [("test_model.joblib", "Trusted")]
         scoring_df = pd.DataFrame({"feat": [1, 2, 3], "churned": [0, 1, 0]})
@@ -369,8 +369,8 @@ class TestAuditRegressions(unittest.TestCase):
 
     def test_ai_request_boundary_excludes_sensitive_columns_and_values(self):
         """Phase 3: Outbound prompt construction strips excluded columns and values from request context."""
-        from Utils.Gemini import get_dataset_summary_context
-        from Utils.privacy import apply_exclusions
+        from utils.gemini import get_dataset_summary_context
+        from utils.privacy import apply_exclusions
 
         df = pd.DataFrame({
             "customer_id": ["CUST_SECRET_999888", "CUST_SECRET_777666"],
@@ -405,7 +405,7 @@ class TestAuditRegressions(unittest.TestCase):
         """Phase 2: Model cache fingerprint binds to HMAC-SHA256 signature when present."""
         import tempfile
 
-        import Pages.Predict as predict_mod
+        import pages.Predict as predict_mod
 
         # Test with a mock signature file
         with tempfile.TemporaryDirectory() as tmpdir:

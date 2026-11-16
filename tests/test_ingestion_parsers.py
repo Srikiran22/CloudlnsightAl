@@ -11,15 +11,15 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from Utils.AIConvert import build_conversion_prompt
-from Utils.Charts import create_pie_treemap_plot
-from Utils.Gemini import _classify
-from Utils.ML import (
+from utils.ai_convert import build_conversion_prompt
+from utils.charts import create_pie_treemap_plot
+from utils.gemini import _classify
+from utils.ml import (
     _datetime_to_epoch,
     save_trained_model,
     train_and_evaluate_model,
 )
-from Utils.paths import (
+from utils.paths import (
     MAX_INGESTION_COLUMNS,
     MAX_INGESTION_ROWS,
     MAX_TEXT_EXTRACT_CHARS,
@@ -34,8 +34,8 @@ from Utils.paths import (
     list_dataset_files,
     read_tabular,
 )
-from Utils.PDF import generate_pdf_report
-from Utils.privacy import detect_sensitive_columns
+from utils.pdf import generate_pdf_report
+from utils.privacy import detect_sensitive_columns
 
 
 class PathsHardeningTests(unittest.TestCase):
@@ -439,11 +439,11 @@ class PDFHardeningTests(unittest.TestCase):
 import unittest
 from types import SimpleNamespace
 
-from Utils.AIConvert import parse_ai_csv
-from Utils.Charts import create_bar_count_plot
-from Utils.compare_logic import column_drift_rows, schema_diff
-from Utils.paths import normalize_and_deduplicate_columns
-from Utils.secrets import drop, release
+from utils.ai_convert import parse_ai_csv
+from utils.charts import create_bar_count_plot
+from utils.compare_logic import column_drift_rows, schema_diff
+from utils.paths import normalize_and_deduplicate_columns
+from utils.secrets import drop, release
 
 
 class XMLMultiEncodingHardeningTests(unittest.TestCase):
@@ -732,12 +732,12 @@ class FingerprintFreshnessAndCacheInvalidationTests(unittest.TestCase):
     def test_results_match_active_detects_content_replacement(self):
         import os
 
-        from Utils.dataset_ui import (
+        from utils.dataset_ui import (
             dataset_fingerprint,
             invalidate_dataset_cache,
             results_match_active,
         )
-        from Utils.paths import DATASETS_DIR
+        from utils.paths import DATASETS_DIR
         test_file = DATASETS_DIR / "temp_fresh_probe.csv"
         test_file.write_text("x,y\n1,2", encoding="utf-8")
         try:
@@ -760,7 +760,7 @@ class FingerprintFreshnessAndCacheInvalidationTests(unittest.TestCase):
 
 class UnhashableCellOptimizationTests(unittest.TestCase):
     def test_pure_numeric_columns_fast_path(self):
-        from Utils.paths import _sanitize_unhashable_cells
+        from utils.paths import _sanitize_unhashable_cells
         df = pd.DataFrame({"ints": range(10), "floats": [1.1 * i for i in range(10)]})
         # Should return quickly without modifying dtypes
         sanitized = _sanitize_unhashable_cells(df)
@@ -768,7 +768,7 @@ class UnhashableCellOptimizationTests(unittest.TestCase):
         self.assertTrue(pd.api.types.is_float_dtype(sanitized["floats"]))
 
     def test_compound_structures_in_object_columns_serialized(self):
-        from Utils.paths import _sanitize_unhashable_cells
+        from utils.paths import _sanitize_unhashable_cells
         df = pd.DataFrame({"mixed": [{"a": 1}, [2, 3], "plain_str", 42]})
         sanitized = _sanitize_unhashable_cells(df)
         self.assertEqual(sanitized["mixed"].iloc[0], '{"a": 1}')
@@ -859,7 +859,7 @@ class ConcurrencyAndManifestHardeningTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        from Utils.paths import get_unique_filename
+        from utils.paths import get_unique_filename
 
         with tempfile.TemporaryDirectory() as tmpdir:
             target_dir = Path(tmpdir)
@@ -883,7 +883,7 @@ class ConcurrencyAndManifestHardeningTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        from Utils.paths import record_conversion
+        from utils.paths import record_conversion
 
         with tempfile.TemporaryDirectory() as tmpdir:
             manifest_path = Path(tmpdir) / ".conversions.json"
@@ -910,7 +910,7 @@ class StorageCleanupAndRetentionTests(unittest.TestCase):
         import time
         from pathlib import Path
 
-        from Utils.paths import cleanup_storage
+        from utils.paths import cleanup_storage
 
         with tempfile.TemporaryDirectory() as tmpdir:
             target_dir = Path(tmpdir)
@@ -939,7 +939,7 @@ class StorageCleanupAndRetentionTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        from Utils.paths import cleanup_storage
+        from utils.paths import cleanup_storage
 
         with tempfile.TemporaryDirectory() as tmpdir:
             raw_dir = Path(tmpdir)
@@ -963,14 +963,14 @@ class StorageCleanupAndRetentionTests(unittest.TestCase):
             )
 
     def test_delete_dataset_traversal_protection(self):
-        from Utils.paths import delete_dataset
+        from utils.paths import delete_dataset
         with self.assertRaises(ValueError):
             delete_dataset("../../etc/passwd")
 
 
 class PDFPIIRedactionTests(unittest.TestCase):
     def test_pdf_report_redacts_sensitive_modal_values(self):
-        from Utils.PDF import generate_pdf_report
+        from utils.pdf import generate_pdf_report
         # Create dataset with sensitive SSN column
         df = pd.DataFrame({
             "user_ssn": ["123-45-6789", "123-45-6789", "987-65-4321"],
@@ -989,7 +989,7 @@ class PDFPIIRedactionTests(unittest.TestCase):
 
 class MLInputValidationAndFeatureImportanceTests(unittest.TestCase):
     def test_predict_with_model_validates_numeric_features(self):
-        from Utils.ML import predict_with_model, train_and_evaluate_model
+        from utils.ml import predict_with_model, train_and_evaluate_model
 
         train_df = pd.DataFrame({
             "age": [25, 30, 35, 40, 45, 50],
@@ -1008,7 +1008,7 @@ class MLInputValidationAndFeatureImportanceTests(unittest.TestCase):
             predict_with_model(res, bad_df)
 
     def test_grouped_feature_importances_aggregates_encoded_levels(self):
-        from Utils.ML import train_and_evaluate_model
+        from utils.ml import train_and_evaluate_model
 
         train_df = pd.DataFrame({
             "country": ["US", "UK", "DE", "FR", "US", "DE", "UK", "FR"],
@@ -1029,7 +1029,7 @@ class MLInputValidationAndFeatureImportanceTests(unittest.TestCase):
 
 class AIConversionHardeningTests(unittest.TestCase):
     def test_ai_continuation_prompt_includes_preceding_context(self):
-        from Utils.AIConvert import build_continuation_prompt
+        from utils.ai_convert import build_continuation_prompt
 
         prompt = build_continuation_prompt(
             "chunk 2 text", "test.txt", ["col1", "col2"], 2, 2,
@@ -1041,7 +1041,7 @@ class AIConversionHardeningTests(unittest.TestCase):
 
 class DataHygieneReframingTests(unittest.TestCase):
     def test_hygiene_metrics_returns_heuristic_scores(self):
-        from Utils.quality import hygiene_index, hygiene_metrics, quality_metrics
+        from utils.quality import hygiene_index, hygiene_metrics, quality_metrics
 
         df = pd.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]})
         m = hygiene_metrics(df)

@@ -14,34 +14,34 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from Utils.AIConvert import (
+from utils.ai_convert import (
     MAX_CONVERTED_COLUMNS,
     build_conversion_prompt,
     convert_to_dataframe,
     parse_ai_csv,
 )
-from Utils.batch import merge_frames
-from Utils.Charts import create_scatter_plot
-from Utils.compare_logic import column_drift_rows, schema_diff
-from Utils.Gemini import (
+from utils.batch import merge_frames
+from utils.charts import create_scatter_plot
+from utils.compare_logic import column_drift_rows, schema_diff
+from utils.gemini import (
     MAX_MESSAGE_CHARS,
     GeminiError,
     chat_with_gemini_dataset,
     get_dataset_summary_context,
 )
-from Utils.ML import (
+from utils.ml import (
     detect_problem_type,
     load_trained_model,
     predict_with_model,
     save_trained_model,
     train_and_evaluate_model,
 )
-from Utils.paths import AIConversionRequired, read_tabular, resolve_dataset_path
-from Utils.PDF import generate_pdf_report
-from Utils.Preprocessing import drop_missing_values, fill_missing_values, remove_duplicates
-from Utils.privacy import apply_exclusions, detect_sensitive_columns
-from Utils.quality import quality_index, quality_metrics
-from Utils.secrets import ask, value_of
+from utils.paths import AIConversionRequired, read_tabular, resolve_dataset_path
+from utils.pdf import generate_pdf_report
+from utils.preprocessing import drop_missing_values, fill_missing_values, remove_duplicates
+from utils.privacy import apply_exclusions, detect_sensitive_columns
+from utils.quality import quality_index, quality_metrics
+from utils.secrets import ask, value_of
 
 
 class CoreUtilityTests(unittest.TestCase):
@@ -301,7 +301,7 @@ class AdversarialInputTests(unittest.TestCase):
     def test_pdf_flags_high_cardinality_on_modern_string_dtype(self):
         # pandas >= 3 reads CSV text as StringDtype, not object; the flags
         # must still fire (regression guard for `s.dtype == object` checks)
-        from Utils.PDF import generate_pdf_report
+        from utils.pdf import generate_pdf_report
         rows = "id,mostly_empty\n" + "\n".join(f"u{i}," for i in range(30))
         pdf_bytes = generate_pdf_report(
             pd.read_csv(io.StringIO(rows)),
@@ -441,7 +441,7 @@ class QualityIndexTests(unittest.TestCase):
 
     def test_dashboard_and_pdf_share_one_implementation(self):
         from pathlib import Path
-        dashboard_source = Path("Pages/Dashboard.py").read_text(encoding="utf-8")
+        dashboard_source = Path("pages/dashboard.py").read_text(encoding="utf-8")
         pdf_source = Path("Utils/PDF.py").read_text(encoding="utf-8")
         self.assertIn("quality_metrics(", dashboard_source)
         self.assertIn("quality_metrics(", pdf_source)
@@ -548,7 +548,7 @@ class AIConvertSafetyTests(unittest.TestCase):
             parse_ai_csv(f"{many_cols}\n{one_row}")
 
     def test_oversized_response_rejected_before_parsing(self):
-        from Utils.AIConvert import MAX_PARSE_CHARS, MAX_PARSE_LINES
+        from utils.ai_convert import MAX_PARSE_CHARS, MAX_PARSE_LINES
         with self.assertRaisesRegex(ValueError, "character"):
             parse_ai_csv("a,b\n" + ("x," * (MAX_PARSE_CHARS // 2)) + "y")
         # lines must also fail the fast path (no commas, prose-like header)
@@ -615,19 +615,19 @@ class GeminiErrorClassificationTests(unittest.TestCase):
             type("FakeAPIError", (Exception,), {"status_code": status})()
 
     def test_auth_errors_are_never_retried(self):
-        from Utils.Gemini import _classify
+        from utils.gemini import _classify
         kind, retryable = _classify(self._error_with_status(401))
         self.assertEqual(kind, "auth")
         self.assertFalse(retryable)
 
     def test_rate_limit_and_server_errors_are_retryable(self):
-        from Utils.Gemini import _classify
+        from utils.gemini import _classify
         for status in (429, 500, 503):
             _, retryable = _classify(self._error_with_status(status))
             self.assertTrue(retryable, f"status {status} should be retryable")
 
     def test_timeout_style_errors_map_to_network(self):
-        from Utils.Gemini import _classify
+        from utils.gemini import _classify
         class ReadTimeout(Exception):
             pass
         kind, retryable = _classify(ReadTimeout())
@@ -635,7 +635,7 @@ class GeminiErrorClassificationTests(unittest.TestCase):
         self.assertTrue(retryable)
 
     def test_model_not_found_is_actionable_not_retryable(self):
-        from Utils.Gemini import _classify
+        from utils.gemini import _classify
         kind, retryable = _classify(self._error_with_status(404))
         self.assertEqual(kind, "model_not_found")
         self.assertFalse(retryable)
@@ -655,7 +655,7 @@ class GeminiErrorClassificationTests(unittest.TestCase):
         with patch("Utils.Gemini._generate_once", side_effect=leaky):
             with self.assertLogs("cloudinsight.Gemini", level="WARNING") as captured:
                 with self.assertRaises(GeminiError) as raised:
-                    from Utils.Gemini import _generate_content
+                    from utils.gemini import _generate_content
                     _generate_content(fake_key, "gemini-1.5-flash", "prompt")
 
         self.assertNotIn(fake_key, str(raised.exception))
@@ -668,7 +668,7 @@ class GeminiErrorClassificationTests(unittest.TestCase):
     def test_requests_timeout_is_real_network_retryable(self):
         import requests.exceptions
 
-        from Utils.Gemini import _classify
+        from utils.gemini import _classify
         kind, retryable = _classify(requests.exceptions.ReadTimeout("timed out"))
         self.assertEqual(kind, "network")
         self.assertTrue(retryable)
@@ -686,7 +686,7 @@ class GeminiTimeoutWiringTests(unittest.TestCase):
         return patch.dict(sys.modules, {"google": fake_google, "google.genai": new_sdk})
 
     def test_new_sdk_client_receives_millisecond_timeout(self):
-        from Utils.Gemini import REQUEST_TIMEOUT_SECONDS, _generate_once
+        from utils.gemini import REQUEST_TIMEOUT_SECONDS, _generate_once
         init_kwargs = {}
         calls = []
 
@@ -712,7 +712,7 @@ class GeminiTimeoutWiringTests(unittest.TestCase):
     def test_generate_once_fails_closed_when_genai_not_installed(self):
         import sys
 
-        from Utils.Gemini import GeminiError, _generate_once
+        from utils.gemini import GeminiError, _generate_once
         with patch.dict(sys.modules, {"google.genai": None}), self.assertRaises(GeminiError) as ctx:
             _generate_once("key", "gemini-3.8-flash", "prompt")
         self.assertEqual(ctx.exception.kind, "sdk")
@@ -721,7 +721,7 @@ class GeminiTimeoutWiringTests(unittest.TestCase):
     def test_retry_still_works_after_timeout_change(self):
         import requests.exceptions
 
-        from Utils.Gemini import _generate_content
+        from utils.gemini import _generate_content
         attempts = {"n": 0}
 
         def flaky(api_key, model_name, prompt):
@@ -742,7 +742,7 @@ class GeminiTimeoutWiringTests(unittest.TestCase):
             class Unauthenticated(Exception):
                 pass
 
-        from Utils.Gemini import GeminiError, _generate_content
+        from utils.gemini import GeminiError, _generate_content
         attempts = {"n": 0}
 
         def always_auth(api_key, model_name, prompt):
@@ -759,7 +759,7 @@ class GeminiTimeoutWiringTests(unittest.TestCase):
     def test_backoff_has_jitter_within_bounds(self):
         import time as _time
 
-        from Utils.Gemini import _RETRY_BACKOFF_SECONDS, _retry_delay
+        from utils.gemini import _RETRY_BACKOFF_SECONDS, _retry_delay
         for attempt, base in enumerate(_RETRY_BACKOFF_SECONDS, start=1):
             t0 = _time.perf_counter()
             for _ in range(20):
@@ -770,7 +770,7 @@ class GeminiTimeoutWiringTests(unittest.TestCase):
             self.assertLess(elapsed, 0.5)  # no real sleeping in this helper
 
     def test_generate_once_closes_client_on_exit(self):
-        from Utils.Gemini import _generate_once
+        from utils.gemini import _generate_once
         closed = []
         class MockClient:
             def __init__(self):
@@ -828,7 +828,7 @@ class XMLSecurityTests(unittest.TestCase):
         self.assertLess(time.perf_counter() - t0, 2.0)
 
     def test_safe_stem_blocks_traversal_and_collapses_to_one_component(self):
-        from Utils.paths import safe_stem
+        from utils.paths import safe_stem
         self.assertEqual(safe_stem("../../etc passwd"), "etc passwd")
         self.assertEqual(safe_stem("a/b\\c:d"), "abcd")
         self.assertEqual(safe_stem("..//.."), "model")
@@ -907,8 +907,8 @@ class DatasetIdentityTests(unittest.TestCase):
         import os
         import uuid
 
-        from Utils.dataset_ui import dataset_fingerprint
-        from Utils.paths import DATASETS_DIR
+        from utils.dataset_ui import dataset_fingerprint
+        from utils.paths import DATASETS_DIR
         DATASETS_DIR.mkdir(parents=True, exist_ok=True)
         name = f"_fp_{uuid.uuid4().hex[:8]}.csv"
         path = DATASETS_DIR / name
@@ -930,8 +930,8 @@ class DatasetIdentityTests(unittest.TestCase):
         import time as _time
         import uuid
 
-        from Utils.dataset_ui import dataset_fingerprint, results_match_active
-        from Utils.paths import DATASETS_DIR
+        from utils.dataset_ui import dataset_fingerprint, results_match_active
+        from utils.paths import DATASETS_DIR
         DATASETS_DIR.mkdir(parents=True, exist_ok=True)
         name = f"_match_{uuid.uuid4().hex[:8]}.csv"
         path = DATASETS_DIR / name
@@ -958,7 +958,7 @@ class DatasetIdentityTests(unittest.TestCase):
 
 class MLResourceGuardTests(unittest.TestCase):
     def test_training_refuses_oversized_workloads_with_advice(self):
-        from Utils import ML
+        from utils import ML
         rows = int(ML.ML_MAX_TRAIN_CELLS / 2) + 10     # half the limit, one feature
         df = pd.DataFrame({
             "f": range(rows),
@@ -972,7 +972,7 @@ class MLResourceGuardTests(unittest.TestCase):
                 )
 
     def test_normal_sizes_train_unchanged(self):
-        from Utils import ML
+        from utils import ML
         df = pd.DataFrame({
             "f": range(40),
             "bin": [i % 2 for i in range(40)],
@@ -986,13 +986,13 @@ class MLResourceGuardTests(unittest.TestCase):
 
 class PDFQualityFlagUnitTests(unittest.TestCase):
     def test_high_cardinality_flag_fires_on_string_dtype(self):
-        from Utils.PDF import _quality_flags_for_column
+        from utils.pdf import _quality_flags_for_column
         series = pd.Series([f"user{i}" for i in range(30)])
         self.assertIn("Possible ID/high-cardinality",
                       _quality_flags_for_column(series))
 
     def test_all_flag_branches(self):
-        from Utils.PDF import _quality_flags_for_column
+        from utils.pdf import _quality_flags_for_column
         mostly_empty = pd.Series([None] * 8 + [1])
         self.assertIn("High missingness", _quality_flags_for_column(mostly_empty))
         constant = pd.Series(["same"] * 10)
@@ -1009,8 +1009,8 @@ class DatasetCacheBehaviorTests(unittest.TestCase):
     def test_row_limits_apply_without_breaking_full_load(self):
         import uuid
 
-        from Utils.dataset_ui import load_dataset_cached
-        from Utils.paths import DATASETS_DIR
+        from utils.dataset_ui import load_dataset_cached
+        from utils.paths import DATASETS_DIR
         DATASETS_DIR.mkdir(parents=True, exist_ok=True)
         name = f"_cache_probe_{uuid.uuid4().hex[:8]}.csv"
         path = DATASETS_DIR / name
@@ -1054,7 +1054,7 @@ class SessionStateContractTests(unittest.TestCase):
     def test_init_session_state_provides_safe_defaults(self):
         fake_st = SimpleNamespace(session_state={})
         with patch("Utils.dataset_ui.st", fake_st):
-            from Utils.dataset_ui import init_session_state, set_active_dataset
+            from utils.dataset_ui import init_session_state, set_active_dataset
             init_session_state()
             self.assertIsNone(fake_st.session_state["current_df"])
             self.assertIsNone(fake_st.session_state["dataset_name"])
@@ -1065,7 +1065,7 @@ class SessionStateContractTests(unittest.TestCase):
     def test_file_named_like_the_session_label_still_loads_as_a_file(self):
         # regression: startswith("Active Session") used to hijack a stored
         # file whose name begins with the session label and return no frame
-        from Utils import dataset_ui
+        from utils import dataset_ui
 
         session_df = pd.DataFrame({"a": [1]})
         loaded = []
@@ -1120,7 +1120,7 @@ class ModelProvenanceTests(unittest.TestCase):
             self.assertNotIn("sklearn_version_mismatch", bundle)
 
     def test_version_mismatch_is_flagged_on_load(self):
-        from Utils.ML import sign_model_artifact
+        from utils.ml import sign_model_artifact
         with tempfile.TemporaryDirectory() as tmp:
             path = save_trained_model(self._train(), "stale", directory=tmp)
             bundle = joblib.load(path)
@@ -1145,17 +1145,17 @@ class ModelProvenanceTests(unittest.TestCase):
 
 import unittest
 
-from Utils.dataset_ui import (
+from utils.dataset_ui import (
     dataframe_fingerprint,
     select_working_dataset,
 )
-from Utils.paths import (
+from utils.paths import (
     MAX_TEXT_EXTRACT_CHARS,
     MAX_XML_DEPTH,
     get_dataset_row_count,
     get_unique_filename,
 )
-from Utils.secrets import temporary_secret
+from utils.secrets import temporary_secret
 
 
 class PrivacyFailClosedTests(unittest.TestCase):
@@ -1449,7 +1449,7 @@ class RowCountEdgeCaseTests(unittest.TestCase):
 
 class FingerprintCacheRealLookupTests(unittest.TestCase):
     def test_real_cache_hit_does_not_reread_unchanged_file(self):
-        from Utils.dataset_ui import dataset_fingerprint, invalidate_dataset_cache
+        from utils.dataset_ui import dataset_fingerprint, invalidate_dataset_cache
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             fpath = tmp_path / "probe.csv"
@@ -1467,7 +1467,7 @@ class FingerprintCacheRealLookupTests(unittest.TestCase):
                     self.assertEqual(fp1, fp2)
 
     def test_cache_misses_and_recomputes_after_file_modification(self):
-        from Utils.dataset_ui import dataset_fingerprint, invalidate_dataset_cache
+        from utils.dataset_ui import dataset_fingerprint, invalidate_dataset_cache
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             fpath = tmp_path / "probe_mod.csv"
@@ -1482,7 +1482,7 @@ class FingerprintCacheRealLookupTests(unittest.TestCase):
                 self.assertNotEqual(fp1, fp2)
 
     def test_same_size_same_mtime_invalidation_and_force_refresh(self):
-        from Utils.dataset_ui import dataset_fingerprint, invalidate_dataset_cache
+        from utils.dataset_ui import dataset_fingerprint, invalidate_dataset_cache
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             fpath = tmp_path / "probe_same.csv"
@@ -1516,7 +1516,7 @@ class FingerprintCacheRealLookupTests(unittest.TestCase):
 
 class CleaningUploadDiskCollisionTests(unittest.TestCase):
     def test_upload_with_same_name_as_disk_file_uses_dataframe_fingerprint(self):
-        from Utils.dataset_ui import dataframe_fingerprint, dataset_fingerprint
+        from utils.dataset_ui import dataframe_fingerprint, dataset_fingerprint
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             disk_file = tmp_path / "data.csv"
@@ -1532,7 +1532,7 @@ class CleaningUploadDiskCollisionTests(unittest.TestCase):
 
 class MLInMemoryDatasetTests(unittest.TestCase):
     def test_ml_results_match_in_memory_dataset_via_dataframe_fingerprint(self):
-        from Utils.dataset_ui import dataframe_fingerprint, results_match_active
+        from utils.dataset_ui import dataframe_fingerprint, results_match_active
         df = pd.DataFrame({"feat": [1, 2, 3], "target": [0, 1, 0]})
         fp = dataframe_fingerprint(df)
         results = {
@@ -1547,7 +1547,7 @@ class MLInMemoryDatasetTests(unittest.TestCase):
 
 class GeminiClientLifecycleTests(unittest.TestCase):
     def test_gemini_client_closes_on_success(self):
-        from Utils.Gemini import _generate_once
+        from utils.gemini import _generate_once
         closed = []
         class MockClient:
             class models:
@@ -1563,7 +1563,7 @@ class GeminiClientLifecycleTests(unittest.TestCase):
             self.assertEqual(len(closed), 1)
 
     def test_gemini_client_closes_on_failure(self):
-        from Utils.Gemini import _generate_once
+        from utils.gemini import _generate_once
         closed = []
         class MockClient:
             class models:
@@ -1581,7 +1581,7 @@ class GeminiClientLifecycleTests(unittest.TestCase):
 
 class ConversionManifestIntegrityTests(unittest.TestCase):
     def test_output_tampering_invalidates_conversion_cache(self):
-        from Utils.paths import get_valid_conversion, record_conversion
+        from utils.paths import get_valid_conversion, record_conversion
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             manifest = tmp_path / ".conversions.json"
@@ -1617,7 +1617,7 @@ class ConversionManifestIntegrityTests(unittest.TestCase):
             self.assertIsNone(tampered)
 
     def test_conversion_lookup_does_not_reuse_prompted_conversion_when_unprompted(self):
-        from Utils.paths import get_valid_conversion, record_conversion
+        from utils.paths import get_valid_conversion, record_conversion
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             manifest = tmp_path / ".conversions.json"
@@ -1704,7 +1704,7 @@ class AIReportProvenanceTests(unittest.TestCase):
 
 class SingleReportChartRowBoundTests(unittest.TestCase):
     def test_pdf_chart_generation_bounds_rows(self):
-        from Utils.PDF import generate_pdf_report
+        from utils.pdf import generate_pdf_report
         large_df = pd.DataFrame({
             "a": list(range(30_000)),
             "b": [x * 1.5 for x in range(30_000)],
@@ -1719,7 +1719,7 @@ class SingleReportChartRowBoundTests(unittest.TestCase):
         self.assertGreater(len(pdf_bytes), 1000)
 
     def test_pdf_report_distinguishes_source_and_analyzed_rows(self):
-        from Utils.PDF import generate_pdf_report
+        from utils.pdf import generate_pdf_report
         sample_df = pd.DataFrame({"col1": [1, 2, 3], "col2": [4, 5, 6]})
         pdf_bytes = generate_pdf_report(
             sample_df,
@@ -1734,7 +1734,7 @@ class SingleReportChartRowBoundTests(unittest.TestCase):
 
 class CSVFormulaHardeningTests(unittest.TestCase):
     def test_csv_formula_injection_sanitization(self):
-        from Utils.paths import sanitize_for_csv_export
+        from utils.paths import sanitize_for_csv_export
         df = pd.DataFrame({
             "formula_cmd": ["=cmd|' /C calc'!A0", "@SUM(A1:A10)", "+formula", "-formula"],
             "numeric_neg": ["-15", "-42.5", "-1e4", -99],
@@ -1759,7 +1759,7 @@ class CSVFormulaHardeningTests(unittest.TestCase):
         self.assertEqual(sanitized["control_chars"].iloc[2], "safe string")
 
     def test_formula_injection_and_legitimate_numeric_values(self):
-        from Utils.paths import _sanitize_formula_val
+        from utils.paths import _sanitize_formula_val
         cases = [
             ("=SUM(A1:A2)", "'=SUM(A1:A2)"),
             ("+123", "+123"),
@@ -1811,7 +1811,7 @@ class HTMLSpanHandlingTests(unittest.TestCase):
 
 class MLBundleVersionTests(unittest.TestCase):
     def test_newer_bundle_version_rejected(self):
-        from Utils.ML import load_trained_model
+        from utils.ml import load_trained_model
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             m_path = tmp_path / "future_model.joblib"
@@ -1821,7 +1821,7 @@ class MLBundleVersionTests(unittest.TestCase):
                 load_trained_model(m_path, allowed_dir=tmp_path, trusted=True)
 
     def test_legacy_bundle_without_version_defaults_to_v1_and_succeeds(self):
-        from Utils.ML import load_trained_model
+        from utils.ml import load_trained_model
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             m_path = tmp_path / "legacy_v1_model.joblib"
@@ -1831,7 +1831,7 @@ class MLBundleVersionTests(unittest.TestCase):
             self.assertIn("pipeline", bundle)
 
     def test_invalid_bundle_version_rejected(self):
-        from Utils.ML import load_trained_model
+        from utils.ml import load_trained_model
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             m_path = tmp_path / "invalid_model.joblib"

@@ -22,11 +22,11 @@ from pathlib import Path
 import pandas as pd
 from streamlit.testing.v1 import AppTest
 
-from Utils.AIConvert import parse_ai_csv
-from Utils.Charts import create_bar_count_plot, create_pie_treemap_plot
-from Utils.ML import train_and_evaluate_model
-from Utils.paths import DATASETS_DIR, MAX_COMBINED_ROWS
-from Utils.paths import compute_upload_signature as _compute_upload_signature
+from utils.ai_convert import parse_ai_csv
+from utils.charts import create_bar_count_plot, create_pie_treemap_plot
+from utils.ml import train_and_evaluate_model
+from utils.paths import DATASETS_DIR, MAX_COMBINED_ROWS
+from utils.paths import compute_upload_signature as _compute_upload_signature
 
 
 class UploadSignatureAdversarialTests(unittest.TestCase):
@@ -380,7 +380,7 @@ class UploadPostAICombinedRowLimitTests(unittest.TestCase):
 
         # Ensure the resource check prevents merge_frames from being invoked
         with unittest.mock.patch("Utils.batch.merge_frames") as mock_merge:
-            # Emulate logic from Pages/Upload.py
+            # Emulate logic from pages/Upload.py
             merged_df = None if total_rows > MAX_COMBINED_ROWS else mock_merge(parsed)
             self.assertIsNone(merged_df)
             mock_merge.assert_not_called()
@@ -392,11 +392,11 @@ class UploadSessionStateLifecycleTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
         self.orig_datasets_dir = DATASETS_DIR
-        from Utils import paths
+        from utils import paths
         paths.DATASETS_DIR = Path(self.temp_dir)
 
     def tearDown(self):
-        from Utils import paths
+        from utils import paths
         paths.DATASETS_DIR = self.orig_datasets_dir
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
@@ -433,11 +433,11 @@ class UploadMixedBatchLifecycleTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
         self.orig_datasets_dir = DATASETS_DIR
-        from Utils import paths
+        from utils import paths
         paths.DATASETS_DIR = Path(self.temp_dir)
 
     def tearDown(self):
-        from Utils import paths
+        from utils import paths
         paths.DATASETS_DIR = self.orig_datasets_dir
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
@@ -525,7 +525,7 @@ class UploadMixedBatchLifecycleTests(unittest.TestCase):
 import unittest
 import unittest.mock
 
-from Utils.paths import (
+from utils.paths import (
     MAX_INGESTION_ROWS,
     read_tabular,
 )
@@ -827,12 +827,12 @@ class OversizedMergeRerunAppTest(unittest.TestCase):
     def setUp(self):
         import tempfile
 
-        from Utils import paths
+        from utils import paths
         self.orig_datasets_dir = paths.DATASETS_DIR
         self.temp_dir = tempfile.mkdtemp()
         paths.DATASETS_DIR = Path(self.temp_dir)
         try:
-            import Pages.Upload
+            import pages.Upload
             self.orig_upload_datasets_dir = getattr(Pages.Upload, "DATASETS_DIR", self.orig_datasets_dir)
             Pages.Upload.DATASETS_DIR = Path(self.temp_dir)
         except Exception:
@@ -841,11 +841,11 @@ class OversizedMergeRerunAppTest(unittest.TestCase):
     def tearDown(self):
         import shutil
 
-        from Utils import paths
+        from utils import paths
         paths.DATASETS_DIR = self.orig_datasets_dir
         if self.orig_upload_datasets_dir is not None:
             try:
-                import Pages.Upload
+                import pages.Upload
                 Pages.Upload.DATASETS_DIR = self.orig_upload_datasets_dir
             except Exception:
                 pass

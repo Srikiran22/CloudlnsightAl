@@ -13,11 +13,11 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from Utils.Charts import create_histogram_plot
-from Utils.compare_logic import benjamini_hochberg_correction, column_drift_rows
-from Utils.dataset_ui import save_and_activate_dataset
-from Utils.Gemini import generate_executive_insights
-from Utils.ML import (
+from utils.charts import create_histogram_plot
+from utils.compare_logic import benjamini_hochberg_correction, column_drift_rows
+from utils.dataset_ui import save_and_activate_dataset
+from utils.gemini import generate_executive_insights
+from utils.ml import (
     _datetime_to_epoch,
     _get_or_create_model_signing_key,
     load_trained_model,
@@ -27,7 +27,7 @@ from Utils.ML import (
     train_and_evaluate_model,
     verify_model_artifact_signature,
 )
-from Utils.paths import (
+from utils.paths import (
     _detect_csv_delimiter,
     cleanup_storage,
     get_dataset_row_count,
@@ -38,10 +38,10 @@ from Utils.paths import (
     safe_stem,
     sanitize_for_csv_export,
 )
-from Utils.PDF import generate_pdf_report, validate_report_template
-from Utils.Preprocessing import fill_missing_values
-from Utils.sampling import sample_for_analysis, sample_for_visualization
-from Utils.theme import CHART_PALETTE, SEMANTIC_TOKENS, get_semantic_tokens
+from utils.pdf import generate_pdf_report, validate_report_template
+from utils.preprocessing import fill_missing_values
+from utils.sampling import sample_for_analysis, sample_for_visualization
+from utils.theme import CHART_PALETTE, SEMANTIC_TOKENS, get_semantic_tokens
 
 
 def _malicious_trigger():
@@ -390,7 +390,7 @@ class SecurityBoundaryPipelineTests(unittest.TestCase):
     # -------------------------------------------------------------------------
     def test_ai_context_lru_eviction(self):
         """AI chat context evicts oldest conversation when exceeding MAX_AI_CONTEXTS."""
-        from Utils.Gemini import MAX_AI_CONTEXTS, prune_ai_contexts
+        from utils.gemini import MAX_AI_CONTEXTS, prune_ai_contexts
 
         state = {}
         # Add 15 contexts
@@ -748,21 +748,21 @@ class SecurityBoundaryPipelineTests(unittest.TestCase):
 
 import unittest
 
-from Utils.AIConvert import parse_ai_csv, reconcile_chunk_frames
-from Utils.Charts import (
+from utils.ai_convert import parse_ai_csv, reconcile_chunk_frames
+from utils.charts import (
     create_bar_count_plot,
     create_pie_treemap_plot,
     create_scatter_plot,
     downsample_timeseries,
 )
-from Utils.compare_logic import _is_numeric_series
-from Utils.dataset_ui import (
+from utils.compare_logic import _is_numeric_series
+from utils.dataset_ui import (
     BoundedDatasetMemoryCache,
     dataframe_fingerprint,
     results_match_active,
 )
-from Utils.Gemini import get_dataset_summary_context
-from Utils.paths import (
+from utils.gemini import get_dataset_summary_context
+from utils.paths import (
     delete_dataset,
     get_unique_filename,
     get_valid_conversion,
@@ -1052,7 +1052,7 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
     # Phase 5: PDF population integrity updates analyzed_rows on sampling
     # -------------------------------------------------------------------------
     def test_pdf_sampling_updates_analyzed_rows(self):
-        from Utils.PDF import generate_pdf_report
+        from utils.pdf import generate_pdf_report
         df = pd.DataFrame({"a": range(55_000), "b": range(55_000)})
         pdf_bytes = generate_pdf_report(
             df=df,
@@ -1082,7 +1082,7 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
         import os
         from unittest.mock import patch
 
-        from Utils.dataset_ui import dataset_fingerprint, invalidate_dataset_cache
+        from utils.dataset_ui import dataset_fingerprint, invalidate_dataset_cache
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_p = Path(tmp)
@@ -1154,7 +1154,7 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
         """load_trained_model verifies in-memory bytes directly, preventing TOCTOU file replacement."""
         from sklearn.linear_model import LinearRegression
 
-        from Utils.ML import load_trained_model, save_trained_model
+        from utils.ml import load_trained_model, save_trained_model
         with tempfile.TemporaryDirectory() as tmp:
             tmp_p = Path(tmp)
             lr = LinearRegression()
@@ -1172,7 +1172,7 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
             self.assertIn("pipeline", loaded)
     def test_read_tabular_enforces_size_limit_on_raw_file_handles(self):
         """read_tabular must enforce MAX_UPLOAD_BYTES even on file handles lacking a .size attribute."""
-        from Utils.paths import read_tabular
+        from utils.paths import read_tabular
         with tempfile.NamedTemporaryFile("wb", delete=False) as f:
             f.write(b"a,b\n1,2\n")
             tmp_name = f.name
@@ -1216,7 +1216,7 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
         self.assertNotIn("<data>", ctx)
     def test_line_chart_adversarial_chronological_ordering(self):
         """Line chart establishes chronological ordering for scrambled timestamps, duplicates, and gaps."""
-        from Utils.Charts import create_line_chart
+        from utils.charts import create_line_chart
         # Scrambled timestamps across 2020, 2021, 2024, 2025, 2026
         times = [
             "2026-05-01", "2020-01-15", "2024-03-10", "2021-08-20", "2020-01-15",
@@ -1237,7 +1237,7 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
         import io
         import uuid
 
-        from Utils.paths import _check_string_cardinality_amplification
+        from utils.paths import _check_string_cardinality_amplification
         # Create a buffer > 10MB with 40 unique string columns
         header = ",".join([f"col_{i}" for i in range(40)]) + "\n"
         buf = io.BytesIO()
@@ -1261,7 +1261,7 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
         import io
         from unittest.mock import patch
 
-        from Utils.paths import ResourcePolicy, read_tabular
+        from utils.paths import ResourcePolicy, read_tabular
         df = pd.DataFrame({"a": range(100), "b": range(100)})
         # Patch memory ceiling to 1 KB to test fail-closed behavior
         with patch.object(ResourcePolicy, "MAX_DATAFRAME_MEMORY_BYTES", 1024):
@@ -1274,7 +1274,7 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
         import io
         import uuid
 
-        from Utils.paths import read_tabular
+        from utils.paths import read_tabular
         buf = io.BytesIO()
         header = ",".join([f"col_{i}" for i in range(40)]) + "\n"
         buf.write(header.encode("utf-8"))
@@ -1296,7 +1296,7 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
         """Repeated high-cardinality values across chunks increment observations deterministically."""
         import io
 
-        from Utils.paths import _read_chunked_delimited_buffer
+        from utils.paths import _read_chunked_delimited_buffer
         # 30,000 rows (2 chunks: 25k and 5k) of 80% unique strings repeating the same set
         unique_pool = [f"token_{i}" for i in range(20000)] + ["fixed"] * 5000
         # Replicate for chunk 1 and chunk 2
@@ -1313,7 +1313,7 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
         import uuid
         from unittest.mock import patch
 
-        from Utils.paths import ResourcePolicy, _read_chunked_delimited_buffer
+        from utils.paths import ResourcePolicy, _read_chunked_delimited_buffer
         # 1 high-cardinality column, 9 low-cardinality columns
         rows = 100
         lines = ["high,c1,c2,c3,c4,c5,c6,c7,c8,c9"]
@@ -1331,7 +1331,7 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
         import io
         from unittest.mock import patch
 
-        from Utils.paths import _read_chunked_delimited_buffer
+        from utils.paths import _read_chunked_delimited_buffer
         # 60,000 rows across 3 chunks
         lines = ["c1,c2\n"] + ["1,2\n"] * 60000
         buf = io.BytesIO("".join(lines).encode("utf-8"))
@@ -1342,7 +1342,7 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
 
     def test_downsample_timeseries_non_iso_string_dates_chronological(self):
         """downsample_timeseries sorts non-ISO date strings chronologically by datetime, not alphabetically."""
-        from Utils.Charts import downsample_timeseries
+        from utils.charts import downsample_timeseries
         dates = ["1/2/2024", "10/1/2023", "2/1/2024", "12/1/2023"] * 30
         df = pd.DataFrame({"date": dates, "val": range(len(dates))})
         ds = downsample_timeseries(df, x_col="date", y_col="val", max_points=20)
@@ -1355,7 +1355,7 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
         """downsample_timeseries handles timezone-aware, duplicate, descending, and boundary extrema."""
         import numpy as np
 
-        from Utils.Charts import downsample_timeseries
+        from utils.charts import downsample_timeseries
         # 1000 points descending with duplicates, gaps, and extreme spikes
         rng = pd.date_range("2024-01-01", periods=1000, freq="h", tz="UTC")
         # Monotonic descending input
@@ -1379,8 +1379,8 @@ class SecurityBoundaryAndIsolationTests(unittest.TestCase):
         """dataset_fingerprint respects metadata cache for performance but detects changes with force_refresh."""
         import os
 
-        from Utils.dataset_ui import dataset_fingerprint
-        from Utils.paths import DATASETS_DIR
+        from utils.dataset_ui import dataset_fingerprint
+        from utils.paths import DATASETS_DIR
         test_file = DATASETS_DIR / "fp_security_probe.csv"
         test_file.write_text("a,b\n1,2", encoding="utf-8")
         try:

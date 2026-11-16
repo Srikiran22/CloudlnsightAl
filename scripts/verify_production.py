@@ -79,9 +79,9 @@ def check_streamlit_security_config() -> bool:
 
 def check_security_invariants() -> bool:
     try:
-        from Utils.limits import ResourcePolicy
-        from Utils.ML import sign_model_artifact, verify_model_artifact_signature
-        from Utils.theme import safe_error_boundary
+        from utils.limits import ResourcePolicy
+        from utils.ml import sign_model_artifact, verify_model_artifact_signature
+        from utils.theme import safe_error_boundary
 
         ok = (
             callable(verify_model_artifact_signature)

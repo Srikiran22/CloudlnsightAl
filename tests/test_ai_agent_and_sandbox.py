@@ -5,12 +5,12 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from Utils.ai_agent import (
+from utils.ai_agent import (
     apply_remediation_blueprint,
     generate_autonomous_remediation_blueprint,
     run_local_deterministic_query,
 )
-from Utils.ai_sandbox import execute_sandboxed_code
+from utils.ai_sandbox import execute_sandboxed_code
 
 
 class TestAISandbox(unittest.TestCase):

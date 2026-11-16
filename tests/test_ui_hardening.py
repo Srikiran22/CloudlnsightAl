@@ -2,7 +2,7 @@ import tomllib
 import unittest
 
 try:
-    from Utils.theme import safe_error_boundary
+    from utils.theme import safe_error_boundary
 except ImportError:
     safe_error_boundary = None
 

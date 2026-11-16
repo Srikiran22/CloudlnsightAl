@@ -9,30 +9,30 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from Utils.AIConvert import _field_count_quote_aware
-from Utils.Charts import (
+from utils.ai_convert import _field_count_quote_aware
+from utils.charts import (
     create_correlation_heatmap,
     create_line_chart,
     create_pie_treemap_plot,
 )
-from Utils.compare_logic import column_drift_rows
-from Utils.dataset_ui import (
+from utils.compare_logic import column_drift_rows
+from utils.dataset_ui import (
     dataframe_fingerprint,
     dataset_fingerprint,
     load_dataset_cached,
 )
-from Utils.Gemini import (
+from utils.gemini import (
     DEFAULT_GEMINI_MODEL,
     GEMINI_MODELS,
     chat_with_gemini_dataset,
     resolve_gemini_model,
 )
-from Utils.ML import (
+from utils.ml import (
     load_trained_model,
     save_trained_model,
     train_and_evaluate_model,
 )
-from Utils.paths import (
+from utils.paths import (
     DATASETS_DIR,
     MAX_UPLOAD_BYTES,
     enforce_size_limit,
@@ -42,8 +42,8 @@ from Utils.paths import (
     read_tabular,
     record_conversion,
 )
-from Utils.PDF import generate_pdf_report
-from Utils.quality import quality_index, quality_metrics
+from utils.pdf import generate_pdf_report
+from utils.quality import quality_index, quality_metrics
 
 ensure_project_directories()
 
@@ -196,7 +196,7 @@ class ParsingCorrectnessTests(unittest.TestCase):
         self.assertEqual(count, 3)
 
     def test_parse_ai_csv_fails_clearly_when_exceeding_column_cap(self):
-        from Utils.AIConvert import MAX_CONVERTED_COLUMNS, parse_ai_csv
+        from utils.ai_convert import MAX_CONVERTED_COLUMNS, parse_ai_csv
         header = ",".join(f"col_{i}" for i in range(MAX_CONVERTED_COLUMNS + 5))
         row = ",".join(str(i) for i in range(MAX_CONVERTED_COLUMNS + 5))
         with self.assertRaisesRegex(ValueError, "exceeds the maximum supported limit"):
@@ -272,7 +272,7 @@ class DatasetIdentityAndStateTests(unittest.TestCase):
             self.assertEqual(stat2.st_mtime_ns, stat1.st_mtime_ns)
             self.assertEqual(stat2.st_size, stat1.st_size)
 
-            from Utils.dataset_ui import invalidate_dataset_cache
+            from utils.dataset_ui import invalidate_dataset_cache
             invalidate_dataset_cache("temp_midbyte_probe.csv")
             fp2 = dataset_fingerprint("temp_midbyte_probe.csv")
             df2 = load_dataset_cached("temp_midbyte_probe.csv")
@@ -284,7 +284,7 @@ class DatasetIdentityAndStateTests(unittest.TestCase):
                 test_file.unlink()
 
     def test_invalidate_dataset_cache_clears_entries(self):
-        from Utils.dataset_ui import _CONTENT_HASH_CACHE, invalidate_dataset_cache
+        from utils.dataset_ui import _CONTENT_HASH_CACHE, invalidate_dataset_cache
         test_file = DATASETS_DIR / "temp_inval_probe.csv"
         test_file.write_text("x,y\n10,20", encoding="utf-8")
         try:
@@ -320,7 +320,7 @@ class GeminiHardeningTests(unittest.TestCase):
     def test_ai_convert_uses_default_gemini_model(self):
         import inspect
 
-        from Utils.AIConvert import convert_to_dataframe
+        from utils.ai_convert import convert_to_dataframe
         sig = inspect.signature(convert_to_dataframe)
         self.assertEqual(sig.parameters["model_name"].default, DEFAULT_GEMINI_MODEL)
 
@@ -339,7 +339,7 @@ class GeminiHardeningTests(unittest.TestCase):
         import sys
         import types
 
-        from Utils.Gemini import GeminiError, _new_sdk_client
+        from utils.gemini import GeminiError, _new_sdk_client
         fake_genai = types.ModuleType("google.genai")
         class OldClient:
             def __init__(self, **kwargs):
@@ -361,7 +361,7 @@ class GeminiHardeningTests(unittest.TestCase):
     def test_generate_once_fails_closed_when_genai_missing(self):
         import sys
 
-        from Utils.Gemini import GeminiError, _generate_once
+        from utils.gemini import GeminiError, _generate_once
         with patch.dict(sys.modules, {"google.genai": None}):
             with self.assertRaises(GeminiError) as ctx:
                 _generate_once("key", "gemini-3.8-flash", "prompt")
@@ -371,7 +371,7 @@ class GeminiHardeningTests(unittest.TestCase):
     def test_primary_google_genai_sdk_client_initialization(self):
         import google.genai as genai
 
-        from Utils.Gemini import REQUEST_TIMEOUT_SECONDS, _new_sdk_client
+        from utils.gemini import REQUEST_TIMEOUT_SECONDS, _new_sdk_client
         client = _new_sdk_client("fake-key-0123456789")
         self.assertIsInstance(client, genai.Client)
         http_opts = getattr(client._api_client, "_http_options", None)
@@ -503,10 +503,10 @@ class DependencyCompatibilityTests(unittest.TestCase):
 
 import unittest
 
-from Utils.AIConvert import _split_into_chunks, reconcile_chunk_frames
-from Utils.Charts import downsample_timeseries
-from Utils.dataset_ui import BoundedDatasetMemoryCache
-from Utils.paths import _reject_dtd
+from utils.ai_convert import _split_into_chunks, reconcile_chunk_frames
+from utils.charts import downsample_timeseries
+from utils.dataset_ui import BoundedDatasetMemoryCache
+from utils.paths import _reject_dtd
 
 
 class TestBoundedJSONParsing(unittest.TestCase):
@@ -817,7 +817,7 @@ class TestAtomicFilenameReservation(unittest.TestCase):
     """Concurrency-safe atomic kernel filesystem reservations."""
 
     def test_concurrent_reservations_do_not_collide(self):
-        from Utils.paths import atomic_write, get_unique_filename, release_filename_reservation
+        from utils.paths import atomic_write, get_unique_filename, release_filename_reservation
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
             f1 = get_unique_filename("data.csv", directory=tmp_path)
@@ -837,7 +837,7 @@ class TestPDFPrivacyAndExcludedColumns(unittest.TestCase):
     """PII redaction and sensitive column exclusion from correlations and charts."""
 
     def test_pdf_report_excludes_sensitive_columns(self):
-        from Utils.PDF import generate_pdf_report
+        from utils.pdf import generate_pdf_report
         df = pd.DataFrame({
             "social_security_number": [111223333, 222334444, 333445555, 444556666, 555667777],
             "feature_x": [10.0, 20.0, 30.0, 40.0, 50.0],
@@ -858,7 +858,7 @@ class TestChartHueAndCategoryCapping(unittest.TestCase):
     """High-cardinality hue and category capping preventing UI hang."""
 
     def test_histogram_and_box_plots_cap_high_cardinality(self):
-        from Utils.Charts import create_box_violin_plot, create_histogram_plot
+        from utils.charts import create_box_violin_plot, create_histogram_plot
         np.random.seed(42)
         df = pd.DataFrame({
             "val": np.random.randn(500),
@@ -875,7 +875,7 @@ class TestMLFeatureContractAndSemantics(unittest.TestCase):
     """F-13 & F-15: ML schema contract, strict coercion, and explicit metric attribution."""
 
     def test_ml_contract_and_unparseable_string_rejection(self):
-        from Utils.ML import predict_with_model
+        from utils.ml import predict_with_model
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
             df = pd.DataFrame({
@@ -916,7 +916,7 @@ class TestCredentialSessionStateSecurity(unittest.TestCase):
         from types import SimpleNamespace
         from unittest.mock import patch
 
-        from Utils.secrets import release
+        from utils.secrets import release
         state = {"gemini_secret": "secret_abc", "gemini_ver": 0}
         with patch("Utils.secrets.st", SimpleNamespace(session_state=state)):
             cleared = release("gemini")

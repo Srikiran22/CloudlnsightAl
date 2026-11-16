@@ -8,12 +8,12 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from Utils.AIConvert import MAX_CONVERSION_CHARS, MAX_SAMPLE_CHARS, _split_into_chunks, convert_to_dataframe
-from Utils.Charts import create_bar_count_plot
-from Utils.ML import predict_with_model, train_and_evaluate_model
-from Utils.paths import read_tabular
-from Utils.PDF import _resolve_pdf_fonts, generate_pdf_report
-from Utils.privacy import detect_sensitive_columns
+from utils.ai_convert import MAX_CONVERSION_CHARS, MAX_SAMPLE_CHARS, _split_into_chunks, convert_to_dataframe
+from utils.charts import create_bar_count_plot
+from utils.ml import predict_with_model, train_and_evaluate_model
+from utils.paths import read_tabular
+from utils.pdf import _resolve_pdf_fonts, generate_pdf_report
+from utils.privacy import detect_sensitive_columns
 
 
 class UIRemediationRegressionTests(unittest.TestCase):
@@ -179,11 +179,11 @@ import unittest
 
 from streamlit.testing.v1 import AppTest
 
-from Utils.AIConvert import parse_ai_csv
-from Utils.Charts import create_scatter_plot
-from Utils.Gemini import DEFAULT_GEMINI_MODEL
-from Utils.logsys import get_logger
-from Utils.paths import (
+from utils.ai_convert import parse_ai_csv
+from utils.charts import create_scatter_plot
+from utils.gemini import DEFAULT_GEMINI_MODEL
+from utils.logsys import get_logger
+from utils.paths import (
     DATASETS_DIR,
     MAX_INGESTION_ROWS,
     get_dataset_row_count,
@@ -191,22 +191,22 @@ from Utils.paths import (
     record_conversion,
     sanitize_for_csv_export,
 )
-from Utils.privacy import (
+from utils.privacy import (
     detect_sensitive_text,
 )
 
 
 class StreamlitUploadWorkflowTests(unittest.TestCase):
-    """Workflow and AppTest tests for Pages/Upload.py (H-1, H-5)."""
+    """Workflow and AppTest tests for pages/upload.py (H-1, H-5)."""
 
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
         self.orig_datasets_dir = DATASETS_DIR
-        import Utils.paths as paths
+        import utils.paths as paths
         paths.DATASETS_DIR = Path(self.temp_dir)
 
     def tearDown(self):
-        import Utils.paths as paths
+        import utils.paths as paths
         paths.DATASETS_DIR = self.orig_datasets_dir
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
@@ -247,7 +247,7 @@ class StreamlitUploadWorkflowTests(unittest.TestCase):
 
     def test_upload_aggregate_file_count_limit(self):
         """H-5: Exceeding MAX_UPLOAD_FILES triggers error and rejects upload."""
-        from Pages.Upload import MAX_UPLOAD_FILES
+        from pages.Upload import MAX_UPLOAD_FILES
 
         upload_script = str(Path(__file__).resolve().parent.parent / "Pages" / "Upload.py")
         at = AppTest.from_file(upload_script, default_timeout=15)
@@ -379,10 +379,10 @@ class ParquetIngestionSafetyTests(unittest.TestCase):
 
 
 class AIWorkflowAndPersistenceTests(unittest.TestCase):
-    """M-1: AI result and chat persistence in Pages/AI.py after API key release."""
+    """M-1: AI result and chat persistence in pages/ai.py after API key release."""
 
     def test_ai_saved_insights_and_chat_persist_without_api_key(self):
-        from Utils.dataset_ui import dataframe_fingerprint
+        from utils.dataset_ui import dataframe_fingerprint
 
         ai_script = str(Path(__file__).resolve().parent.parent / "Pages" / "AI.py")
         at = AppTest.from_file(ai_script, default_timeout=15)
@@ -569,11 +569,11 @@ class ConversionManifestRobustnessTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
         self.orig_datasets_dir = DATASETS_DIR
-        import Utils.paths as paths
+        import utils.paths as paths
         paths.DATASETS_DIR = Path(self.temp_dir)
 
     def tearDown(self):
-        import Utils.paths as paths
+        import utils.paths as paths
         paths.DATASETS_DIR = self.orig_datasets_dir
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
@@ -598,11 +598,11 @@ class DatasetRowCountConsistencyTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
         self.orig_datasets_dir = DATASETS_DIR
-        import Utils.paths as paths
+        import utils.paths as paths
         paths.DATASETS_DIR = Path(self.temp_dir)
 
     def tearDown(self):
-        import Utils.paths as paths
+        import utils.paths as paths
         paths.DATASETS_DIR = self.orig_datasets_dir
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
@@ -623,14 +623,14 @@ class LoggingLevelValidationTests(unittest.TestCase):
     """M-9: Logger level validation falls back safely on invalid values."""
 
     def test_invalid_logging_string_falls_back_to_warning(self):
-        import Utils.logsys as logsys
+        import utils.logsys as logsys
         logsys._configured = False
         with patch.dict(os.environ, {"CLOUDINSIGHT_LOG_LEVEL": "BASIC_FORMAT"}):
             logger = get_logger("TestLoggerInvalid")
             self.assertEqual(logger.getEffectiveLevel(), logging.WARNING)
 
     def test_valid_logging_string_accepted(self):
-        import Utils.logsys as logsys
+        import utils.logsys as logsys
         logsys._configured = False
         with patch.dict(os.environ, {"CLOUDINSIGHT_LOG_LEVEL": "DEBUG"}):
             logger = get_logger("TestLoggerValid")

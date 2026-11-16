@@ -2,10 +2,10 @@ import unittest
 
 import pandas as pd
 
-from Utils.limits import ResourcePolicy
+from utils.limits import ResourcePolicy
 
 try:
-    from Utils.parsing import cached_load_dataframe
+    from utils.parsing import cached_load_dataframe
 except ImportError:
     cached_load_dataframe = None
 
