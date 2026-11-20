@@ -398,3 +398,150 @@ TinyFish searched Reddit discussions on drift, leakage, thresholds, outliers, ex
 - Failure states and limitations are visible.
 - No unsupported production/security/privacy/performance claims.
 - Resume bullet updated only after demonstration and measurement.
+
+
+## 11. Repository re-verification delta — 2026-11-20
+
+The second repository pass expanded the feature inventory and exposed several mismatches that should affect both how the project is described and how it is developed.
+
+### 11.1 Added implementation facts
+
+- `utils/preprocessing.py` is a separate cleaning utility. Numeric strategies are mean, median or zero; categorical strategies are mode or Unknown; datetime strategies are forward-fill, forward-fill/back-fill or none. Forward-fill only avoids temporal lookahead if row order is chronological.
+- `utils/batch.py` merges uploaded DataFrames and inserts a collision-safe source-file provenance column.
+- `utils/dataset_ui.py` maintains active dataset identity/fingerprints and a bounded memory cache (256 MiB); this is important for keeping cached page results tied to the selected dataset.
+- `utils/quality.py` computes a simple structural score from completeness and row uniqueness. It does not validate business semantics.
+- `utils/markup_parsing.py` handles XML and HTML-table parsing separately from the main delimited/JSON/Parquet parser.
+- The current file extension contract is precise: tabular CSV/TSV/XLSX/XLS/JSON/JSONL/NDJSON/Parquet/XML/HTML/HTM; text TXT/LOG/MD/RST/SQL; PDF. SQLite is a separate upload mode. DOCX is not in the central accepted extension set despite a UI description mentioning it.
+- Text/PDF pathways are not an active GenAI product feature. Text extraction is bounded; PDFs are limited to 30 pages / 50,000 characters and raise the conversion-required pathway. The current uploader previews extracted text and asks for structured data. Conversion-provenance helpers and manifest code remain but are not wired into a live Gemini conversion workflow.
+
+### 11.2 Verification mismatches worth keeping visible
+
+| Area | Repository evidence | Documentation / claim to avoid |
+|---|---|---|
+| Tests | 19 test modules in current tree | `docs/TESTING.md` still says 12 modules / 384 passing; do not repeat the old pass count |
+| Python support | pyproject >=3.12; Docker Python 3.11; CI 3.11 and 3.12 | Do not claim that all packaging/CI/runtime declarations agree |
+| GenAI | Gemini dependencies/pages removed; compatibility remnants remain | GitHub description and old comments still mention Gemini; do not claim a live Gemini capability |
+| DOCX | Not present in SUPPORTED_DATASET_EXTENSIONS | Do not list DOCX as a supported input |
+| Threshold tuning | UI slider, validation metrics from OOF probabilities | Do not describe this as a fully automated cost optimizer |
+| Feature engineering | Fit-transform tools operate on the current full DataFrame | Do not claim pre-training UI transforms are automatically leakage-safe |
+| Time-series threshold validation | TimeSeriesSplit path attempts cross_val_predict and catches exceptions | Do not assume OOF threshold probabilities are always available for chronological splits |
+
+The 19 test filenames are listed in PROJECT.md. Test modules were inspected, but the suite was not executed during this review.
+
+## 12. Deeper research: findings that change the roadmap
+
+This pass used the second already-connected Exa account (Gmail-VIT) for further topic-specific research and full-page extraction. The first connected Exa account (Gmail) again returned HTTP 402 for exhausted credits. The tool exposed only these two connected Exa accounts; no third account was available. No account was created and no credit restriction was bypassed.
+
+### 12.1 Tabular dataset shift is often conditional, not just marginal
+
+The WHYSHIFT study (NeurIPS 2023) evaluates five real-world tabular datasets across 86,000+ model configurations. It finds that conditional shifts in the relationship between inputs and outcomes, P(Y|X), account for most of the performance degradation in many studied natural shifts. In one reported analysis, 80% of source-target pairs with more than an eight-percentage-point performance drop were primarily attributed to P(Y|X) shifts. The paper also finds that model rankings vary substantially by shift pattern.
+
+**Implication for TabuLens:** KS/TVD marginal feature comparisons are useful diagnostics, but they cannot detect all consequential changes. The highest-value next step is a labelled monitoring workflow: once actual outcomes arrive, compare performance and calibration over time, and localize losses to interpretable subgroups. Do not label a feature-only score as a complete concept-drift detector.
+
+Source: [On the Need for a Language Describing Distribution Shifts: Illustrations on Tabular Datasets (NeurIPS 2023 / WHYSHIFT)](https://proceedings.neurips.cc/paper_files/paper/2023/file/a134eaebd55b7406ff29cd75d5f1a622-Paper-Datasets_and_Benchmarks.pdf).
+
+### 12.2 Use public distribution-shift benchmarks, not only controlled synthetic shifts
+
+TableShift contributes 15 real-world tabular binary-classification tasks across finance, education, public policy, healthcare and civic participation. The paper reports that no model consistently beats the baseline methods across all tasks; domain-robust methods can reduce some shift gaps but may reduce in-distribution accuracy, and label-distribution changes are associated with OOD shift gaps.
+
+**Implication:** keep the synthetic Q1/Q2 benchmark for deterministic drift demonstrations, but add a documented real-world benchmark mode. Record task source/license, domain/time split, label prevalence, ID/OOD scores, and resource cost. Do not claim one algorithm is generally “most robust”.
+
+Source: [Benchmarking Distribution Shift in Tabular Data with TableShift](https://arxiv.org/html/2312.07577).
+
+### 12.3 Monitor meaningful subgroups as well as the global dataset
+
+Research on interpretable subgroup drift shows that global performance can hide deterioration in smaller cohorts. The proposed approach tracks interpretable, sufficiently represented subgroups and explicitly considers sample-support thresholds because estimates for tiny cohorts are unstable. Separate work on statistical inference for fairness auditing formulates subgroup performance gaps as multiple-testing problems and develops simultaneous/false-discovery control.
+
+**Implication:** add opt-in slice analysis over user-selected, non-sensitive business dimensions and, where legally/ethically appropriate, protected attributes. Show group sample sizes, uncertainty intervals, positive/negative rates and group-wise error metrics. Control multiple testing when scanning many candidate slices. Avoid declaring a small-cohort difference meaningful from a raw point estimate.
+
+Sources:
+- [Detecting Interpretable Subgroup Drifts (KDD 2025)](https://arxiv.org/html/2408.14682)
+- [Statistical Inference for Fairness Auditing (JMLR)](https://jmlr.org/papers/volume25/23-0739/23-0739.pdf)
+- [A structured regression approach for evaluating model performance across intersectional subgroups (2024)](https://doi.org/10.1145/3630106.3658908)
+
+### 12.4 More historical training data is not automatically better
+
+A 2025 AIES study examines expanding historical training windows under temporal covariate and concept shifts. It reports that longer training windows may help without shift, but can reduce performance under concept shift; the impact can differ between population subgroups and can affect fairness.
+
+**Implication:** a future retraining assistant should compare rolling and expanding windows, not automatically append all historical records. Preserve temporal backtests and subgroup metrics; explain when old examples are no longer representative of the current decision process.
+
+Source: [When the Past Misleads: Rethinking Training Data Expansion Under Temporal Distribution Shifts (AIES 2025)](https://doi.org/10.1609/aies.v8i3.36757).
+
+### 12.5 Calibration and threshold selection are related, but not interchangeable
+
+The current research confirms a key distinction:
+- A decision threshold determines which action is taken from a model score.
+- Calibration asks whether predicted probabilities correspond to observed frequencies.
+- AUC metrics measure ranking/discrimination, not calibrated risk.
+- Proper scores such as Brier loss and log loss combine multiple aspects (reliability/calibration, resolution/discrimination and uncertainty); they should not be treated as pure calibration measures in isolation.
+
+scikit-learn recommends reliability diagrams/calibration curves and documents calibration with cross-validation. It also warns that a calibrator should not be fitted on the same data used to fit the base classifier. Threshold selection should be validated independently and use a meaningful objective.
+
+**Implication:** add calibration curves and probability-bin counts before describing scores as risk probabilities. Keep calibration fitting, threshold tuning and final test evaluation on correctly separated data. Add an expected-cost curve only after users enter realistic error costs.
+
+Sources:
+- [scikit-learn probability calibration](https://scikit-learn.org/stable/modules/calibration.html)
+- [scikit-learn decision threshold tuning](https://scikit-learn.org/stable/modules/classification_threshold.html)
+
+### 12.6 Data contracts need semantic rules and controlled evolution
+
+The MLSys paper “Data Validation for Machine Learning” emphasizes that many data errors are generated by upstream code bugs and that alerts must be precise and actionable; noisy alerts train operators to ignore the system. Its schema approach covers type/domain/presence constraints and allows initial schemas to be inferred then reviewed and edited. Schema inference is a starting proposal, not an automatically authoritative contract.
+
+**Implication:** TabuLens should distinguish syntactic checks from semantic rules such as units, allowed ranges, keys, freshness and time windows. An inferred contract should be reviewed and version-controlled. A new category or changed range should prompt a review workflow, not silently redefine the baseline.
+
+Source: [Data Validation for Machine Learning (MLSys 2019)](https://proceedings.mlsys.org/paper_files/paper/2019/file/928f1160e52192e3e0017fb63ab65391-Paper.pdf).
+
+### 12.7 Keep reproducibility lightweight and local-first
+
+DVC's experiment-versioning guidance describes storing parameters, metrics and artifact references in text files that Git can version, while data/model bytes are kept in a separate content-addressed store. This can work without a centralized tracking server. A dataset hash identifies bytes but does not preserve/recover the dataset by itself.
+
+**Implication:** TabuLens can implement a simple local run manifest first: Git commit, dataset fingerprint, retained dataset/snapshot identity, immutable split IDs, preprocessing config, model params, seed, environment lockfile, metric outputs and artifact hash. A hash alone is not enough if the underlying data bytes disappear. Optional MLflow/DVC integration can follow if multi-run or collaboration needs grow.
+
+Sources:
+- [DVC — Don't Just Track Your ML Experiments, Version Them](https://dvc.org/blog/ml-experiment-versioning/)
+- [DVC User Guide](https://doc.dvc.org/user-guide)
+- [MLflow dataset tracking](https://mlflow.org/docs/latest/ml/dataset/)
+
+### 12.8 Additional leakage modes deserve explicit user prompts
+
+A 2023 healthcare ML framework separates label leakage into aggregation-based leakage (e.g., repeated patients/sites crossing splits), timing-based leakage (features created after the intended prediction time) and association-based leakage (a proxy feature effectively reveals the outcome). The framework emphasizes that the task's prediction time and operational use must be specified before choosing predictors.
+
+**Implication:** add a short target-design step before training: What is the prediction origin? When is each feature available? When does the label become known? What entity must be held out? A Pipeline prevents leakage from learned transformations but cannot fix a feature that was already constructed using future/outcome information.
+
+Source: [A framework for understanding label leakage in machine learning for health care (2023)](https://pmc.ncbi.nlm.nih.gov/articles/PMC10746313/).
+
+## 13. Updated roadmap ranking after deeper research
+
+### Highest value
+1. **Prediction-time / label-window declaration:** record prediction timestamp, feature-availability assumptions, target horizon and entity key before training.
+2. **Group-aware splits:** support new-customer/new-patient/new-device evaluation, not only random and chronological row splits.
+3. **Labelled temporal backtesting:** rolling-origin evaluation with explicit train/test windows, label delay and, where needed, purging/embargo.
+4. **Subgroup performance dashboard:** group size, precision/recall/FNR/FPR, calibration and uncertainty; control the search across multiple slices.
+5. **Calibrated decision analysis:** calibration plot + threshold/cost curve; keep probability reliability and action selection as separate concepts.
+6. **Data Contract / Schema Guard:** include semantic meaning, units, keys, freshness and training-vs-inference environments, with reviewed evolution.
+
+### Next tier
+7. Public benchmark suite including TableShift/WHYSHIFT-compatible tasks.
+8. Local experiment manifest with retained data/split references, code SHA and environment digest.
+9. Rolling-vs-expanding training-window comparison for changing populations.
+10. Model-aware drift investigation: use feature relevance or prediction sensitivity to help prioritize alerts, then validate against labels when available.
+
+### Avoid
+- “More training data is always better.”
+- “Drift detected means accuracy has dropped.”
+- “No global drift means every subgroup is stable.”
+- “Good calibration” inferred solely from ROC-AUC, PR-AUC or a single Brier score.
+- “Leakage-free” inferred solely because the final estimator is wrapped in a Pipeline.
+- “Reproducible” inferred solely from recording a dataset hash without retaining or being able to retrieve the data snapshot.
+
+## 14. Additional deep-research sources
+
+- [WHYSHIFT / NeurIPS 2023 distribution-shift paper](https://proceedings.neurips.cc/paper_files/paper/2023/file/a134eaebd55b7406ff29cd75d5f1a622-Paper-Datasets_and_Benchmarks.pdf)
+- [TableShift real-world tabular distribution-shift benchmark](https://arxiv.org/html/2312.07577)
+- [Detecting Interpretable Subgroup Drifts](https://arxiv.org/html/2408.14682)
+- [AIES 2025 temporal training-window study](https://doi.org/10.1609/aies.v8i3.36757)
+- [Statistical Inference for Fairness Auditing](https://jmlr.org/papers/volume25/23-0739/23-0739.pdf)
+- [Intersectional subgroup performance estimation (2024)](https://doi.org/10.1145/3630106.3658908)
+- [Data Validation for Machine Learning, MLSys 2019](https://proceedings.mlsys.org/paper_files/paper/2019/file/928f1160e52192e3e0017fb63ab65391-Paper.pdf)
+- [Label leakage framework for healthcare ML (2023)](https://pmc.ncbi.nlm.nih.gov/articles/PMC10746313/)
+- [DVC experiment versioning](https://dvc.org/blog/ml-experiment-versioning/)
