@@ -117,7 +117,7 @@ The test suite includes unit, Streamlit AppTest, ingestion, ML/drift, threshold,
 - utils/markup_parsing.py — markup/text parsing helper.
 
 ### Delivery and verification
-- tests/ — 17 test modules covering workflow, statistical logic, parsing, security and packaging.
+- tests/ — 19 test modules covering workflow, statistical logic, parsing, security and packaging.
 - scripts/verify_pipeline.py — verification CLI.
 - scripts/healthcheck.py — container healthcheck.
 - docs/ARCHITECTURE.md — architecture.
@@ -195,3 +195,48 @@ Add performance numbers only after benchmarking on documented datasets and hardw
 - Refactor commit: https://github.com/Srikiran22/CloudlnsightAl/commit/69a1cb3e3e8ede6426e047e45235599a0f17252c
 - GenAI removal commit: https://github.com/Srikiran22/CloudlnsightAl/commit/dd769175adb4da109593b0c33f8203d0d2250a30
 - Reviewed ML/HMAC/drift commit: https://github.com/Srikiran22/CloudlnsightAl/commit/6b64de04f87bf79a9e81226023374e969e22ad12
+
+
+## 11. Re-verification addendum — 2026-11-20
+
+This addendum is based on a second pass over the current `main` tree and implementation. The recursive tree returned **91 entries** and was not truncated. The original two documentation files are included in that count.
+
+### 11.1 Additional capabilities that needed to be recorded
+
+- **Preprocessing utility (`utils/preprocessing.py`):** exact duplicate removal; numeric imputation using mean, median or zero; categorical imputation using mode or the literal `Unknown`; datetime fill using forward-fill, forward-fill plus back-fill, or no change; and complete-case row dropping. The cleaning UI exposes mean, median, constant, drop-incomplete and preserve-null choices. The datetime behavior is a library capability, not a separate UI choice on the current cleaning page.
+- **Temporal imputation assumption:** forward-fill only has its intended no-lookahead interpretation when rows are already in chronological order. The cleaning page does not itself establish that ordering before calling the default forward-fill helper. Do not describe this as universally time-safe.
+- **HTML/XML parsing (`utils/markup_parsing.py`):** XML parsing uses DTD/entity rejection and bounded depth; HTML parsing extracts the largest tabular HTML table, handles column spans, and hands off cases with row spans or no tables as unsupported structured conversions.
+- **Text/PDF extraction:** delimited-looking supported text may be parsed as a table. Otherwise a bounded text preview is raised through `AIConversionRequired`. PDF extraction is bounded to 30 pages and 50,000 characters, but PDFs are not natively converted into tables by the current ingestion path.
+- **Batch provenance (`utils/batch.py`):** merged upload rows receive a source-file provenance column. The implementation selects a collision-free column name rather than overwriting an existing user column.
+- **Dataset state and cache (`utils/dataset_ui.py`):** active dataset identity, file/DataFrame fingerprints, result-to-current-dataset matching, cache invalidation, a bounded in-memory cache with a 256 MiB budget, and cached dataset loading.
+- **Structural quality metric (`utils/quality.py`):** the Data Hygiene Index is the average of cell completeness and row uniqueness. It is explicitly a structural heuristic, not a semantic validity, correctness or representativeness score.
+- **Logging (`utils/logsys.py`):** standard-library logging to the Streamlit process stderr; documented intent is not to log dataset contents, API keys or raw model responses.
+- **Additional delivery files:** `.streamlit/config.toml` configures Streamlit; `start.bat` is a Windows launcher; `.dockerignore` and `.gitignore` govern build/repository inputs.
+
+### 11.2 Corrections to earlier claims and scope
+
+- The repository contains **19** Python test modules, not 17. The current tree names are: `test_app_version.py`, `test_audit_regressions.py`, `test_caching_and_performance.py`, `test_core_pipeline.py`, `test_decision_threshold.py`, `test_deployment_config.py`, `test_inference_script_generation.py`, `test_ingestion_parsers.py`, `test_ml_and_drift.py`, `test_offline_integrity.py`, `test_outlier_diagnostics.py`, `test_package_structure.py`, `test_page_smoke.py`, `test_portfolio_documentation.py`, `test_security_boundaries.py`, `test_theme_and_boundaries.py`, `test_ui_hardening.py`, `test_ui_workflows.py`, and `test_verify_pipeline_cli.py`.
+- The existing `docs/TESTING.md` still says 12 modules and 384 passing tests. That count/organization is stale against the current tree. This repository review inspected test files but did **not** execute the suite, so no current pass count is asserted here.
+- The interactive Feature Engineering page uses direct fit/transform operations on the currently selected DataFrame. These are useful for exploration/export, but if scaling, power transformation, encoding, or feature selection is applied before model splitting, the learned transformation may see the eventual holdout data. For defensible evaluation, use training-fold-fitted transformations in the model Pipeline or make the transformation itself fold-aware.
+- Binary threshold selection is exposed as a user-controlled slider and validation metrics are recalculated from out-of-fold probabilities. It is more accurate to describe this as interactive/manual threshold tuning than as a fully automated business-cost optimizer.
+- The time-series training path uses `TimeSeriesSplit` for cross-validation. The same code attempts `cross_val_predict` for binary threshold probabilities and catches failures. Because `TimeSeriesSplit` does not produce a test fold for the initial training block, the standard `cross_val_predict` partition requirement may prevent OOF threshold probabilities in this mode. Treat time-series threshold tuning as a limitation to verify and improve with an explicit rolling-origin aggregation strategy.
+- The repository metadata description on GitHub still mentions “Gemini insights”. The current source refactor removed the live Gemini/GenAI integration. The active uploader displays extracted text and asks for structured tabular files; it does not provide a live AI conversion workflow.
+- Conversion-era compatibility code remains: `AIConversionRequired`, `.conversions.json`, and helpers such as `record_conversion` / `get_valid_conversion` are still in the utility layer and tests. They are not evidence of a currently integrated Gemini converter. The code also retains legacy comments and documentation that still mention Gemini.
+- One upload helper description mentions DOCX, but the central extension set does not include `.docx`; it is not an accepted upload type in the current contract.
+- Python packaging declares `requires-python >=3.12` in `pyproject.toml`, while the Dockerfile uses Python 3.11 and CI tests Python 3.11 and 3.12. The setup guide says Python 3.12+. Do not claim a consistent supported Python matrix until these declarations are aligned and verified.
+
+### 11.3 Updated source-to-feature index
+
+| Implementation | What it adds to the product story |
+|---|---|
+| `utils/preprocessing.py` | User-directed cleaning and datetime-aware fill strategies |
+| `utils/markup_parsing.py` | XML and HTML table parsing with structured-document boundaries |
+| `utils/dataset_ui.py` | Dataset identity, fingerprints, cache, workspace state and persistence |
+| `utils/batch.py` | Multi-file merge with row-to-source provenance |
+| `utils/quality.py` | Completeness/uniqueness-based structural hygiene heuristic |
+| `utils/logsys.py` | Local diagnostic logging policy |
+| `utils/limits.py` | Canonical accepted extension set and resource ceilings |
+| `utils/paths.py` | Conversion-provenance compatibility helpers as well as safe storage/path operations |
+| `start.bat` | Windows startup convenience |
+| `.streamlit/config.toml` | Streamlit app defaults/theme configuration |
+
