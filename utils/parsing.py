@@ -311,8 +311,8 @@ def _read_delimited_text(text: str, nrows: int | None = None) -> pd.DataFrame | 
     identifies one of the known field separators (comma, semicolon, tab,
     pipe) used consistently across the sampled lines. Whitespace and colon are
     deliberately NOT candidate delimiters, so logs and prose never become a junk
-    wide table -- unparseable text falls through to AIConversionRequired and
-    the Gemini path. (A line-per-record prose file with exactly one comma on
+    wide table -- unparseable text falls through to AIConversionRequired so
+    callers can display a preview. (A line-per-record prose file with exactly one comma on
     every line is genuinely ambiguous and still parses; that is inherent.)
     """
     sample_lines = [line for line in text.splitlines() if line.strip()][:20]

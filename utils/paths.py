@@ -746,7 +746,7 @@ def read_tabular(
     """Read any supported dataset from a path, file-like object, or bytes.
 
     Formats without a native tabular structure raise AIConversionRequired carrying
-    the extracted raw text so callers can offer Gemini-powered conversion.
+    the extracted raw text so callers can show a non-tabular preview.
     """
     if isinstance(source, (str, Path)) and filename is None:
         return read_dataset(source, max_rows=max_rows)
@@ -955,7 +955,7 @@ def read_dataset(dataset: str, max_rows: int | None = None) -> pd.DataFrame:
 
 
 def save_and_activate_dataset(df: Any, filename: str, sanitize: bool = True) -> Path:
-    """Delegate to Utils.dataset_ui.save_and_activate_dataset."""
+    """Delegate to utils.dataset_ui.save_and_activate_dataset."""
     from utils.dataset_ui import save_and_activate_dataset as _save_and_activate
 
     return _save_and_activate(df, filename, sanitize=sanitize)

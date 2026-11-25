@@ -1,7 +1,7 @@
 """Shared resource limits, storage roots, and the supported-format contract.
 
 One source of truth for the numbers enforced by the ingestion layer and surfaced
-in the UI. Import them from here (or from ``Utils.paths``, which re-exports them
+in the UI. Import them from here (or from ``utils.paths``, which re-exports them
 for backwards compatibility); never copy a literal limit into a page.
 """
 
@@ -28,7 +28,7 @@ MAX_COMBINED_ROWS = 1_000_000
 
 
 class ResourcePolicy:
-    """Centralized resource boundaries and memory multipliers for CloudInsight AI."""
+    """Centralized resource boundaries and memory multipliers for TabuLens."""
     MAX_UPLOAD_BYTES = MAX_UPLOAD_BYTES
     MAX_INGESTION_ROWS = MAX_INGESTION_ROWS
     MAX_INGESTION_COLUMNS = MAX_INGESTION_COLUMNS

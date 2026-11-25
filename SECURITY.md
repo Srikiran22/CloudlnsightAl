@@ -4,7 +4,7 @@
 
 | Version | Status |
 | ------- | ------ |
-| 1.0.x   | Supported |
+| 2.2.x   | Supported |
 
 ---
 
@@ -12,38 +12,38 @@
 
 If you discover a security vulnerability in TabuLens:
 1. Do not open a public issue.
-2. Report the vulnerability privately to project maintainers.
-3. Include reproduction steps, environment details, and affected version.
+2. Report the vulnerability privately to the repository maintainer.
+3. Include reproduction steps, environment details, and the affected version.
 
 ---
 
 ## 3. Threat Model and Trust Assumptions
 
 ### 3.1 Operating Scope
-- **Deployment Model:** Single-user analytical desktop application executed locally on `127.0.0.1:8501` or via Docker container.
-- **Primary Trust Boundary:** All incoming files (CSV, Parquet, Excel, XML, JSON, SQLite, and serialized `.joblib` model bundles) originate from untrusted sources and are validated before parsing or execution.
-- **User Context:** The application process runs under local operating system user permissions (or unprivileged `appuser` in Docker) and relies on OS-level access control.
+- **Deployment model:** Single-user analytical workbench running locally on `127.0.0.1:8501` or in a local Docker container as non-root `appuser`.
+- **Primary trust boundary:** Incoming datasets (`CSV`, `TSV`, `Parquet`, `Excel`, `XML`, `HTML`, `JSON`, `JSONL`, `SQLite`) and serialized `.joblib` model bundles are treated as untrusted inputs until validated.
+- **Key confidentiality assumption:** Model signature verification relies on OS file permissions protecting `Models/.model_signing_key` (`0o600`). HMAC-SHA256 proves local artifact integrity under that key; it does not provide asymmetric cross-host trust.
 
-### 3.2 Threat Vectors and Defense Architecture
+### 3.2 Threat Vectors and Defensive Controls
 
 ```mermaid
 flowchart TD
     subgraph Threats ["Threat Vectors"]
-        T1["Path Traversal / Filename Escape\n(.. / Absolute Paths / ADS)"]
-        T2["Model Deserialization Execution\n(Arbitrary Bytecode in Joblib Bundle)"]
-        T3["XML External Entity (XXE) &\nEntity Expansion Attacks"]
+        T1["Path Traversal / Device Name Escape\n(.. / Absolute Paths / Windows ADS)"]
+        T2["Model Deserialization Execution\n(Unsigned or Tampered .joblib)"]
+        T3["XML External Entity (XXE) &\nDTD Expansion Attacks"]
         T4["Decompression Bomb\n(Oversized Archive / High Ratio)"]
         T5["CSV Formula Injection\n(=, +, -, @, Tab, CR)"]
-        T6["Feature Leakage & Target Contamination\n(Unshielded Preprocessing)"]
+        T6["Preprocessing Data Leakage\n(Unshielded Scaling / Encoding)"]
     end
 
     subgraph Defenses ["Defensive Controls"]
         D1["resolve_dataset_path() + safe_stem()\n(is_relative_to Containment)"]
-        D2["HMAC-SHA256 Signing & Pre-Load Check\n(Reject Unsigned / Tampered .joblib)"]
-        D3["_reject_dtd() SAX Inspection\n(Abort on <!DOCTYPE / <!ENTITY)"]
-        D4["_check_zip_bomb() Ratio Checks\n(100 MB Limit / 100x Ratio)"]
+        D2["HMAC-SHA256 Signing & In-Memory Check\n(Reject Unsigned / Tampered .joblib)"]
+        D3["_reject_dtd() Expat & Byte Scan\n(Abort on <!DOCTYPE / <!ENTITY)"]
+        D4["_check_zip_bomb() Checks\n(100 MB Limit / >100:1 Ratio >50 MB)"]
         D5["sanitize_for_csv_export()\n(Prepend ' to Formula Tokens)"]
-        D6["Strict Pipeline & ColumnTransformer Encapsulation\n(Fit strictly on CV training folds)"]
+        D6["Pipeline & ColumnTransformer\n(Fitted Strictly on Training Splits)"]
     end
 
     T1 --> D1
@@ -56,38 +56,26 @@ flowchart TD
 
 ---
 
-## 4. Standards Alignment and Defense Matrix
+## 4. Defensive Controls Matrix
 
 | Threat Vector | Input Classes Defended | Enforcing Function | Covering Tests |
 |---|---|---|---|
-| **Path Traversal & Device Name Escapes** | Traversal tokens (`..`), leading slashes, absolute drive letters, Windows Alternate Data Streams (`:`), and Windows reserved device stems (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`). | [`utils/paths.py::resolve_dataset_path`](utils/paths.py)<br>[`utils/paths.py::safe_stem`](utils/paths.py) | - `tests/test_security_boundaries.py` |
-| **Pickle Deserialization Code Execution** | Unsigned joblib bundles, tampered binary payload bytes, forged signature files, or mismatched model file names. | [`utils/ml.py::load_trained_model`](utils/ml.py)<br>[`utils/ml.py::save_trained_model`](utils/ml.py) | - `tests/test_security_boundaries.py` |
-| **XML External Entity (XXE) & DTD Injection** | XML files containing `<!DOCTYPE` or `<!ENTITY` declarations. | [`utils/paths.py::_reject_dtd`](utils/paths.py) | - `tests/test_security_boundaries.py`<br>- `tests/test_ingestion_parsers.py` |
-| **ZIP Decompression Bomb** | ZIP or XLSX archives exceeding 100 MB uncompressed or with expansion ratios exceeding 100:1. | [`utils/paths.py::_check_zip_bomb`](utils/paths.py) | - `tests/test_ingestion_parsers.py` |
-| **CSV Formula Injection** | Cells starting with formula tokens (`=`, `+`, `-`, `@`, `\t`, `\r`) or leading whitespace before formula triggers. | [`utils/paths.py::sanitize_for_csv_export`](utils/paths.py) | - `tests/test_security_boundaries.py` |
-| **Resource Exhaustion** | Uploads exceeding 200 MB, tabular inputs exceeding 1,000,000 rows, 200 columns, or 20,000,000 cells, and DataFrames exceeding 400 MB. | [`utils/paths.py::read_tabular`](utils/paths.py)<br>[`utils/limits.py`](utils/limits.py) | - `tests/test_security_boundaries.py` |
+| **Path Traversal & Device Name Escapes** | Traversal tokens (`..`), leading slashes, drive-relative paths, Windows Alternate Data Streams (`:`), and Windows reserved stems (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`). | [`utils/paths.py::resolve_dataset_path`](utils/paths.py)<br>[`utils/paths.py::safe_stem`](utils/paths.py) | `tests/test_security_boundaries.py`<br>`tests/test_core_pipeline.py` |
+| **Pickle Deserialization Code Execution** | Unsigned `.joblib` bundles, tampered bytes, forged `.joblib.sig` files, mismatched `model_file` names, or paths outside `Models/`. | [`utils/ml.py::load_trained_model`](utils/ml.py)<br>[`utils/model_security.py::verify_model_artifact_signature`](utils/model_security.py) | `tests/test_security_boundaries.py`<br>`tests/test_inference_script_generation.py` |
+| **XML External Entity (XXE) & DTD Injection** | XML files containing `<!DOCTYPE` or `<!ENTITY` declarations (including UTF-16/UTF-32 encodings). | [`utils/markup_parsing.py::_reject_dtd`](utils/markup_parsing.py) | `tests/test_security_boundaries.py`<br>`tests/test_ingestion_parsers.py` |
+| **ZIP Decompression Bomb** | `.xlsx` archives exceeding 100 MB uncompressed, or exceeding a 100:1 expansion ratio when uncompressed size exceeds 50 MB. | [`utils/paths.py::_check_zip_bomb`](utils/paths.py) | `tests/test_ingestion_parsers.py` |
+| **CSV Formula Injection** | String cells or headers beginning with `=`, `+`, `-`, `@`, `\t`, or `\r` (unless parsed as valid numeric literals). | [`utils/frames.py::sanitize_for_csv_export`](utils/frames.py) | `tests/test_security_boundaries.py`<br>`tests/test_audit_regressions.py` |
+| **Resource Exhaustion** | Uploads `> 200 MB` (`> 250 MB` / `> 20` files batch), tables `> 1,000,000` rows, `> 200` columns, or `> 20,000,000` cells, and DataFrames `> 400 MB` deep RAM. | [`utils/paths.py::read_tabular`](utils/paths.py)<br>[`utils/parsing.py`](utils/parsing.py)<br>[`utils/limits.py`](utils/limits.py) | `tests/test_security_boundaries.py`<br>`tests/test_ingestion_parsers.py` |
 
 ---
 
 ## 5. Implementation Details
 
 ### 5.1 Model Deserialization Boundary
-`joblib` bundles serialize Python objects. To prevent arbitrary code execution:
-- Loaded models must reside within `models/` (path traversal outside this directory is rejected).
-- Models require an HMAC-SHA256 signature stored in a companion `.joblib.sig` file, verified before deserialization.
-- The signing key is generated on first use (or reused if already present) at `models/.model_signing_key` using 32 cryptographically secure random bytes (`secrets.token_bytes(32)`) via `os.open` with `os.O_CREAT | os.O_EXCL` flags and file mode `0o600`.
-- Unsigned, tampered, or relocated model files are rejected prior to `joblib.load()`.
-- An explicit `trusted=True` override exists solely for test fixtures and logs warning messages when invoked.
+- `load_trained_model()` restricts loading to `MODELS_DIR` (`Models/`) unless `trusted=True` is passed explicitly in internal test fixtures (which logs a warning).
+- `save_trained_model()` and `sign_model_artifact()` generate a 32-byte key at `Models/.model_signing_key` via `os.open(..., os.O_CREAT | O_EXCL | os.O_WRONLY, 0o600)`.
+- `load_trained_model()` reads file bytes into memory (`<= 100 MB`), validates the `.joblib.sig` HMAC-SHA256 digest via `hmac.compare_digest`, and deserializes `io.BytesIO(content)` to eliminate TOCTOU swaps between verification and loading.
 
-### 5.2 Ingestion Resource Limits
-To prevent denial of service and memory exhaustion:
-- File size limit: 200 MB (`MAX_UPLOAD_BYTES`).
-- Batch upload ceiling: 250 MB (`MAX_AGGREGATE_UPLOAD_BYTES`, max 20 files).
-- Cell budget: 20,000,000 cells (`MAX_INGESTION_CELLS` = rows x columns).
-- Dimensional bounds: 1,000,000 rows and 200 columns.
-- DataFrame memory budget: 400 MB (`MAX_DATAFRAME_MEMORY_BYTES`).
-- High-cardinality string guard: 5,000,000 cells (`MAX_HIGH_CARDINALITY_STRING_CELLS`).
-
-### 5.3 Formula Injection and Export Handling
-- Internal working datasets stored in `datasets/` maintain exact raw values to prevent numerical truncation or distortion during data analysis.
-- File exports destined for external spreadsheet tools (`CSV` and `Excel`) pass through `sanitize_for_csv_export()`, prepending a single quote (`'`) to cells starting with formula tokens (`=`, `+`, `-`, `@`, `\t`, `\r`).
+### 5.2 Export & Error Redaction
+- Internal working DataFrames remain unescaped in memory so numerical statistics are unaffected; exports written via `sanitize_for_csv_export()` neutralize spreadsheet formulas.
+- `utils/theme.py::safe_error_boundary` and `sanitize_error_message()` redact local filesystem paths before rendering UI error banners, and `.streamlit/config.toml` sets `showErrorDetails = false`.

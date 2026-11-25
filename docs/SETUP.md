@@ -1,120 +1,112 @@
 # TabuLens — Setup & Local Execution Guide
 
-This document provides step-by-step instructions to set up, configure, run, and troubleshoot TabuLens on a local workstation or container environment.
+This guide covers setting up, running, and troubleshooting TabuLens locally or inside Docker.
 
 ---
 
 ## 1. Prerequisites
 
-- **Operating System:** Windows 10/11, macOS 13+, or modern Linux (Ubuntu 22.04+).
-- **Python Version:** Python **3.12** or newer (64-bit).
-  - *Verify installation:*
-    ```bash
-    python --version
-    ```
-- **Git:** Git 2.40+ (local execution only; no remote access required).
-- **Docker (Optional):** Docker Engine 24+ and Docker Compose v2 for containerized execution.
+- **OS:** Windows 10/11, macOS 13+, or modern Linux
+- **Python:** Python **3.11** or newer (`3.11` and `3.12` are tested in CI; `pyproject.toml` declares `>=3.11`)
+- **Git:** Optional for cloning
+- **Docker (Optional):** Docker Engine and Docker Compose v2
 
 ---
 
-## 2. Environment Installation
+## 2. Local Installation
 
-### 2.1 Create a Virtual Environment
-
-Open a terminal in the project directory:
+### 2.1 Create and Activate a Virtual Environment
 
 ```bash
-# Windows (PowerShell or Command Prompt)
-python -m venv venv
+git clone https://github.com/Srikiran22/CloudlnsightAl.git
+cd CloudlnsightAl
 
-# macOS / Linux
-python3 -m venv venv
+python -m venv .venv
 ```
 
-### 2.2 Activate the Environment
+Activate it:
 
 ```powershell
 # Windows PowerShell
-.\venv\Scripts\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 
 # Windows Command Prompt
-.\venv\Scripts\activate.bat
+.\.venv\Scripts\activate.bat
 
 # macOS / Linux
-source venv/bin/activate
+source .venv/bin/activate
 ```
 
-*(Note for Windows PowerShell: If script execution is restricted, run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` before activating).*
+*(On Windows PowerShell, run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` if script activation is restricted.)*
 
-### 2.3 Install Dependencies
-
-Install using the project dependencies:
+### 2.2 Install Dependencies
 
 ```bash
-pip install --upgrade pip setuptools wheel
+python -m pip install --upgrade pip
 pip install -r requirements.txt
+```
+
+To install exact locked transitive versions instead:
+
+```bash
+pip install -r requirements-lock.txt
 ```
 
 ---
 
 ## 3. Running the Application
 
-### 3.1 Standard Streamlit Launch
-
-With your virtual environment activated:
+### Standard Launch
 
 ```bash
 streamlit run app.py
 ```
 
-Streamlit will print the local server URL:
-```
-  Local URL: http://localhost:8501
-  Network URL: http://127.0.0.1:8501
-```
-Open your browser to `http://localhost:8501`.
+On Windows, `start.bat` activates `.venv` (or `venv`) if present and runs `python -m streamlit run app.py`.
 
-### 3.2 Docker Compose Execution
+Open `http://127.0.0.1:8501` in your browser. Click **Load sample datasets (SaaS Churn, Drift & Housing)** on the home view to populate synthetic datasets into `Datasets/` without external downloads.
 
-To run TabuLens in an isolated container without local Python dependencies:
+### Docker Compose Launch
 
 ```bash
 docker compose up --build
 ```
 
-Access the application in your browser at `http://localhost:8501`.
+Docker Compose builds the two-stage `Dockerfile` (`python:3.11-slim`, non-root `appuser`), binds port `127.0.0.1:8501:8501`, mounts `./Datasets`, `./Models`, and `./Reports`, and monitors `/_stcore/health` with `scripts/healthcheck.py`.
+
+### Diagnostic Logging
+
+Set `TABULENS_LOG_LEVEL` (`DEBUG`, `INFO`, `WARNING`, `ERROR`; default `WARNING`) to control stderr logs emitted by `utils/logsys.py`:
+
+```bash
+TABULENS_LOG_LEVEL=INFO streamlit run app.py
+```
 
 ---
 
-## 4. Running Verification Checks
-
-### 4.1 Verification Runner
-
-Run the end-to-end static environment check and test suite:
+## 4. Verification
 
 ```bash
-# Full verification (environment, HMAC invariant, test suite)
+# Static layout, dependency, and HMAC verification checks
+python scripts/verify_pipeline.py --check-only
+
+# Full static checks + unittest suite
 python scripts/verify_pipeline.py
 
-# Or static configuration check only
-python scripts/verify_pipeline.py --check-only
-```
-
-### 4.2 Standard Library Unittest Suite
-
-Execute the full discovery test harness:
-
-```bash
+# Standard unittest discovery
 python -m unittest discover -s tests -v
+
+# Linter
+ruff check .
 ```
 
 ---
 
-## 5. Troubleshooting Common Issues
+## 5. Troubleshooting
 
 | Symptom | Cause | Solution |
 |---|---|---|
-| `'python' is not recognized` | Python is not installed or not in PATH | Install Python 3.12+ and ensure "Add Python to PATH" is checked during setup. |
-| `PermissionError` on model load | Model file was modified or unsigned | TabuLens verifies HMAC-SHA256 signatures before loading. Retrain the model in **Model Studio** to produce a freshly signed `.joblib` and `.sig` pair. |
-| `xlrd` missing when loading `.xls` | Legacy Excel file format (.xls) uploaded | Save the spreadsheet as modern `.xlsx` or `.csv`. |
-| Port 8501 already in use | Another Streamlit process is running | Run on a different port: `streamlit run app.py --server.port 8502`. |
+| `'python' is not recognized` | Python missing from `PATH` | Install Python 3.11+ and add it to `PATH`, or invoke the `.venv` interpreter directly. |
+| `ValueError` on model load (`Untrusted model file` / `Cryptographic signature verification failed`) | `.joblib` file lacks `.joblib.sig`, was modified on disk, or was signed with a different `Models/.model_signing_key` | Retrain and save the model in **Model Studio & Training** so a valid `.joblib` + `.joblib.sig` pair is created for the current signing key. |
+| Standalone script exits with signature error | Key not found next to the model or in `Models/` | Pass `--key-path /path/to/.model_signing_key` or set `TABULENS_SIGNING_KEY_PATH`. |
+| Port `8501` already in use | Another Streamlit instance is running | Run `streamlit run app.py --server.port 8502`. |

@@ -54,7 +54,10 @@ def check_core_dependencies() -> bool:
 
 
 def check_directory_structure() -> bool:
-    required_dirs = ["datasets", "models", "reports", "pages", "utils", "scripts", "tests"]
+    from utils.paths import ensure_project_directories
+
+    ensure_project_directories()
+    required_dirs = ["Datasets", "Models", "Reports", "pages", "utils", "scripts", "tests", "docs"]
     missing = [d for d in required_dirs if not (PROJECT_ROOT / d).is_dir()]
     ok = len(missing) == 0
     detail = "All workspace directories present" if ok else f"Missing directories: {missing}"
@@ -65,7 +68,9 @@ def check_directory_structure() -> bool:
 def check_core_artifacts() -> bool:
     required_files = [
         "README.md",
+        "docs/ARCHITECTURE.md",
         "docs/METHODOLOGY.md",
+        "docs/decisions/README.md",
         "Dockerfile",
         "docker-compose.yml",
         ".dockerignore",

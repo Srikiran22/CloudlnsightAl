@@ -64,7 +64,7 @@ with tab_files:
     with st.container(border=True):
         section_card_header(
             "Local Tabular File Upload",
-            "Upload one or more structured datasets (.csv, .xlsx, .xls, .parquet, .json, .tsv) or document files (.txt, .pdf, .docx)."
+            "Upload one or more tabular files (.csv, .tsv, .xlsx, .xls, .parquet, .json, .jsonl, .xml, .html) or inspect text/PDF sources (.txt, .log, .md, .rst, .sql, .pdf)."
         )
         accepted_types = sorted(ext.lstrip(".") for ext in SUPPORTED_DATASET_EXTENSIONS)
         uploaded_files = st.file_uploader(

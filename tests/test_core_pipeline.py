@@ -59,7 +59,7 @@ class CoreUtilityTests(unittest.TestCase):
 
     def test_dataset_path_stays_in_datasets_dir(self):
         with self.assertRaisesRegex(ValueError, "Datasets"):
-            resolve_dataset_path("../App.py")
+            resolve_dataset_path("../app.py")
 
 
 
@@ -360,7 +360,7 @@ class QualityIndexTests(unittest.TestCase):
     def test_dashboard_and_pdf_share_one_implementation(self):
         from pathlib import Path
         dashboard_source = Path("pages/dashboard.py").read_text(encoding="utf-8")
-        pdf_source = Path("Utils/PDF.py").read_text(encoding="utf-8")
+        pdf_source = Path("utils/pdf.py").read_text(encoding="utf-8")
         self.assertIn("quality_metrics(", dashboard_source)
         self.assertIn("quality_metrics(", pdf_source)
 

@@ -37,6 +37,6 @@ def _configure():
 
 
 def get_logger(module):
-    """Return the project logger namespaced per module, e.g. cloudinsight.ML."""
+    """Return the project logger namespaced per module, e.g. tabulens.ML."""
     _configure()
     return logging.getLogger(f"{_LOGGER_NAME}.{module}")

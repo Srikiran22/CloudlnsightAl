@@ -78,7 +78,7 @@ __all__ = [
 logger = get_logger("ML")
 
 # joblib bundles unpickle arbitrary Python -- only ever load files you (or a
-# trusted trainer) produced. See the security notes in Readme.md.
+# trusted trainer) produced. See SECURITY.md and README.md.
 MODEL_BUNDLE_VERSION = 1
 
 
@@ -114,9 +114,9 @@ class ModelEvaluationMetrics(TypedDict, total=False):
 
 
 class ModelArtifactBundle(TypedDict, total=False):
-    """Authoritative typed contract for serialized and in-memory model bundles.
+    """Typed contract for serialized and in-memory model bundles.
 
-    Satisfies PROJECT.md § Interface Contracts:
+    Core keys:
       model: Any (Scikit-Learn estimator or pipeline)
       scaler: Any | None
       features: list[str]
@@ -127,10 +127,10 @@ class ModelArtifactBundle(TypedDict, total=False):
       model_id: str
       created_at: str
 
-    Also preserves backwards and runtime compatibility with TabuLens's
-    existing bundle keys used by pages/predict.py and tests/.
+    Also preserves compatibility with runtime keys used by pages/predict.py
+    and tests/.
     """
-    # Canonical Interface Contract (PROJECT.md § Interface Contracts)
+    # Canonical bundle fields
     model: Any
     scaler: Any | None
     features: list[str]
@@ -194,7 +194,7 @@ def save_trained_model(res: dict[str, Any], model_name: str, directory: Path | s
     )
 
     bundle: ModelArtifactBundle = {
-        # Canonical Interface Contract (PROJECT.md § Interface Contracts)
+        # Canonical bundle fields
         "model": res["pipeline"],
         "scaler": None,
         "features": res.get("feature_cols", []),
@@ -604,8 +604,12 @@ def generate_standalone_inference_code(
         '            key_path = Path(env_key)',
         '        elif (model_path.parent / ".model_signing_key").is_file():',
         '            key_path = model_path.parent / ".model_signing_key"',
+        '        elif (Path("Models") / ".model_signing_key").is_file():',
+        '            key_path = Path("Models") / ".model_signing_key"',
         '        elif (Path("models") / ".model_signing_key").is_file():',
         '            key_path = Path("models") / ".model_signing_key"',
+        '        elif (Path(__file__).resolve().parent / "Models" / ".model_signing_key").is_file():',
+        '            key_path = Path(__file__).resolve().parent / "Models" / ".model_signing_key"',
         '        elif (Path(__file__).resolve().parent / "models" / ".model_signing_key").is_file():',
         '            key_path = Path(__file__).resolve().parent / "models" / ".model_signing_key"',
         '    if key_path is None or not key_path.is_file():',

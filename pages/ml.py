@@ -512,7 +512,7 @@ with st.container(border=True):
             st.caption("Generate a self-contained Python script to run offline batch predictions without Streamlit.")
             script_code = generate_standalone_inference_code(
                 current_results,
-                model_rel_path=f"models/{save_name}.joblib"
+                model_rel_path=f"Models/{save_name}.joblib"
             )
             st.code(script_code, language="python")
             st.download_button(

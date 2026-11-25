@@ -16,7 +16,7 @@ class TestUIHardening(unittest.TestCase):
         self.assertFalse(cfg["client"].get("showErrorDetails", True))
 
     def test_safe_error_boundary_redacts_internal_paths(self):
-        self.assertIsNotNone(safe_error_boundary, "safe_error_boundary must be defined in Utils.theme")
+        self.assertIsNotNone(safe_error_boundary, "safe_error_boundary must be defined in utils.theme")
         captured = []
         with safe_error_boundary(title="Dataset Ingestion Error", handler=lambda msg: captured.append(msg)):
             raise FileNotFoundError("C:/Users/Internal/Secret/data.csv not found on system")

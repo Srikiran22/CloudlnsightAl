@@ -13,7 +13,7 @@ from utils.paths import ensure_project_directories
 
 
 class TestPageSmoke(unittest.TestCase):
-    """Headless AppTest boot checks verifying that App.py and all Pages boot cleanly without exceptions."""
+    """Headless AppTest boot checks verifying that app.py and all pages boot cleanly without exceptions."""
 
     PAGES = [
         "app.py",
@@ -86,7 +86,7 @@ class TestPageRegression(unittest.TestCase):
 
     def test_ml_page_handles_empty_dataframe_without_exception(self):
         """pages/ml.py must display a warning and stop gracefully on empty DataFrame without KeyError: None."""
-        ml_script = str(Path(__file__).resolve().parent.parent / "Pages" / "ML.py")
+        ml_script = str(Path(__file__).resolve().parent.parent / "pages" / "ml.py")
         at = AppTest.from_file(ml_script, default_timeout=20)
         at.session_state["current_df"] = pd.DataFrame()
         at.session_state["dataset_name"] = "empty.csv"
@@ -104,7 +104,7 @@ class TestPageRegression(unittest.TestCase):
 
     def test_ml_page_handles_single_column_dataframe_without_exception(self):
         """pages/ml.py must handle single-column dataframe safely without crashing."""
-        ml_script = str(Path(__file__).resolve().parent.parent / "Pages" / "ML.py")
+        ml_script = str(Path(__file__).resolve().parent.parent / "pages" / "ml.py")
         at = AppTest.from_file(ml_script, default_timeout=20)
         at.session_state["current_df"] = pd.DataFrame({"only_col": [1, 2, 3, 4]})
         at.session_state["dataset_name"] = "single.csv"
@@ -122,7 +122,7 @@ class TestPageRegression(unittest.TestCase):
 
     def test_ml_page_headless_boot_with_non_tabular_disk_file(self):
         """pages/ml.py must boot cleanly even if Datasets/ contains an unparseable or 0-column CSV."""
-        ml_script = str(Path(__file__).resolve().parent.parent / "Pages" / "ML.py")
+        ml_script = str(Path(__file__).resolve().parent.parent / "pages" / "ml.py")
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
             (tmp_path / "corrupted.csv").write_text("dummy content 2", encoding="utf-8")

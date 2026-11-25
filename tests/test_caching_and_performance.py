@@ -11,7 +11,7 @@ except ImportError:
 
 class TestCachingAndPerformance(unittest.TestCase):
     def test_cached_load_dataframe_exists_and_bounds_memory(self):
-        self.assertIsNotNone(cached_load_dataframe, "cached_load_dataframe should be implemented in Utils.parsing")
+        self.assertIsNotNone(cached_load_dataframe, "cached_load_dataframe should be implemented in utils.parsing")
         df = pd.DataFrame({
             "num_col": list(range(200)),
             "cat_col": ["category_" + str(i % 5) for i in range(200)]

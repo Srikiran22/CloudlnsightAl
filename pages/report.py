@@ -69,17 +69,6 @@ except Exception:
 source_type = "disk" if is_file_backed else "session"
 curr_fp = dataset_fingerprint(selected_file) if is_file_backed else dataframe_fingerprint(df)
 
-latest_ai = st.session_state.get("latest_ai_insights")
-ai_saved = None
-if (
-    latest_ai
-    and latest_ai.get("dataset_name") == selected_file
-    and latest_ai.get("dataset_fingerprint") == curr_fp
-):
-    ai_saved = latest_ai.get("text")
-elif st.session_state.get(f"insights_{selected_file}_{curr_fp}"):
-    ai_saved = st.session_state.get(f"insights_{selected_file}_{curr_fp}")
-
 col_left, col_right = st.columns([1.1, 0.9])
 
 with col_right, st.container(border=True):
@@ -89,7 +78,7 @@ with col_right, st.container(border=True):
         chosen_template = st.selectbox(
             "Load template",
             ["(none)"] + saved_templates,
-            help="Templates store title, author, and chart/AI settings."
+            help="Templates store title, author, and chart settings."
         )
         if chosen_template != "(none)":
             try:
@@ -108,8 +97,6 @@ with col_left, st.container(border=True):
 
     rep_title = st.text_input("Report title", value=default_title)
     author = st.text_input("Prepared by", value=default_author)
-
-    include_ai = False
 
     include_charts = st.checkbox(
         "Include charts: histograms, box plots & correlation heatmap (high-DPI embedded plots)",
@@ -168,7 +155,7 @@ with col_right, st.container(border=True):
                         total_source = None
                 pdf_filename, pdf_bytes = _build_report(
                     selected_file, df, rep_title, author, include_charts,
-                    ai_insights=(ai_saved if include_ai else None),
+                    ai_insights=None,
                     source_rows=total_source or df.shape[0],
                     analyzed_rows=df.shape[0],
                     excluded_columns=excluded_cols,
@@ -225,7 +212,7 @@ with col_right, st.container(border=True):
                 "title": str(rep_title).strip() or default_title,
                 "author": str(author).strip() or default_author,
                 "include_charts": bool(include_charts),
-                "include_ai": bool(include_ai),
+                "include_ai": False,
                 "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
             }
             atomic_write(
@@ -267,21 +254,13 @@ with st.container(border=True):
                     if sc not in batch_excluded:
                         batch_excluded.append(sc)
 
-                batch_ai = None
-                if include_ai:
-                    if file_name == selected_file:
-                        batch_ai = ai_saved
-                    else:
-                        batch_fp = dataframe_fingerprint(batch_df)
-                        batch_ai = st.session_state.get(f"insights_{file_name}_{batch_fp}")
-
                 filename_out, _ = _build_report(
                     file_name,
                     batch_df,
                     rep_title,
                     author,
                     include_charts,
-                    ai_insights=batch_ai,
+                    ai_insights=None,
                     source_rows=total_source_rows,
                     analyzed_rows=analyzed_rows,
                     excluded_columns=batch_excluded,

@@ -1,48 +1,28 @@
 # TabuLens
 
-**Tabular Data Exploration, Drift Auditing & Leak-Free Modeling**
+TabuLens is a local-first Python and Streamlit workbench for tabular data inspection, cleaning, exploratory statistics, distribution drift auditing, supervised scikit-learn modeling, and standalone batch inference.
 
-TabuLens is a local-first tabular data science studio built with Python, Streamlit, and Scikit-Learn. It provides an end-to-end workflow for dataset ingestion, statistical exploratory data analysis, dataset drift auditing, leak-free machine learning training with decision threshold tuning, and standalone Python inference export.
-
-Designed and developed as a 4th-year Computer Science / Data Science capstone project.
+All parsing, statistical testing, training, model signing, and PDF reporting run locally with zero external API keys or network calls.
 
 ---
 
-## Key Features
+## What It Does
 
-1. **Local-First Ingestion & Governance**
-   - Ingests CSV, TSV, Parquet, Excel (`.xlsx`, `.xls`), SQLite databases, and structured JSON.
-   - Resource-bounded safety checks: protects workstation memory with 200 MB file limits, 20M cell limits, and automatic row sampling for large interactive charts.
-   - PII and identifier screening: automatically detects camelCase identifiers, SSNs, and phone number columns to prevent feature leakage.
+TabuLens organizes the tabular analytics workflow across eleven views (`app.py` and `pages/*.py`):
 
-2. **Exploratory Data Analysis & Statistical Diagnostics**
-   - Univariate summaries, distribution skewness, kurtosis, and D'Agostino-Pearson normality tests.
-   - Tukey's IQR fences ($Q_1 \pm k \times \text{IQR}$) and parametric Z-score outlier detection.
-   - Variance Inflation Factor (VIF) matrix to diagnose severe multicollinearity ($\text{VIF} \ge 10$).
-   - One-Way ANOVA hypothesis testing across categorical groups.
-
-3. **Dataset Drift Auditing**
-   - Two-sample Kolmogorov-Smirnov test ($D = \sup_x |F_1(x) - F_2(x)|$) for continuous numerical features.
-   - Total Variation Distance (TVD) and Chi-square contingency testing for categorical distributions.
-   - **Benjamini-Hochberg (BH)** procedure controlling the False Discovery Rate (FDR at $Q = 0.05$) across multiple feature comparisons.
-
-4. **Leak-Free Scikit-Learn Modeling**
-   - Encapsulates imputation, one-hot encoding, and standard scaling strictly inside `Pipeline` and `ColumnTransformer` estimators.
-   - Preprocessing is fitted solely on training folds, preventing data leakage into holdout test sets.
-   - Every model is benchmarked against a naive majority-class `DummyClassifier` or mean `DummyRegressor` to prove genuine feature learning.
-
-5. **Decision Threshold Optimization**
-   - Interactive probability cutoff slider ($\theta \in [0.05, 0.95]$) for binary classification.
-   - Recomputes precision, recall, F1, and confusion matrix in $O(1)$ without refitting the model.
-   - Persists calibrated thresholds into saved model bundles.
-
-6. **Standalone Python Inference Export**
-   - Generates a self-contained, lightweight Python script (`predict_standalone.py`) to run batch predictions on CSV files without requiring Streamlit or a browser UI.
-   - Includes CLI arguments (`--input`, `--output`, `--threshold`).
-
-7. **Cryptographic Model Artifact Signing**
-   - Serialized `.joblib` bundles are signed with host-bound HMAC-SHA256 digests (`.joblib.sig`).
-   - Verifies integrity in memory prior to deserialization to guard against untrusted pickle execution.
+| Area | Page | Capabilities |
+|---|---|---|
+| Overview | `app.py` | Workspace navigation and deterministic synthetic benchmarks (`saas_customers_q1.csv`, `saas_customers_q2_drifted.csv`, `housing_market_prices.csv`). |
+| Overview | `pages/dashboard.py` | Composite Data Hygiene Index (`(completeness + uniqueness) / 2`), per-column null/cardinality profiling, interactive row filtering, and distribution previews. |
+| Data Management | `pages/upload.py` | Multi-file upload and merge, SQLite table/SQL extraction, raw delimited text paste, and local `Datasets/` catalog management. |
+| Data Management | `pages/cleaning.py` | Exact deduplication, numeric (`mean`/`median`/`zero`) and categorical (`mode`/`Unknown`) imputation, complete-case row removal, and sanitized CSV/Parquet export. |
+| Data Management | `pages/feature_engineering.py` | Scaling (`StandardScaler`, `MinMaxScaler`, `RobustScaler`), one-hot/ordinal encoding, `log1p`/`sqrt`/Yeo-Johnson transforms, Mutual Information screening, and pairwise interactions. |
+| Exploratory Analysis | `pages/eda.py` | Univariate summary stats, D'Agostino-Pearson normality checks, Pearson/Spearman correlations, Variance Inflation Factor (VIF), Tukey IQR / Z-score outliers, and one-way ANOVA. |
+| Exploratory Analysis | `pages/visualization.py` | Interactive Plotly histograms, box/violin plots, scatter plots with optional OLS trendlines, min-max envelope decimated line charts, bar/pie/donut/treemaps, and correlation heatmaps. |
+| Exploratory Analysis | `pages/compare.py` | Schema diff, missingness/mean/dispersion shifts, two-sample Kolmogorov-Smirnov tests with Benjamini-Hochberg FDR control ($Q = 0.05$), and categorical Total Variation Distance ($\text{TVD} \ge 0.20$). |
+| Machine Learning | `pages/ml.py` | Classification and regression with `ColumnTransformer` + `Pipeline` isolation, 5-fold CV (`StratifiedKFold`, `KFold`, or `TimeSeriesSplit`), `DummyClassifier`/`DummyRegressor` baselines, binary threshold tuning, and HMAC-signed model persistence. |
+| Machine Learning | `pages/predict.py` | Verified `.joblib` bundle inspection, training-data overlap checks via SHA-256 fingerprints, batch scoring with unseen-category drift detection, and standalone CLI script export. |
+| Audit & Reports | `pages/report.py` | ReportLab PDF audit report compilation with PII/column redaction, Matplotlib charts, batch multi-dataset export, and JSON template presets. |
 
 ---
 
@@ -50,134 +30,150 @@ Designed and developed as a 4th-year Computer Science / Data Science capstone pr
 
 ```mermaid
 flowchart TD
-    subgraph Ingestion ["1. Data Ingestion & Sanitization"]
-        Files["Local Files\n(CSV, Parquet, Excel, SQLite, JSON)"] --> Parser["Streaming Parser & Resource Guards"]
-        Parser --> MemoryCache["Bounded Session Cache\n(SHA-256 Fingerprinted)"]
+    User["User Browser (127.0.0.1:8501)"] --> UI["Streamlit Pages (app.py, pages/*.py)"]
+
+    subgraph Core ["Computational & Security Utilities (utils/)"]
+        Ingest["Bounded Parsing & Path Guards\n(limits.py, parsing.py, markup_parsing.py, paths.py, frames.py)"]
+        State["Session State & 256 MB LRU Cache\n(dataset_ui.py, batch.py)"]
+        Stats["EDA, Quality & Drift Engine\n(eda_logic.py, compare_logic.py, quality.py, sampling.py)"]
+        ML["Pipeline Studio, Thresholds & Signing\n(ml.py, model_security.py)"]
+        Report["Privacy Screener & PDF Compiler\n(privacy.py, charts.py, pdf.py)"]
     end
 
-    subgraph Diagnostics ["2. Exploratory Analysis & Drift Engine"]
-        MemoryCache --> EDA["Statistical Diagnostics\n(Tukey IQR, VIF, ANOVA)"]
-        MemoryCache --> Drift["Drift Auditing\n(Two-Sample KS + Benjamini-Hochberg FDR)"]
+    subgraph Storage ["Local Filesystem Boundaries"]
+        Datasets[("Datasets/\n(CSV, TSV, Parquet, XLSX, JSON, XML)")]
+        Models[("Models/\n(.joblib, .joblib.sig, .model_signing_key)")]
+        Reports[("Reports/\n(.pdf & templates/)")]
     end
 
-    subgraph Modeling ["3. Modeling & Inference"]
-        MemoryCache --> ML["Leak-Free Pipeline\n(Stratified / Temporal CV)"]
-        ML --> Threshold["Decision Threshold Tuning\n(Precision vs Recall)"]
-        Threshold --> Export["Standalone Python Script\n(predict_standalone.py)"]
-        Threshold --> Signer["HMAC-SHA256 Signing\n(.joblib + .joblib.sig)"]
-    end
+    UI --> State
+    State --> Ingest
+    State --> Stats
+    State --> ML
+    State --> Report
 
-    subgraph BatchScore ["4. Scoring Workspace"]
-        Signer --> Predict["Batch Scoring & Simulation\n(Drift Detection & CSV Export)"]
-    end
+    Ingest --> Datasets
+    ML --> Models
+    Report --> Reports
 ```
 
+### Key Technical Mechanics
+
+- **Bounded ingestion (`utils/limits.py`, `utils/parsing.py`, `utils/paths.py`):** Enforces 200 MB per-file limits (250 MB / 20 files per batch), 1,000,000 rows, 200 columns, 20,000,000 cells, 400 MB deep DataFrame RAM, 5,000,000 high-cardinality string cell guards, `.xlsx` ZIP bomb inspection, XML `<!DOCTYPE`/`<!ENTITY` rejection, path containment inside `Datasets/`, and CSV formula sanitization (`utils/frames.py`).
+- **Leak-free modeling pipelines (`utils/ml.py`):** Splits train/holdout first, encapsulates imputation, scaling, and one-hot encoding inside scikit-learn `Pipeline` + `ColumnTransformer` objects fitted strictly on training folds, benchmarks every run against `DummyClassifier` or `DummyRegressor`, and calibrates binary thresholds ($\theta \in [0.05, 0.95]$) using training out-of-fold probabilities.
+- **Cryptographic model loading (`utils/model_security.py`):** Signs serialized `.joblib` bundles with a host-local 32-byte key (`Models/.model_signing_key`, `0o600`) and verifies the `.joblib.sig` HMAC-SHA256 digest in memory before `joblib.load()` runs.
+- **Standalone inference CLI (`predict_<model>.py`):** Exports a self-contained Python script (`--input`, `--output`, `--threshold`, `--key-path`, `--allow-unverified-model`) that checks the HMAC signature, validates feature columns, applies the saved cutoff, and writes sanitized CSV predictions without Streamlit.
+
+For detailed rationale behind these trade-offs, see [Architecture Decision Records](docs/decisions/README.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). For statistical equations and threshold rules, see [docs/METHODOLOGY.md](docs/METHODOLOGY.md).
+
 ---
 
-## Mathematical & Statistical Foundations
+## Tech Stack
 
-For comprehensive mathematical formulations, proofs, and derivations of the algorithms implemented in TabuLens (including Kolmogorov-Smirnov test statistics, Benjamini-Hochberg correction, VIF equations, and pipeline fold isolation), refer to:
-
-- [docs/METHODOLOGY.md](docs/METHODOLOGY.md)
+- **Runtime & Packaging:** Python `>=3.11` (CI matrix tests `3.11` and `3.12`), `pyproject.toml`, `requirements.txt`, `requirements-lock.txt`
+- **UI & Visualization:** `streamlit>=1.52.0`, `plotly>=5.18.0`
+- **Data Processing & Formats:** `pandas>=2.0.0`, `numpy>=1.24.0`, `pyarrow>=14.0.0`, `openpyxl>=3.1.0`, `xlrd>=2.0.1`, stdlib `sqlite3` / `xml.etree.ElementTree` / `html.parser`
+- **Statistics & ML:** `scikit-learn>=1.3.0`, `scipy`, `statsmodels>=0.14.0`, `joblib`
+- **PDF Reporting:** `reportlab>=4.0.0`, `matplotlib>=3.7.0`
+- **Quality & Containerization:** `ruff`, `unittest`, `coverage`, multi-stage `Dockerfile`, `docker-compose.yml`, GitHub Actions (`.github/workflows/ci.yml`)
 
 ---
 
-## Quickstart
+## Quick Start
 
-### Prerequisites
-- Python 3.11 or 3.12
-- Git
-
-### 1. Local Setup
+### Local Setup
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-username/TabuLens.git
-cd TabuLens
+git clone https://github.com/Srikiran22/CloudlnsightAl.git
+cd CloudlnsightAl
 
-# Create and activate a virtual environment
 python -m venv .venv
-
-# On Linux/macOS:
+# Linux / macOS:
 source .venv/bin/activate
-# On Windows PowerShell:
-.venv\Scripts\Activate.ps1
+# Windows PowerShell:
+.\.venv\Scripts\Activate.ps1
 
-# Install dependencies
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# Run the TabuLens application
 streamlit run app.py
 ```
 
-The application will be accessible at `http://localhost:8501`.
+Open `http://127.0.0.1:8501` in your browser and click **Load sample datasets (SaaS Churn, Drift & Housing)** on the home page to populate synthetic datasets immediately.
 
----
+### Docker Quickstart
 
-### 2. Docker Quickstart (2-Stage Build)
-
-TabuLens includes a minimal two-stage Dockerfile running as an unprivileged system user (`appuser`):
+TabuLens includes a two-stage `Dockerfile` running as non-root `appuser` with volume mounts for `Datasets/`, `Models/`, and `Reports/`:
 
 ```bash
-# Build and run using Docker Compose
 docker compose up --build
 ```
 
-Access the studio at `http://localhost:8501`.
+The app is bound to `http://127.0.0.1:8501` and probed by `scripts/healthcheck.py`.
 
 ---
 
-### 3. Pipeline & Verification Runner
+## Commands
 
-To verify environmental compatibility, cryptographic invariants, and execute the full test suite:
-
-```bash
-# Run full verification and unit tests
-python scripts/verify_pipeline.py
-
-# Or run configuration and cryptographic checks only
-python scripts/verify_pipeline.py --check-only
-```
+| Command | Description |
+|---|---|
+| `streamlit run app.py` | Start the TabuLens web interface locally |
+| `python scripts/verify_pipeline.py` | Run static environment/HMAC checks and the full `unittest` suite |
+| `python scripts/verify_pipeline.py --check-only` | Run static layout, dependency, and HMAC tamper-rejection checks only |
+| `python -m unittest discover -s tests -v` | Run all unit, security-boundary, and headless `AppTest` checks |
+| `ruff check .` | Run linter checks configured in `pyproject.toml` |
+| `docker compose up --build` | Build and run the two-stage container locally |
 
 ---
 
 ## Repository Structure
 
 ```text
-TabuLens/
-├── app.py                     # Streamlit application entrypoint & navigation
-├── pages/                     # Dedicated studio workflows
-│   ├── upload.py              # Ingestion, schema validation & dataset catalog
-│   ├── eda.py                 # Statistical diagnostics, Tukey IQR & VIF
-│   ├── compare.py             # KS-drift engine with Benjamini-Hochberg FDR
-│   ├── visualization.py       # Peak-preserving interactive charts
-│   ├── cleaning.py            # Deduplication, outlier clipping & imputation
-│   ├── feature_engineering.py # Polynomial, log transforms & binning
-│   ├── ml.py                  # Model training, baseline benchmarks & threshold tuning
-│   ├── predict.py             # Batch inference scoring & simulation
-│   ├── dashboard.py           # Multi-metric workspace overview
-│   └── report.py              # Tabular audit summary and PDF export
-├── utils/                     # Decoupled computational & security utilities
-│   ├── compare_logic.py       # KS-test & Benjamini-Hochberg algorithms
-│   ├── eda_logic.py           # Tukey IQR, Z-score, VIF & ANOVA calculations
-│   ├── ml.py                  # Scikit-learn pipelines, thresholding & HMAC signing
-│   ├── paths.py               # Path containment & tabular ingestion parsers
-│   ├── preprocessing.py       # Missing value imputation & feature encoders
-│   └── theme.py               # Lightweight CSS design tokens & Plotly themes
-├── docs/                      # Documentation
-│   └── METHODOLOGY.md         # Detailed mathematical foundations
-├── scripts/                   # Automation & operational tools
-│   ├── verify_pipeline.py     # End-to-end pipeline verification runner
-│   └── healthcheck.py         # Container healthcheck probe
-├── tests/                     # Unit, integration, and headless regression test suite
-├── Dockerfile                 # 2-stage unprivileged container specification
-├── docker-compose.yml         # Container composition manifest
-└── requirements.txt           # Clean production dependencies
+CloudlnsightAl/
+├── app.py                      # Streamlit entrypoint, navigation & synthetic benchmark seeding
+├── pages/                      # 10 multi-page Streamlit workflow views
+├── utils/                      # Bounded ingestion, EDA, drift, ML pipelines, HMAC signing & PDF export
+├── docs/
+│   ├── ARCHITECTURE.md         # Component breakdown and filesystem trust boundaries
+│   ├── METHODOLOGY.md          # Statistical tests, drift FDR, VIF, outliers & ML validation math
+│   ├── API.md                  # Public utility function signatures and contracts
+│   ├── SETUP.md                # Workstation & Docker installation and troubleshooting
+│   ├── TESTING.md              # Test suite organization and execution commands
+│   └── decisions/              # Architecture Decision Records (ADR-001 through ADR-005)
+├── scripts/
+│   ├── verify_pipeline.py      # Environment, HMAC invariant & test runner CLI
+│   └── healthcheck.py          # Container HTTP probe on /_stcore/health
+├── tests/                      # 19 unit, security-boundary, and AppTest modules
+├── .github/workflows/ci.yml    # Ruff lint + unittest coverage on Python 3.11 & 3.12
+├── Dockerfile                  # Two-stage non-root runtime image
+├── docker-compose.yml          # Local service definition and volume mounts
+├── pyproject.toml              # Package metadata, Ruff config, and coverage settings
+├── requirements.txt            # Runtime dependencies
+└── requirements-lock.txt       # Compiled dependency lockfile
 ```
 
 ---
 
-## License
+## Scope & Known Limitations
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+- **Workstation scale:** Hard caps in `utils/limits.py` (1M rows, 200 columns, 20M cells, 400 MB DataFrame RAM) protect single-machine memory rather than scaling out to distributed clusters.
+- **Drift vs. concept shift:** `pages/compare.py` measures marginal feature shift $P(X)$ and schema/missingness changes via KS + BH-FDR and categorical TVD; it does not evaluate labelled concept drift $P(Y \mid X)$ or prove accuracy degradation without ground-truth outcomes.
+- **Interactive feature engineering:** Transformations applied in `pages/feature_engineering.py` operate on the active DataFrame as a whole. For leakage-free model evaluation, rely on the preprocessing steps inside `Model Studio & Training`'s `Pipeline`.
+- **Time-series threshold calibration:** When `TimeSeriesSplit` is selected in `pages/ml.py`, `cross_val_predict` cannot produce out-of-fold predictions for the initial training block; `utils/ml.py` catches this and falls back rather than failing training.
+- **Local HMAC trust model:** `.joblib.sig` verification guards against accidental corruption and unsigned third-party `.joblib` files on the local machine assuming `Models/.model_signing_key` (`0o600`) remains private to the host user.
+- **Heuristic PII screening:** `utils/privacy.py` flags likely identifiers, emails, phone numbers, Luhn-valid cards, IBANs, and token patterns from column names and a 100-row sample; it is an advisory aid, not formal anonymization or compliance certification.
+
+---
+
+## Documentation & Governance
+
+- [Architecture Overview](docs/ARCHITECTURE.md)
+- [Statistical & ML Methodology](docs/METHODOLOGY.md)
+- [Utility API Reference](docs/API.md)
+- [Architecture Decision Records](docs/decisions/README.md)
+- [Setup & Troubleshooting](docs/SETUP.md)
+- [Testing Strategy](docs/TESTING.md)
+- [Security Policy](SECURITY.md)
+- [Contributing Guide](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md)
+- [License (MIT)](LICENSE)

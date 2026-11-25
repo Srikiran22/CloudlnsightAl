@@ -200,7 +200,7 @@ class TestAuditRegressions(unittest.TestCase):
             "metrics": {"accuracy": 0.85},
             "created_at": "2026-10-16",
         }
-        predict_script = str(Path(__file__).resolve().parent.parent / "Pages" / "Predict.py")
+        predict_script = str(Path(__file__).resolve().parent.parent / "pages" / "predict.py")
         at = AppTest.from_file(predict_script, default_timeout=30)
         at.session_state["dataset_name"] = "test.csv"
         at.session_state["current_df"] = pd.DataFrame({"feat": [1, 2], "churned": [0, 1]})

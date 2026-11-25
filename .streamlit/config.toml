@@ -1,13 +1,13 @@
 # TabuLens — native Streamlit theme.
 #
-# This file mirrors the design-system tokens in Utils/theme.py so that
+# This file mirrors the design-system tokens in utils/theme.py so that
 # canvas-rendered widgets (st.dataframe, st.selectbox, st.code, toasts) match
 # the hand-styled surfaces in both appearances. Keep these values in sync with
-# _palette() in Utils/theme.py.
+# get_semantic_tokens() in utils/theme.py.
 #
 # Appearance is owned by Streamlit itself: the app follows the browser/OS
 # preference by default, and users can pin Light or Dark from the ⋮ menu →
-# Settings → Theme. Utils/theme.py reads the *resolved* mode via
+# Settings → Theme. utils/theme.py reads the *resolved* mode via
 # st.context.theme so the CSS layer can never disagree with the widgets.
 [theme]
 base = "dark"

@@ -1,28 +1,29 @@
 # Contributing to TabuLens
 
-Contributions to TabuLens are welcome. Changes should keep the application lightweight, local-first, mathematically sound, and consistent with the modular architecture.
+Contributions are welcome. Keep changes focused, local-first, well-tested, and consistent with existing module boundaries.
 
 ---
 
 ## Development Setup
 
-1. Follow the setup instructions in [README.md](README.md) and [docs/SETUP.md](docs/SETUP.md).
-2. Run the verification pipeline and test suite:
+1. Follow [docs/SETUP.md](docs/SETUP.md) to set up `.venv` and install `requirements.txt`.
+2. Verify the environment and full test suite:
    ```bash
    python scripts/verify_pipeline.py
    ```
-3. Run the unit test discovery suite:
+3. Check formatting and lint rules:
    ```bash
-   python -m unittest discover -s tests -v
+   ruff check .
    ```
 
 ---
 
-## Repository Conventions
+## Conventions
 
-- **Modular Seams:** Put computational algorithms and data transformations in `utils/` rather than embedding logic in presentation pages (`pages/`).
-- **Resource Ceilings:** Keep resource limits in `utils/limits.py` and tabular parsers in `utils/paths.py`. Never hardcode raw limits in UI pages.
-- **Leak-Free ML:** Feature transformers must always be encapsulated in Scikit-Learn `Pipeline` and `ColumnTransformer` objects to prevent data leakage.
-- **Model Signatures:** Keep HMAC-SHA256 model signing intact for all model serialization.
-- **Testing:** Include regression tests in `tests/` for any new calculation, parser, or security check.
-- **Conventional Commits:** Keep commits imperative, lowercase, and concise (e.g. `feat: add feature interaction transformer`).
+- **Modular Seams:** Keep analytical, parsing, ML, and security logic inside `utils/` rather than embedding business logic in Streamlit UI pages (`pages/`).
+- **Centralized Limits:** Define file, row, column, and memory bounds in `utils/limits.py` and path guards in `utils/paths.py`.
+- **Leak-Free ML:** Keep preprocessing inside scikit-learn `Pipeline` and `ColumnTransformer` estimators rather than fitting transforms before train/test splitting.
+- **Model Integrity:** Preserve HMAC-SHA256 signing and in-memory signature verification for all `.joblib` persistence (`utils/model_security.py`, `utils/ml.py`).
+- **ADRs:** Document non-trivial architectural changes by adding a numbered record in `docs/decisions/` following [docs/decisions/README.md](docs/decisions/README.md).
+- **Tests:** Add or update `unittest` regression coverage in `tests/` for any bug fix, parser change, statistical metric, or security boundary.
+- **Commits:** Use concise imperative commit messages (for example, `fix: handle empty groups in anova summary`).

@@ -15,9 +15,9 @@ services:
       - STREAMLIT_SERVER_ENABLE_CORS=false
       - STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=true
     volumes:
-      - ./datasets:/app/datasets
-      - ./models:/app/models
-      - ./reports:/app/reports
+      - ./Datasets:/app/Datasets
+      - ./Models:/app/Models
+      - ./Reports:/app/Reports
     healthcheck:
       test: ["CMD", "python", "scripts/healthcheck.py"]
       interval: 30s

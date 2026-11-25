@@ -8,12 +8,13 @@ version = "2.2.0"
 description = "Interactive tabular data analysis workbench for exploratory data analysis, statistical drift detection, and leak-free machine learning pipelines."
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 authors = [
     { name = "Srikiran" }
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Operating System :: OS Independent",
@@ -29,7 +30,7 @@ py-modules = ["app"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py312"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = [

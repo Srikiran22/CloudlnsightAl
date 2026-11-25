@@ -5,6 +5,15 @@ All notable changes to TabuLens are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-11-25
+
+### Changed
+- **Documentation & Version Alignment:** Consolidated branch history onto `main`, added Architecture Decision Records in `docs/decisions/` (`ADR-001` through `ADR-005`), and rewrote `README.md`, `docs/ARCHITECTURE.md`, `docs/METHODOLOGY.md`, `docs/API.md`, `docs/SETUP.md`, `docs/TESTING.md`, `CONTRIBUTING.md`, and `SECURITY.md` to match the codebase and package version `2.2.0` declared in `pyproject.toml`. (The historical `3.0.0` entry below is retained unaltered as record of the 2026-11-16 refactoring.)
+- **Cross-Platform & Build Consistency:** Fixed uppercase `Pages/` and `Utils/` paths in tests for case-sensitive filesystems, updated `docker-compose.yml` volume mounts (`./Datasets`, `./Models`, `./Reports`) and `scripts/verify_pipeline.py` directory checks, aligned `pyproject.toml` `requires-python = ">=3.11"` with CI, and regenerated `requirements-lock.txt` without `google-genai` or `pypdf`.
+
+### Removed
+- Removed internal AI planning and research working notes (`docs/superpowers/`, `docs/PROJECT.md`, `docs/RESEARCH_FINDINGS.md`) and stale comments referencing legacy Gemini workflows.
+
 ## [3.0.0] - 2026-11-16
 
 ### Refactored
